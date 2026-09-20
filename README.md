@@ -1,10 +1,8 @@
 # Screen Watcher
 
 <p align="center">
-  <img src="assets/logo.png" alt="Screen Watcher development banner" width="900">
+  <img src="assets/logo.png" alt="Screen Watcher logo" width="600">
 </p>
-
-> **Development artwork:** this banner was created during the initial v0.0.1 development session. Numerical status text embedded in the image is a historical snapshot; the repository itself is the authoritative source for the current test/CI state.
 
 Screen Watcher is a read-only RuneScape companion for Linux that watches
 configured regions of the game client and notifies you when something needs
@@ -64,18 +62,29 @@ Detailed detector behaviour, measurements, and tuning notes live in
 
 Screen Watcher currently expects:
 
-- Python 3.10+
+- Python 3.10+ (the current CI workflow tests Python 3.12)
 - `numpy`
 - Pillow
 - `xdotool`
 - ImageMagick (`import`)
-- Tesseract OCR
+- Tesseract OCR with English language data
 - `notify-send`
+- `paplay` for per-rule sounds
+
+On CachyOS/Arch Linux:
+
+```bash
+sudo pacman -S --needed \
+  python python-numpy python-pillow \
+  xdotool imagemagick \
+  tesseract tesseract-data-eng \
+  libnotify libpulse
+```
 
 On Debian/Ubuntu:
 
 ```bash
-sudo apt install xdotool imagemagick tesseract-ocr libnotify-bin python3-pil python3-numpy
+sudo apt install xdotool imagemagick tesseract-ocr libnotify-bin pulseaudio-utils python3-pil python3-numpy
 ```
 
 For development and tests:
@@ -368,17 +377,23 @@ The exact `wm_class` is profile-specific and can be changed.
 
 ## Runtime files
 
-Runtime state is stored under `state/` and ignored by Git except for the
-placeholder file.
+Persistent runtime state is stored under `state/` and ignored by Git except
+for the placeholder file.
 
 | path | contents |
 |---|---|
-| `watch.log` | stdout/stderr when started with the background example |
-| `alerts.jsonl` | structured notification history |
-| `occupancy.jsonl` | inventory transitions used by `stats` |
-| `counters.jsonl` | running `counter` totals, restored at startup |
-| `watcher.pid` | singleton process marker |
-| temporary captures | local OCR/image-analysis scratch data |
+| `state/watch.log` | stdout/stderr when started with the background example |
+| `state/alerts.jsonl` | structured notification history |
+| `state/occupancy.jsonl` | inventory transitions used by `stats` |
+| `state/counters.jsonl` | running `counter` totals, restored at startup |
+| `state/watcher.pid` | singleton process marker |
+| `calibrate.png` | default full-window calibration image written in the repository root |
+| `shot_<region>.png` | default output from `shot` when `--out` is not supplied |
+| system temporary directory | short-lived OCR/capture scratch files, removed automatically |
+
+`calibrate.png` is ignored by Git. Named `shot_<region>.png` files are useful
+for local diagnostics but should be treated as potentially account-specific
+captures.
 
 Do not commit runtime screenshots, logs, or account-specific captures unless
 they have been deliberately sanitized and added as test fixtures.
@@ -414,6 +429,9 @@ architectural limitations are documented in
 
 - Linux/X11/XWayland is the currently implemented capture path.
 - Desktop notifications are the implemented notification backend.
+- Per-rule sound names currently resolve against KDE's Ocean sound theme under
+  `/usr/share/sounds/ocean/stereo`; if a configured sound file or `paplay`
+  is unavailable, notification delivery continues without that extra sound.
 - OCR-based rules require the relevant text region to remain visible.
 - Region calibration depends on the user's RuneScape interface layout.
 - Only fishing and thieving profiles are currently included.
