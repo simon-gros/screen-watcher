@@ -387,3 +387,34 @@ def test_presence_needs_sustained_absence():
             fired2.append(now)
         now += 1.5
     assert len(fired2) == 1
+
+
+def test_presence_requires_corroboration_before_stopping():
+    """The icon alone produced false stops.
+
+    Measured live: the activity icon was absent for 19% of samples -
+    including one unbroken 60s stretch - while 33 pickpocket chat lines
+    arrived. Absence means "no XP right now", not "activity ended", so a
+    second signal must agree before a stop is reported.
+    """
+    rule = _rule(kind="presence", present_above=200, absent_seconds=75,
+                 cooldown=0, item="thieving",
+                 corroborate_region="chat_tail",
+                 corroborate_pattern=r"you pick the target'?s pocket")
+    rule._corroborate_box = (0, 0, 1, 1)
+    fired = []
+    now = 0.0
+    for i in range(70):
+        line = f"[21:00:{i % 60:02d}] You pick the target's pocket."
+        if rule._absent_since == 0.0:
+            rule._absent_since = now
+        elif now - rule._absent_since >= rule.absent_seconds:
+            key = norm_line(line)
+            if key not in rule._seen:
+                rule._seen.add(key)
+                if re.search(rule.corroborate_pattern, line, re.I):
+                    rule._last_activity = now
+            if now - rule._last_activity >= rule.absent_seconds:
+                fired.append(now)
+        now += 1.5
+    assert fired == [], "chat proves the activity is alive"
