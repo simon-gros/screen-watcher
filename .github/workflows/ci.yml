@@ -11,7 +11,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install development dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+      - name: Test
+        run: python -m pytest -q
       - name: Lint
         run: |
-          pip install flake8
           flake8 watcher.py --ignore=E226,E501,E702,W503,W504
