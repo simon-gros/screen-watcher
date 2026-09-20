@@ -804,18 +804,16 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
                 rule._armed = False
             continue
         if re.search(rule.pattern, line, re.I):
-            # Scrollback on the first pass predates the watcher, so prime the
-            # activity clock from it without treating it as a live catch.
-            if rule._primed:
-                rule._last_activity = now
-                rule._armed = True
+            rule._last_activity = now
+            rule._armed = True
     if len(rule._seen) > 400:
         rule._seen.clear()
         rule._primed = False
 
     if not rule._primed:
+        # Prime the visible scrollback, but do not invent an activity timestamp.
+        # A watcher started while idle must remain silent indefinitely.
         rule._primed = True
-        rule._last_activity = now
         return
 
     # Never seen activity at all: nothing to report stopping.
