@@ -57,6 +57,35 @@ def test_profile_identity_is_written_to_alert_log(tmp_path, monkeypatch):
     assert '"skill": "fishing"' in record
 
 
+def test_claim_singleton_reclaims_pid_reused_by_unrelated_process(
+        tmp_path, monkeypatch):
+    import watcher
+
+    pid_file = tmp_path / "watcher.pid"
+    pid_file.write_text("1234")
+    monkeypatch.setattr(watcher, "PID_FILE", pid_file)
+    monkeypatch.setattr(watcher.os, "getpid", lambda: 5678)
+    monkeypatch.setattr(watcher, "_process_identity", lambda pid: None)
+
+    watcher.claim_singleton()
+
+    assert pid_file.read_text() == "5678"
+
+
+def test_claim_singleton_rejects_verified_watcher(tmp_path, monkeypatch):
+    import watcher
+
+    pid_file = tmp_path / "watcher.pid"
+    pid_file.write_text("1234")
+    monkeypatch.setattr(watcher, "PID_FILE", pid_file)
+    monkeypatch.setattr(watcher.os, "getpid", lambda: 5678)
+    monkeypatch.setattr(watcher, "_process_identity",
+                        lambda pid: ("python watcher.py watch", 42))
+
+    with pytest.raises(SystemExit, match="already running"):
+        watcher.claim_singleton()
+
+
 def valid_config():
     return {
         "window": {"wm_class": "example"},

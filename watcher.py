@@ -1327,11 +1327,7 @@ def claim_singleton() -> None:
         except (ValueError, OSError):
             old = None
         if old and old != os.getpid():
-            try:
-                os.kill(old, 0)          # signal 0 = liveness probe only
-            except OSError:
-                pass                     # stale: previous run died
-            else:
+            if _process_identity(old) is not None:
                 sys.exit(f"watcher already running (pid {old}) - "
                          f"stop it first, or delete {PID_FILE}")
     PID_FILE.write_text(str(os.getpid()))
