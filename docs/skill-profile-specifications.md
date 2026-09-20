@@ -209,6 +209,155 @@ References:
 - https://runeapps.org/forums/viewtopic.php?id=1822
 
 
+
+## Interface-reader and trigger-data requirements
+
+The third technical research pass adds several implementation requirements that
+should apply before individual profiles proliferate.
+
+### Reader ownership
+
+Every screen-derived observation should have one clear reusable owner where
+possible.
+
+Examples:
+- chat messages -> `ChatReader`;
+- inventory state -> `InventoryReader`;
+- buffs/debuffs -> `BuffBarReader`;
+- HP/Prayer/Adrenaline/Summoning -> `ActionBarReader`;
+- target name/HP -> `TargetReader`;
+- RuneMetrics XP -> `RuneMetricsReader`;
+- activity/crafting progress -> `ProgressReader`.
+
+A profile should subscribe to normalized observations from these readers instead
+of implementing its own copy of interface discovery and parsing.
+
+### Profile readiness metadata
+
+Profiles should distinguish hard requirements from reliability recommendations.
+
+Possible fields:
+
+```text
+requires_game_settings:
+  game_messages: true
+  boss_kill_timer_visible: true
+
+recommends_game_settings:
+  local_chat_timestamps: true
+  chat_font_min: 12
+  interface_transparency: 0
+
+requires_interfaces:
+  - chat
+  - boss_timer
+```
+
+The doctor command should report which conditions are satisfied, missing, or
+not automatically verifiable.
+
+### Shared-frame scheduling expectations
+
+Profiles should not specify capture implementation details, but detectors/readers
+may declare required update classes:
+- very-fast;
+- fast;
+- medium;
+- slow;
+- scheduled.
+
+The capture scheduler should merge these requests into the minimum number of
+shared frames. A new profile must not introduce a separate full-window capture
+loop merely because it needs a different poll interval.
+
+### Chat-event contract
+
+Chat-driven rules should consume a normalized chat event with:
+- original text;
+- normalized text;
+- chatbox/channel type where known;
+- source timestamp where available;
+- observation timestamp;
+- confidence;
+- dedup key.
+
+Local chat timestamps should be treated as a preferred freshness signal when
+enabled. Startup scrollback and duplicate reads must be handled by the reader,
+not separately by each profile rule.
+
+### Status/buff absence is conditional evidence
+
+A missing status icon is only strong evidence when:
+- the reader is healthy;
+- the relevant category is enabled;
+- the bar is not saturated;
+- icon size/layout is supported;
+- no mutually superseding status is active.
+
+Profiles must not assume `missing icon == expired` without documenting those
+conditions.
+
+### Dual-path resources
+
+For HP, Prayer, Adrenaline, Summoning, progress, and similar resources, prefer
+two independent interpretations where practical:
+- exact text/OCR value;
+- graphical bar/proportion.
+
+Agreement raises confidence. Disagreement should be logged and may place the
+resource observation into an uncertain/degraded state.
+
+### Wiki-derived trigger provenance
+
+When a profile uses a game-mechanic number discovered from the RuneScape Wiki,
+record:
+- mechanic ID;
+- value/unit;
+- source URL;
+- source revision or retrieval date;
+- whether it is authoritative, inferred, or a user-facing default;
+- whether the profile may override it.
+
+Examples from the current research seed:
+- Mining: 0 stamina is the major efficiency cliff;
+- Smithing: 67% begins the high-heat band;
+- Fishing Frenzy: 6-second inactivity deadline;
+- Seren spirit: 30-second opportunity lifetime;
+- Necromancy ritual disturbances: 12 ritual ticks apart;
+- Divination chronicle enhanced catch: 6-second window;
+- Memory Overflow: 10-minute duration;
+- Bird's nest on ground: 2-minute lifetime.
+
+These values should be reverified before production enablement and should not be
+silently copied into unrelated activities.
+
+### Dynamic-icon matching
+
+If an icon contains changing timer/stack text, the reader should separate the
+dynamic text from stable artwork before matching. This allows one icon template
+to survive changing `59s -> 58s -> 57s` overlays.
+
+Profiles should receive:
+- semantic status ID;
+- timer/stack argument;
+- confidence;
+- source icon position;
+
+rather than performing raw icon-template matching themselves.
+
+### Mutual-exclusion/supersession groups
+
+Profiles may declare that one status or activity state supersedes others.
+
+Examples:
+- combination potions replacing component-effect monitoring;
+- upgraded status replacing a weaker variant;
+- one boss phase suppressing alerts for a previous phase;
+- one activity mode disabling mutually incompatible rules.
+
+This belongs in profile/state composition rather than bespoke `if` statements.
+
+
 ## All 29 skills
 
 | Skill | Type | Profile focus | Likely signals and items to research | Wiki |
@@ -272,6 +421,10 @@ unlock several skills at once:
     before relying on it live.
 11. During live use, record false positives, missed events, and degraded-input
     incidents so the profile has measurable quality history.
+12. Record which interface reader owns each observation and confirm that no
+    duplicate capture/parser loop was introduced by the profile.
+13. If numeric Wiki-derived triggers are used, record their provenance in the
+    local trigger-reference data and reverify them before enabling alerts.
 
 The current `profiles/fishing.json` and `profiles/thieving.json` remain the
 reference examples for live measurement and evidence-driven tuning, but future
@@ -322,3 +475,15 @@ current activity is still the same.
   detector-maintenance concerns.
 - [RuneApps Dungeoneering logger discussion](https://runeapps.org/forums/viewtopic.php?id=1822)
   — structured session history and CSV/Google Sheets export as useful outputs.
+- [Alt1 public libraries](https://github.com/skillbert/alt1) — reusable chat,
+  buff, action-bar, RuneMetrics, target, dialogue, tooltip, and other interface
+  readers, plus RuneScape-specific sprite OCR.
+- [RuneKit Reforged](https://github.com/Jcapehart2/RuneKit-Reforged) — Linux
+  `GameInstance`, X11/XComposite/XShm capture, frame caching, scaling/focus
+  state, overlays, and authenticated internal RPC patterns.
+- [SusAlert](https://github.com/Raphire/SusAlert) — practical requirements for
+  timestamps, visible boss timer, chat settings, and manual encounter resync.
+- [RuneScape Wiki: Buffs and debuffs](https://runescape.wiki/w/Buffs_and_debuffs)
+  — visible status-bar limits, categories, and icon-size considerations.
+- [RuneScape Wiki: Infobox Buff](https://runescape.wiki/w/Template:Infobox_Buff/doc)
+  — structured status-effect metadata suitable for a local generated catalog.
