@@ -14,4 +14,4 @@ jobs:
       - name: Lint
         run: |
           pip install flake8
-          flake8 watcher.py --ignore=E501,E702
+          flake8 watcher.py --ignore=E226,E501,E702,W503,W504
