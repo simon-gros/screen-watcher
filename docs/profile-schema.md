@@ -97,6 +97,17 @@ Requires a grid region. Supports `min_blue`, `warn_below`, `out_below`,
 Requires `pattern`; may use `item`, `trip_pattern`, `out_pattern`,
 `out_message`, and `warn_streak`.
 
+## Verification policy
+
+Bundled profiles should enable only rules whose signal wording, timing, or
+visual threshold has been verified for that profile. A detector may be reused
+across activities, but calibration data must not be treated as transferable
+without evidence. Experimental rules should remain `"enabled": false` and state
+what still needs to be measured or captured in an underscore-prefixed note.
+
+CI includes a regression check that rejects enabled bundled rules explicitly
+marked as unverified.
+
 ## Comments
 
 Keys beginning with `_` are reserved for human-readable notes and are ignored
