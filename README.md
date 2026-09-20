@@ -53,6 +53,31 @@ The default remains `config.json` for compatibility. Stop the watcher before
 editing a profile; rule changes are read when the process starts. Region
 coordinates are relative to the detected game window.
 
+### Switching profiles safely
+
+Switching from one skill to another can look identical on screen for several
+polls: the client may show no skill-specific chat line or obvious interface
+change while the player moves from one activity to another. Never change a
+profile file underneath a running watcher, and do not assume the watcher can
+infer the new skill from generic XP or inventory changes.
+
+Use an explicit stop–switch–start sequence:
+
+```bash
+python3 watcher.py status
+python3 watcher.py --config profiles/fishing.json watch
+# stop the watcher with Ctrl-C (or its process supervisor)
+python3 watcher.py status
+python3 watcher.py --config profiles/thieving.json watch
+```
+
+The watcher prints the selected `skill` and profile path at startup. Alert log
+records also include the skill that produced them, so alerts from adjacent
+activities cannot be mistaken for one another. Each profile should define at
+least one skill-specific cue—such as a verified chat pattern, interface state,
+resource signature, or measured activity cadence—rather than relying only on
+generic XP movement.
+
 The top-level settings are:
 
 | setting | purpose |
@@ -114,7 +139,7 @@ The watcher creates or appends these files under `state/`:
 | path | contents |
 |---|---|
 | `watch.log` | stdout/stderr when using the background command above |
-| `alerts.jsonl` | one JSON record for each notification |
+| `alerts.jsonl` | one JSON record for each notification, including its skill |
 | `occupancy.jsonl` | inventory transitions used by `stats` |
 | `watcher.pid` | temporary singleton lock, removed on normal exit |
 
