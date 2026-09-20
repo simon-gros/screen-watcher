@@ -261,3 +261,65 @@ these paths run in CI at all.
 The rule evaluators still call `capture_array`/`ocr_cached` with a raw window
 id. Migrating them onto `GameInstance` is step 10 of the Priority 0 order and
 is what finally removes the direct ImageMagick coupling from profile code.
+
+
+## Priority 0, step 2 — shared frame scheduler
+
+`FrameScheduler` drives one sampling pass over a set of named regions. It owns
+the cycle counter, resolves region names against the current window size,
+serves every reader in a pass from one coherent set of frames, and records
+per-region timing, reuse, and failure counts.
+
+```text
+sched = FrameScheduler(game, cfg["_regions"])
+sched.begin()                    # open a pass
+sched.prefetch(["chat_tail"])    # capture up front, collecting failures
+sched.frame("backpack")          # cached within the pass
+sched.report()                   # [(region, PASS/WARN/FAIL, reason)]
+```
+
+### Full-window capture was measured and rejected
+
+The architecture note asks for the window to be treated as "a continuously
+sampled data source, not a sequence of unrelated screenshot subprocesses", and
+the README previously proposed cropping every region out of one immutable
+full-window frame.
+
+Measured at the real window size, that is much worse:
+
+| strategy | cost |
+|---|---|
+| 4 cropped captures | **4.2 ms/cycle** |
+| 1 full-window capture + numpy crops | 48.1 ms/cycle |
+
+The thieving profile's four live regions total **0.69 MPx** against a
+**7.90 MPx** window, so a full grab moves ~11x more pixels and the
+encode/decode cost tracks that ratio exactly (11.4x slower).
+
+Capture strategy therefore stays per-region. The scheduler's value is
+coherence and accounting, not fewer pixels. This is worth remembering before
+the native XCB/XShm backend lands in step 3: shared memory changes the
+constant factor, not the pixel ratio.
+
+### Failure isolation
+
+`prefetch` collects failures rather than raising. A region caught mid-repaint
+must not cost the pass its other regions - the same reasoning that already
+isolates one broken rule from the rest of the loop.
+
+### Frame health
+
+The scheduler hashes each unmasked frame and counts how many consecutive
+cycles a region's pixels stay identical. A region unchanged for 20+ cycles is
+reported as `WARN ... frozen or occluded?`.
+
+This matters because a frozen or blank capture does not look like an error to
+a detector - it looks like confident, stable input. Health tracking is what
+turns that into a visible degraded state, and it is the data `doctor` reports
+in step 4.
+
+### Not yet wired in
+
+`cmd_watch` still runs its own cycle counter and calls `capture_array`
+directly. Moving the live loop onto the scheduler belongs with step 10, when
+rules stop owning their own capture/OCR calls.

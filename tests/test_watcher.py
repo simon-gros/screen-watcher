@@ -803,3 +803,127 @@ def test_backend_reports_why_it_is_unavailable():
     ok, reason = Broken().available()
     assert ok is False
     assert "import" in reason
+
+
+# --------------------------------------------------------------------------
+# Priority 0, step 2: shared frame scheduler
+# --------------------------------------------------------------------------
+
+def _scheduler(backend=None, regions=None):
+    backend = backend or RecordingBackend(size=(3840, 2058))
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    if regions is None:
+        regions = load_config(Path("profiles/thieving.json"))["_regions"]
+    return watcher.FrameScheduler(game, regions), backend
+
+
+def test_scheduler_serves_one_pass_from_one_capture_per_region():
+    sched, backend = _scheduler()
+
+    sched.begin()
+    sched.frame("chat_tail")
+    sched.frame("chat_tail")
+    sched.frame("backpack")
+
+    assert len(backend.grabs) == 2
+    assert sched.stats["chat_tail"].captures == 1
+    assert sched.stats["chat_tail"].reuses == 1
+
+
+def test_scheduler_advances_cycles():
+    sched, backend = _scheduler()
+
+    first = sched.begin()
+    sched.frame("chat_tail")
+    second = sched.begin()
+    sched.frame("chat_tail")
+
+    assert (first, second) == (1, 2)
+    assert len(backend.grabs) == 2
+
+
+def test_scheduler_rejects_unknown_region():
+    sched, _ = _scheduler()
+    with pytest.raises(KeyError, match="nonexistent"):
+        sched.box_for("nonexistent")
+
+
+def test_prefetch_isolates_a_failing_region():
+    """One region mid-repaint must not cost the pass its other regions."""
+
+    class Flaky(RecordingBackend):
+        def __init__(self):
+            super().__init__(size=(3840, 2058))
+            self.fail_boxes = set()
+
+        def grab_array(self, handle, box):
+            if tuple(box) in self.fail_boxes:
+                raise watcher.CaptureError("simulated repaint")
+            return super().grab_array(handle, box)
+
+    backend = Flaky()
+    sched, _ = _scheduler(backend=backend)
+    backend.fail_boxes = {tuple(sched.box_for("backpack"))}
+
+    sched.begin()
+    failed = sched.prefetch(["chat_tail", "backpack", "session_timer"])
+
+    assert failed == ["backpack"]
+    assert sched.stats["chat_tail"].captures == 1
+    assert sched.stats["session_timer"].captures == 1
+    assert sched.stats["backpack"].failures == 1
+
+
+def test_scheduler_flags_a_frozen_region():
+    """A region whose pixels never change is suspect, not trustworthy."""
+
+    class Freezable(RecordingBackend):
+        def __init__(self):
+            super().__init__(size=(3840, 2058))
+            self.frozen = False
+            self.tick = 0
+
+        def grab_array(self, handle, box):
+            if not self.frozen:
+                self.tick += 1
+            _x, _y, w, h = box
+            self.grabs.append(tuple(box))
+            return np.full((h, w, 3), 50 + self.tick, dtype=np.int16)
+
+    backend = Freezable()
+    sched, _ = _scheduler(backend=backend)
+
+    for _ in range(5):
+        sched.begin()
+        sched.frame("chat_tail")
+    assert sched.health("chat_tail")[0] == "PASS"
+
+    backend.frozen = True
+    for _ in range(25):
+        sched.begin()
+        sched.frame("chat_tail")
+    verdict, reason = sched.health("chat_tail")
+    assert verdict == "WARN"
+    assert "unchanged" in reason
+
+    backend.frozen = False
+    sched.begin()
+    sched.frame("chat_tail")
+    assert sched.health("chat_tail")[0] == "PASS"
+
+
+def test_health_reports_never_captured_region():
+    sched, _ = _scheduler()
+    assert sched.health("chat_tail") == ("WARN", "never captured")
+
+
+def test_report_covers_every_touched_region():
+    sched, _ = _scheduler()
+    sched.begin()
+    sched.frame("chat_tail")
+    sched.frame("backpack")
+
+    names = [row[0] for row in sched.report()]
+    assert names == ["backpack", "chat_tail"]
+    assert all(len(row) == 3 for row in sched.report())

@@ -442,10 +442,12 @@ architectural limitations are documented in
   `CaptureBackend`/`GameInstance` seam (Priority 0, step 1) has landed, but
   the existing rule evaluators still call `capture_array`/`ocr_cached`
   directly rather than going through a `GameInstance`.
-- Identical region/mask requests are reused within a polling cycle, but
-  different regions are still captured independently rather than cropped from
-  one immutable full-window frame. Detectors can therefore observe slightly
-  different moments in the same cycle.
+- Identical region/mask requests are reused within a polling cycle, and
+  `FrameScheduler` keeps one pass coherent, but different regions are still
+  captured independently. Detectors can therefore observe slightly different
+  moments in the same cycle. Cropping every region out of one full-window
+  frame was measured and rejected: at 3840x2058 it is **11.4x slower**,
+  because the live regions total 0.69 MPx against a 7.90 MPx window.
 - Capture and OCR scratch files use unique temporary paths, so the earlier
   shared-scratch-file contention issue has been removed.
 - Polling uses a monotonic deadline, but `main` does not yet skip missed
