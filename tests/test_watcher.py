@@ -136,6 +136,14 @@ def test_skill_profiles_load_and_validate():
     assert load_config("profiles/thieving.json")["skill"] == "thieving"
 
 
+def test_compatibility_configs_match_profiles():
+    root = Path(__file__).resolve().parents[1]
+    assert (root / "config.json").read_bytes() == (
+        root / "profiles/thieving.json").read_bytes()
+    assert (root / "config.fishing.json").read_bytes() == (
+        root / "profiles/fishing.json").read_bytes()
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [
@@ -145,6 +153,17 @@ def test_skill_profiles_load_and_validate():
          "unknown kind"),
         ({"rules": [{"name": "bad", "kind": "ocr", "region": "panel",
                      "pattern": "["}]}, "invalid pattern"),
+        ({"rules": [{"name": "bad", "kind": "counter", "region": "panel"}]},
+         "requires pattern"),
+        ({"rules": [{"name": "bad", "kind": "counter", "region": "panel",
+                     "pattern": r"coins added"}]},
+         "needs a capture group"),
+        ({"rules": [{"name": "bad", "kind": "loot", "region": "panel"}]},
+         "requires item_pattern"),
+        ({"rules": [{"name": "bad", "kind": "stack", "region": "panel"}]},
+         "requires a region grid"),
+        ({"rules": [{"name": "bad", "kind": "change", "region": "panel",
+                     "typo_option": 1}]}, "unknown option"),
     ],
 )
 def test_validate_config_rejects_invalid_rules(change, message):
@@ -160,6 +179,19 @@ def test_validate_config_rejects_unknown_profile_type():
     config["profile_type"] = "combat"
 
     with pytest.raises(ValueError, match="profile_type"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_invalid_inventory_mode():
+    config = valid_config()
+    config["regions"]["panel"]["grid"] = {
+        "x0": 0, "y0": 0, "cell_w": 10, "cell_h": 10, "cols": 2, "rows": 2
+    }
+    config["rules"] = [{
+        "name": "bad", "kind": "inventory", "region": "panel", "mode": "fast"
+    }]
+
+    with pytest.raises(ValueError, match="mode must be"):
         validate_config(config)
 
 

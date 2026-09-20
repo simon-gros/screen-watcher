@@ -282,6 +282,9 @@ Grid coordinates are relative to the region's top-left corner.
 | `ocr` | a newly observed line matches a regular expression | level-ups, messages, events |
 | `loot` | a named item appears in chat, ignoring routine currency lines | rare drops worth seeing |
 | `counter` | a repeating numeric chat line accumulates past a milestone | coin/XP totals over hours |
+| `stack` | a backpack slot's stack signature changes and remains changed | detecting newly gained inventory items |
+| `timer` | an OCR'd in-game timer crosses a configured milestone | session-duration reminders |
+| `presence` | a visual indicator remains absent, with optional corroboration | stopped-activity detection |
 
 `cooldown` throttles repeat alerts per rule.
 

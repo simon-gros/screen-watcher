@@ -18,4 +18,4 @@ jobs:
         run: python -m pytest -q
       - name: Lint
         run: |
-          flake8 watcher.py --ignore=E226,E501,E702,W503,W504
+          flake8 watcher.py tests --ignore=E226,E501,E702,W503,W504
