@@ -12,6 +12,13 @@ are just two examples among RuneScape's 29 skills; the same region, OCR,
 activity, inventory, and idle detectors can be adapted to other skills and
 activities by changing the profile rules.
 
+The long-term goal is a general read-only RuneScape observability application:
+one profile for each skill, plus dedicated quest, boss, minigame, and other
+activity profiles. Fishing, thieving, urns, and bait are initial examples, not
+the final scope. See
+[`docs/application-outline.md`](docs/application-outline.md) for the target
+architecture, user experience, safety boundaries, and delivery stages.
+
 ## Requirements
 
 Already present on this machine:
@@ -89,6 +96,11 @@ quest-step or objective text, dialogue/interface transitions, boss phase or
 enrage indicators, kill/loot messages, health/prayer state, death or wipe
 signals, and encounter-specific supplies. Treat a profile change between
 skilling, questing, and bossing as an explicit operator action.
+
+The current implementation is the foundation, not full-game coverage. It
+supports the profile and detector patterns needed to grow toward that
+application, but most skills, quests, bosses, and minigames still need their
+own researched profiles and fixtures.
 
 The top-level settings are:
 

@@ -5,6 +5,11 @@ map for Screen Watcher profiles. It covers all 29 current RuneScape skills.
 Fishing and thieving/pickpocketing are the initial profiles; the other rows are
 research-backed starting points, not finished detector configurations.
 
+This is a profile-planning document, not a claim that the current application
+already implements every skill. The broader application outline in
+[`application-outline.md`](application-outline.md) defines the target
+architecture for skills, quests, bosses, minigames, and other activities.
+
 Profiles should describe the activity being monitored, not attempt to automate
 gameplay. The watcher remains read-only: it observes regions, OCR text,
 inventory state, XP changes, and notifications.
