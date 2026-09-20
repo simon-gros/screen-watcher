@@ -10,6 +10,109 @@ An item should move from this document into the active roadmap only after it has
 a concrete use case, a reproducible in-game signal, and enough live measurements
 to tune it without creating noisy or unreliable alerts.
 
+## September 2026 research pass: strategic implications
+
+A broader research pass across Jagex's official RuneScape material, the
+RuneScape Wiki, existing Alt1-style tools, GitHub projects, Steam/community
+discussion, and RuneScape forums produced several architectural conclusions that
+should influence future work before more skill-specific rules are added.
+
+### Treat observation as replaceable
+
+Jagex is actively developing an official RuneScape plugin/API ecosystem. Its
+September 2026 preview explicitly contrasts the new API with the limitations of
+simple screen reading and demonstrates plugins for drop tracking, ground-item
+alerts, combat gauges, Quest Helper, Clue Trainer, and Necromancy rituals.
+
+Screen Watcher should therefore preserve the value of the current OCR/pixel
+work without binding the rest of the application to it. The long-term flow
+should be:
+
+```text
+observation backend
+    -> normalized signal/event
+    -> profile/activity state
+    -> rule
+    -> alert/history/output
+```
+
+Possible observation backends:
+- current X11/XWayland screenshots, OCR, colour and pixel analysis;
+- future Wayland/PipeWire capture;
+- recorded fixture/replay input;
+- a future sanctioned Jagex API/plugin source if and when it is publicly
+  available and appropriate for Screen Watcher.
+
+The rule, alert, history, analytics, and profile layers should not need to know
+which backend produced an event.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
+### Preserve the read-only boundary
+
+The project should continue to observe and inform, never generate gameplay
+input. Jagex's rules prohibit software that performs gameplay for the player,
+generates mouse/keyboard input, communicates directly with the game worlds
+outside approved mechanisms, modifies the client, or repeatedly makes
+excessive automated requests to Jagex websites.
+
+This means future enrichment such as price lookups should use sanctioned APIs
+where available, be cached/rate-limited, and remain ancillary to gameplay
+observation.
+
+References:
+- https://legal.jagex.com/docs/rules/rules-of-runescape
+- https://legal.jagex.com/docs/rules/macro-and-client-features-not-permitted
+
+### Prefer activity/method profiles over one profile per skill
+
+A skill is often too broad to be the useful unit of monitoring. Necromancy
+combat and rituals, ordinary Farming and Player-Owned Farm, traditional Hunter
+and Big Game Hunter, or ordinary Construction and Fort Forinthry have different
+signals and failure states.
+
+Keep all 29 skills represented in the planning documents, but model concrete
+activities as first-class identities beneath them. A future profile key should
+be able to express both `skill` and `activity`/method.
+
+### Separate global rules from activity rules
+
+Many useful alerts are not skill-specific and should not be copied into every
+profile:
+
+- level-up;
+- inventory full / nearly full;
+- low HP / Prayer / Summoning;
+- familiar expiry;
+- aura/potion/incense expiry;
+- porter depletion;
+- lobby/AFK warning;
+- Seren spirit / Blessing of the Gods;
+- pet acquisition;
+- general loot/value thresholds;
+- session milestones.
+
+A profile should compose reusable global capabilities with activity-specific
+rules rather than duplicate them.
+
+### Prioritise information quality over alert quantity
+
+Official plugin previews and community feedback repeatedly emphasise filtering,
+customisation, and avoiding screen/audio clutter. Future alerts should therefore
+support stateful policies beyond a simple cooldown:
+
+- `once_per_state`;
+- `repeat_only_if_unresolved`;
+- `escalate_after`;
+- `clear_when`;
+- `mute_when_game_focused`;
+- separate opportunity / progress / warning / critical classes;
+- user-selectable visual, sound, speech, terminal, or persistent outputs.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
 ## Fishing
 
 ### Seren spirit event
@@ -984,6 +1087,238 @@ High-leverage detector families:
 
 ## Cross-profile engine ideas
 
+### Normalized observation -> event -> rule pipeline
+
+Before adding many more detector kinds, introduce an internal event model that
+decouples observations from decisions.
+
+Example normalized events:
+
+```text
+inventory.free_slots.changed
+inventory.full
+activity.progress
+activity.stopped
+chat.level_up
+resource.hp.changed
+resource.prayer.low
+status.familiar.expiring
+opportunity.spawned
+loot.item.gained
+session.milestone
+```
+
+An OCR line, pixel detector, template match, official API event, or replay
+fixture could all produce the same normalized event. Rules would subscribe to
+events and maintain state rather than reaching directly into capture code.
+
+Benefits:
+- easier migration away from OCR when better signals exist;
+- easier unit/replay testing;
+- cleaner profile inheritance/composition;
+- multi-signal confidence becomes possible;
+- analytics can consume the same event stream as alerts.
+
+### Multi-signal event fusion and confidence
+
+The Thieving profile has already demonstrated that a single signal can be
+misleading: chat OCR can fail while activity continues, and an activity icon can
+temporarily disappear. Future detectors should be able to combine independent
+evidence.
+
+Possible rule semantics:
+
+```text
+event: thieving_stopped
+require:
+  any:
+    - xp_stalled
+    - activity_icon_absent
+  and:
+    - no_recent_chat_activity
+confidence:
+  high: 3 corroborating signals
+  medium: 2
+  low: 1
+```
+
+Confidence should be logged even when no notification is shown. A low-confidence
+observation may still be useful for diagnostics or later model tuning.
+
+### Global capabilities and activity composition
+
+Instead of copying common rules into every skill profile, allow profiles to
+compose reusable capabilities:
+
+```text
+extends:
+  - global/level-up
+  - global/inventory
+  - global/afk
+  - gathering/base
+activity: archaeology-excavation
+```
+
+Useful reusable bases:
+- `global/base`;
+- `combat/base`;
+- `gathering/base`;
+- `production/base`;
+- `timed-opportunity/base`;
+- `course-sequence/base`.
+
+Resolved configuration should remain visible in diagnostics so inheritance does
+not make alerts mysterious.
+
+### AFK and lobby subsystem
+
+The RuneScape client has a finite inactivity/lobby timer, and AFK warnings are a
+common use case in existing screen-reading companions.
+
+Possible future behaviour:
+- infer activity/interactions from Screen Watcher's existing signals;
+- estimate time since the last credible player/gameplay action;
+- configurable warnings before likely lobby;
+- suppress warnings when the session is intentionally idle;
+- never generate the input that resets the timer.
+
+This should be a global subsystem rather than copied into skill profiles.
+
+Reference:
+- https://runescape.wiki/w/Lobby_timer
+
+### Alert state machine and anti-noise policy
+
+Cooldown alone cannot model all useful alert behaviour. Add explicit alert
+lifecycle state:
+
+```text
+inactive -> warning -> critical -> resolved
+```
+
+Possible configuration:
+- fire once when entering a state;
+- escalate after N seconds;
+- repeat only while unresolved;
+- clear when evidence recovers;
+- remember acknowledgement for the current state;
+- mute selected classes while RuneScape is focused;
+- allow profiles to set an expected-action window before escalation.
+
+This should reduce notification fatigue as profile coverage expands.
+
+### Configurable and accessibility-oriented outputs
+
+A normalized alert should be routable independently to:
+- KDE/desktop notification;
+- sound;
+- text-to-speech;
+- terminal;
+- persistent status panel;
+- edge/screen flash;
+- structured log;
+- optional future external integrations.
+
+Different output combinations should be configurable by alert class. This is
+useful both for personal preference and for accessibility when an audio-only or
+colour-only cue is insufficient.
+
+### Session analytics and local event store
+
+The fishing cycle statistics and thieving coin counter are early examples of a
+larger analytics system.
+
+Potential session metrics:
+- actions/catches/kills/laps/cycles;
+- XP and XP/hour;
+- items gained and consumed;
+- active vs idle time;
+- bank/travel/production time;
+- median, p95, best/worst cycle;
+- stop/failure counts;
+- alert frequency and acknowledgement;
+- estimated time/actions remaining to a target.
+
+Keep JSONL as a transparent debug/export format, but consider SQLite once
+queries span many profiles and sessions. A future schema could separate raw
+observations, normalized events, sessions, alerts, and persistent counters.
+
+Jagex's official Drop Log preview reinforces the value of historical supplies,
+drops, ledgers, and charts.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
+### Layout fingerprinting and resilient calibration
+
+RuneScape's desktop UI is highly configurable: windows can be moved/resized,
+multiple layouts can be saved, and interface scaling changes component sizes.
+Hard-coded edge offsets should therefore remain a starting point rather than the
+final calibration model.
+
+Possible improvements:
+- detect known interface anchors by template;
+- save multiple named layout calibrations;
+- store UI scale/resolution with calibration;
+- fingerprint backpack/chat/buff-bar geometry and auto-select a matching layout;
+- invalidate/recalibrate when confidence falls below a threshold.
+
+References:
+- https://runescape.wiki/w/Interface
+- https://runescape.wiki/w/Loading_screen
+
+### Capture backend abstraction
+
+Current capture is X11/XWayland-oriented. Before capture assumptions spread
+through more modules, define a backend interface.
+
+Candidate backends:
+- X11/XWayland;
+- Wayland portal/PipeWire;
+- replay/fixture backend;
+- future sanctioned game/API backend.
+
+The capture tests should also cover RuneScape rendering changes such as Vulkan
+versus other renderer paths where those change capture behaviour.
+
+### Replay fixture library
+
+Extend the existing evidence-replay idea into a maintained regression corpus.
+
+Examples:
+- `fixtures/thieving/stunned/`;
+- `fixtures/fishing/zero-urns/`;
+- `fixtures/mining/rockertunity/`;
+- `fixtures/archaeology/time-sprite/`;
+- `fixtures/necromancy/ritual-disturbance/`.
+
+Each fixture should contain only the smallest sanitized regions needed, plus
+expected normalized events. This allows detector changes to be tested without
+waiting for rare events to occur live.
+
+### High-value next activity experiments
+
+The research pass suggests several activities that exercise reusable engine
+capabilities rather than only adding one more profile:
+
+1. **Archaeology excavation** — progress, time sprite, artefacts, material
+   caches, porters, inventory/storage.
+2. **Mining** — stamina, rockertunities, progress, ore box, activity stop.
+3. **Necromancy rituals** — progress, disturbances, depleted/missing glyphs,
+   pedestal/material state. Jagex's own Rituals Helper targets many of these
+   exact visibility problems.
+4. **Farming / Player-Owned Farm** — persistent timers and low-frequency checks
+   rather than continuous polling.
+5. **Combat/Slayer base** — HP, Prayer, buffs, familiar, target, cooldowns,
+   supplies and assignment state.
+6. **Agility course analytics** — ordered obstacle sequence, lap timing,
+   completion statistics and stuck detection.
+7. **Runecrafting** — pouch/essence state, trip sequence, production rate and
+   optional cached price enrichment.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
 ### Generic buff/debuff detector
 
 A major future detector family could observe the RuneScape buff/debuff bar and
@@ -1299,6 +1634,12 @@ Before implementing an idea from this file:
 6. Add production-path tests for the detector, not tests that merely duplicate
    its algorithm.
 7. Document why the chosen threshold/message is reliable.
+8. Prefer a reusable normalized event over a new evaluator when several profiles
+   could consume the same signal.
+9. Record whether the alert can be corroborated by a second independent signal
+   and what confidence level should be assigned.
+10. Confirm that any web/API integration respects Jagex rules, sanctioned
+    interfaces, and conservative request rates.
 
 Items can remain in this backlog indefinitely. Presence here means only that the
 idea may be useful later.
