@@ -345,76 +345,131 @@ def test_colour_pixels_counts_within_box():
     assert watcher.colour_pixels(frame, (150, 80, 0), (255, 200, 90)) == 20
 
 
-def test_presence_needs_sustained_absence():
-    """A brief dropout is the icon's fade or a lost frame, not a stop.
+def _presence_frame(present: bool) -> np.ndarray:
+    frame = np.zeros((20, 20, 3), dtype=np.int16)
+    if present:
+        frame[:] = [200, 120, 40]
+    return frame
 
-    Measured separation is absolute: the ring counts 328 pixels while the
-    activity runs and 0-113 on surrounding scenery, so the threshold is not
-    the hard part - debouncing is.
-    """
+
+def test_presence_needs_sustained_absence(monkeypatch):
+    """Exercise the production evaluator, not a copy of its state machine."""
+    state = {"present": True}
+    monkeypatch.setattr(
+        watcher, "capture_array",
+        lambda *args, **kwargs: _presence_frame(state["present"]),
+    )
     rule = _rule(kind="presence", present_above=200, absent_seconds=12,
                  cooldown=0, item="thieving")
-    fired = []
-    now = 0.0
-    # present, then a 6s dropout, then present again
-    for n in [328] * 4 + [0] * 4 + [328] * 6:
-        if n >= rule.present_above:
-            rule._absent_since = 0.0
-            rule._armed = True
-        elif rule._absent_since == 0.0:
-            rule._absent_since = now
-        elif (rule._armed
-              and now - rule._absent_since >= rule.absent_seconds):
-            rule._armed = False
-            fired.append(now)
-        now += 1.5
-    assert fired == []
 
-    # now a sustained absence does fire
-    rule2 = _rule(kind="presence", present_above=200, absent_seconds=12,
-                  cooldown=0, item="thieving")
-    fired2 = []
-    now = 0.0
-    for n in [328] * 3 + [0] * 15:
-        if n >= rule2.present_above:
-            rule2._absent_since = 0.0
-            rule2._armed = True
-        elif rule2._absent_since == 0.0:
-            rule2._absent_since = now
-        elif (rule2._armed
-              and now - rule2._absent_since >= rule2.absent_seconds):
-            rule2._armed = False
-            fired2.append(now)
-        now += 1.5
-    assert len(fired2) == 1
+    assert watcher._eval_presence(rule, "w", (0, 0, 20, 20), 100.0, 1) is None
+
+    state["present"] = False
+    assert watcher._eval_presence(rule, "w", (0, 0, 20, 20), 101.0, 2) is None
+    assert watcher._eval_presence(rule, "w", (0, 0, 20, 20), 110.0, 3) is None
+    alert = watcher._eval_presence(rule, "w", (0, 0, 20, 20), 113.0, 4)
+
+    assert alert is not None
+    assert "has stopped" in alert.body
 
 
-def test_presence_requires_corroboration_before_stopping():
-    """The icon alone produced false stops.
-
-    Measured live: the activity icon was absent for 19% of samples -
-    including one unbroken 60s stretch - while 33 pickpocket chat lines
-    arrived. Absence means "no XP right now", not "activity ended", so a
-    second signal must agree before a stop is reported.
-    """
-    rule = _rule(kind="presence", present_above=200, absent_seconds=75,
+def test_presence_primes_old_scrollback_without_delaying_stop(monkeypatch):
+    """A line already visible when the icon disappears is not fresh evidence."""
+    state = {"present": True}
+    monkeypatch.setattr(
+        watcher, "capture_array",
+        lambda *args, **kwargs: _presence_frame(state["present"]),
+    )
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda *args, **kwargs: "[21:00:00] You pick the target's pocket.",
+    )
+    rule = _rule(kind="presence", present_above=200, absent_seconds=10,
                  cooldown=0, item="thieving",
                  corroborate_region="chat_tail",
                  corroborate_pattern=r"you pick the target'?s pocket")
     rule._corroborate_box = (0, 0, 1, 1)
-    fired = []
-    now = 0.0
-    for i in range(70):
-        line = f"[21:00:{i % 60:02d}] You pick the target's pocket."
-        if rule._absent_since == 0.0:
-            rule._absent_since = now
-        elif now - rule._absent_since >= rule.absent_seconds:
-            key = norm_line(line)
-            if key not in rule._seen:
-                rule._seen.add(key)
-                if re.search(rule.corroborate_pattern, line, re.I):
-                    rule._last_activity = now
-            if now - rule._last_activity >= rule.absent_seconds:
-                fired.append(now)
-        now += 1.5
-    assert fired == [], "chat proves the activity is alive"
+
+    assert watcher._eval_presence(rule, "w", (0, 0, 20, 20), 100.0, 1) is None
+    state["present"] = False
+    assert watcher._eval_presence(rule, "w", (0, 0, 20, 20), 101.0, 2) is None
+    alert = watcher._eval_presence(rule, "w", (0, 0, 20, 20), 111.0, 3)
+
+    assert alert is not None
+
+
+def test_presence_tracks_fresh_corroboration_during_blackout(monkeypatch):
+    """Fresh chat during icon loss keeps the activity alive until it goes quiet."""
+    state = {"present": True}
+    monkeypatch.setattr(
+        watcher, "capture_array",
+        lambda *args, **kwargs: _presence_frame(state["present"]),
+    )
+    text_by_cycle = {
+        2: "[21:00:00] You pick the target's pocket.",
+        3: ("[21:00:00] You pick the target's pocket.\n"
+            "[21:00:05] You pick the target's pocket."),
+        4: ("[21:00:00] You pick the target's pocket.\n"
+            "[21:00:05] You pick the target's pocket."),
+        5: ("[21:00:00] You pick the target's pocket.\n"
+            "[21:00:05] You pick the target's pocket."),
+    }
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda wid, box, cycle, psm=6: text_by_cycle.get(cycle, ""),
+    )
+    rule = _rule(kind="presence", present_above=200, absent_seconds=10,
+                 cooldown=0, item="thieving",
+                 corroborate_region="chat_tail",
+                 corroborate_pattern=r"you pick the target'?s pocket")
+    rule._corroborate_box = (0, 0, 1, 1)
+
+    assert watcher._eval_presence(rule, "w", (0, 0, 20, 20), 100.0, 1) is None
+    state["present"] = False
+    assert watcher._eval_presence(rule, "w", (0, 0, 20, 20), 101.0, 2) is None
+    assert watcher._eval_presence(rule, "w", (0, 0, 20, 20), 105.0, 3) is None
+    assert watcher._eval_presence(rule, "w", (0, 0, 20, 20), 111.0, 4) is None
+    alert = watcher._eval_presence(rule, "w", (0, 0, 20, 20), 116.0, 5)
+
+    assert alert is not None
+
+
+def test_validate_config_rejects_unknown_corroboration_region():
+    config = valid_config()
+    config["rules"] = [{
+        "name": "presence",
+        "kind": "presence",
+        "region": "panel",
+        "corroborate_region": "missing",
+        "corroborate_pattern": "activity",
+    }]
+
+    with pytest.raises(ValueError, match="corroborate_region"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_invalid_corroboration_regex():
+    config = valid_config()
+    config["rules"] = [{
+        "name": "presence",
+        "kind": "presence",
+        "region": "panel",
+        "corroborate_region": "panel",
+        "corroborate_pattern": "(",
+    }]
+
+    with pytest.raises(ValueError, match="corroborate_pattern"):
+        validate_config(config)
+
+
+def test_validate_config_requires_complete_corroboration_pair():
+    config = valid_config()
+    config["rules"] = [{
+        "name": "presence",
+        "kind": "presence",
+        "region": "panel",
+        "corroborate_region": "panel",
+    }]
+
+    with pytest.raises(ValueError, match="requires corroborate_region"):
+        validate_config(config)
