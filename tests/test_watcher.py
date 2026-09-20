@@ -68,6 +68,58 @@ def test_rule_fire_returns_alert_without_notifying(monkeypatch):
     assert alert.rule_name == "test"
 
 
+def test_rule_fire_uses_configured_body_and_keeps_source():
+    rule = Rule(name="test", kind="ocr", region="panel",
+                alert_body="A better message: {line}")
+
+    alert = rule.fire(100.0, "fallback", source_text="Matched OCR line")
+
+    assert alert.body == "A better message: Matched OCR line"
+    assert alert.source_text == "Matched OCR line"
+
+
+def test_rule_fire_falls_back_to_detector_body_without_configuration():
+    rule = Rule(name="test", kind="ocr", region="panel")
+
+    alert = rule.fire(100.0, "Matched OCR line", source_text="Matched OCR line")
+
+    assert alert.body == "Matched OCR line"
+    assert alert.source_text == "Matched OCR line"
+
+
+def test_rule_fire_bad_template_falls_back_instead_of_dropping_alert(capsys):
+    rule = Rule(name="test", kind="ocr", region="panel",
+                alert_body="Missing value: {does_not_exist}")
+
+    alert = rule.fire(100.0, "Detector fallback")
+
+    assert alert.body == "Detector fallback"
+    assert "invalid alert body template" in capsys.readouterr().err
+
+
+def test_item_count_out_state_uses_separate_template(monkeypatch):
+    rule = Rule(
+        name="urns", kind="item_count", region="backpack", item="urns",
+        warn_below=1, out_below=0, confirm_seconds=0, cooldown=0,
+        alert_body="{n} {noun} left.",
+        out_alert_body="No urns remain. Restock.",
+    )
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(
+        watcher, "capture_array",
+        lambda *args, **kwargs: np.zeros((10, 10, 3), dtype=np.int16),
+    )
+    monkeypatch.setattr(watcher, "count_by_colour", lambda *args, **kwargs: 0)
+
+    assert watcher._eval_item_count(
+        rule, "w", region, (0, 0, 10, 10), 100.0, 1) is None
+    alert = watcher._eval_item_count(
+        rule, "w", region, (0, 0, 10, 10), 101.0, 2)
+
+    assert alert is not None
+    assert alert.body == "No urns remain. Restock."
+
+
 def test_profile_identity_is_written_to_alert_log(tmp_path, monkeypatch):
     import watcher
 
@@ -79,6 +131,29 @@ def test_profile_identity_is_written_to_alert_log(tmp_path, monkeypatch):
 
     record = (tmp_path / "alerts.jsonl").read_text().strip()
     assert '"skill": "fishing"' in record
+
+
+def test_alert_log_records_source_text_when_available(tmp_path, monkeypatch):
+    watcher.ACTIVE_SKILL = "fishing"
+    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(watcher, "ALERT_LOG", tmp_path / "alerts.jsonl")
+
+    watcher.log_alert("level_up", "Level up", "Configured copy",
+                      source_text="Congratulations, you've advanced.")
+
+    record = (tmp_path / "alerts.jsonl").read_text().strip()
+    assert '"body": "Configured copy"' in record
+    assert '"source_text": "Congratulations, you\'ve advanced."' in record
+
+
+def test_alert_log_omits_source_text_for_non_ocr_alerts(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(watcher, "ALERT_LOG", tmp_path / "alerts.jsonl")
+
+    watcher.log_alert("pack_filling", "Pack full", "Configured copy")
+
+    record = (tmp_path / "alerts.jsonl").read_text().strip()
+    assert "source_text" not in record
 
 
 def test_claim_singleton_reclaims_pid_reused_by_unrelated_process(
@@ -180,6 +255,48 @@ def test_validate_config_rejects_unknown_profile_type():
 
     with pytest.raises(ValueError, match="profile_type"):
         validate_config(config)
+
+
+def test_validate_config_rejects_non_string_alert_body():
+    config = valid_config()
+    config["rules"][0]["alert_body"] = 123
+
+    with pytest.raises(ValueError, match="alert_body"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_non_string_out_alert_body():
+    config = valid_config()
+    config["rules"][0]["out_alert_body"] = 123
+
+    with pytest.raises(ValueError, match="out_alert_body"):
+        validate_config(config)
+
+
+def test_profiles_have_configured_copy_for_representative_rules():
+    fishing = load_config(Path("profiles/fishing.json"))
+    thieving = load_config(Path("profiles/thieving.json"))
+    fishing_rules = {r["name"]: r for r in fishing["rules"]}
+    thieving_rules = {r["name"]: r for r in thieving["rules"]}
+
+    assert "slots left" in fishing_rules["pack_nearly_full"]["alert_body"]
+    assert "{n}" in fishing_rules["urns_carried"]["alert_body"]
+    assert "No urns remain" in fishing_rules["urns_carried"]["out_alert_body"]
+    assert "nearing the end" in fishing_rules["urn_full"]["alert_body"]
+    assert "{item}" in thieving_rules["loot_drop"]["alert_body"]
+    assert "{total}" in thieving_rules["coin_milestone"]["alert_body"]
+    assert "{gone:.0f}" in thieving_rules["activity_icon_gone"]["alert_body"]
+
+    coin_rule = Rule(**{
+        key: value for key, value in thieving_rules["coin_milestone"].items()
+        if not key.startswith("_")
+    })
+    alert = coin_rule.fire(
+        100.0, "1,000,000 coins have been added to your money pouch.",
+        source_text="1,000,000 coins have been added to your money pouch.",
+        total="1,000,000", n=1, step="1,000,000")
+    assert "1,000,000 coins pickpocketed" in alert.body
+    assert alert.source_text.startswith("1,000,000 coins")
 
 
 def test_validate_config_rejects_invalid_inventory_mode():
