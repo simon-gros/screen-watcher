@@ -39,6 +39,10 @@ Each skill gets its own profile. The repository currently includes
 `profiles/fishing.json` for fishing. These are two example profiles among
 RuneScape's 29 skills; add another JSON file under `profiles/` for each
 additional skill rather than combining unrelated skill rules in one profile.
+Questing and bossing are separate activity families, not skills, and should
+also have their own profiles—for example `profiles/quest-dragon-slayer.json`
+or `profiles/boss-vindicta.json`. Their cues, state transitions, supplies, and
+failure conditions must not be inferred from a skilling profile.
 The root `config.json` and `config.fishing.json` files remain compatibility
 copies for existing workflows.
 
@@ -47,6 +51,8 @@ Select a profile explicitly with `--config`:
 ```bash
 python3 watcher.py --config profiles/fishing.json watch
 python3 watcher.py --config profiles/thieving.json watch
+python3 watcher.py --config profiles/quest-dragon-slayer.json watch
+python3 watcher.py --config profiles/boss-vindicta.json watch
 ```
 
 The default remains `config.json` for compatibility. Stop the watcher before
@@ -78,12 +84,19 @@ least one skill-specific cue—such as a verified chat pattern, interface state,
 resource signature, or measured activity cadence—rather than relying only on
 generic XP movement.
 
+Questing and bossing need stronger activity-specific cues than generic XP:
+quest-step or objective text, dialogue/interface transitions, boss phase or
+enrage indicators, kill/loot messages, health/prayer state, death or wipe
+signals, and encounter-specific supplies. Treat a profile change between
+skilling, questing, and bossing as an explicit operator action.
+
 The top-level settings are:
 
 | setting | purpose |
 |---|---|
 | `window.wm_class` | X11/ XWayland class used to find the game window |
 | `skill` | human-readable skill name for the profile |
+| `profile_type` | `skill`, `quest`, or `boss` activity family |
 | `interval` | seconds between watch-loop polls |
 | `regions` | anchored capture rectangles and optional inventory grids |
 | `rules` | enabled detectors, thresholds, cooldowns, and notification text |

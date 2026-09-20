@@ -73,6 +73,10 @@ def valid_config():
 def test_validate_config_accepts_valid_configuration():
     validate_config(valid_config())
 
+    config = valid_config()
+    config["profile_type"] = "boss"
+    validate_config(config)
+
 
 def test_skill_profiles_load_and_validate():
     assert load_config("profiles/fishing.json")["skill"] == "fishing"
@@ -95,4 +99,12 @@ def test_validate_config_rejects_invalid_rules(change, message):
     config.update(change)
 
     with pytest.raises(ValueError, match=message):
+        validate_config(config)
+
+
+def test_validate_config_rejects_unknown_profile_type():
+    config = valid_config()
+    config["profile_type"] = "combat"
+
+    with pytest.raises(ValueError, match="profile_type"):
         validate_config(config)
