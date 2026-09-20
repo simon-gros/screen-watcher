@@ -336,3 +336,54 @@ def test_timer_reset_rewinds_milestones():
     rule._milestone = 0
     rule._elapsed = secs
     assert rule._milestone == 0
+
+
+def test_colour_pixels_counts_within_box():
+    frame = np.zeros((20, 20, 3), dtype=np.int16)
+    frame[0:5, 0:4] = [200, 120, 40]          # inside the ring's orange box
+    frame[10:12, 0:4] = [40, 200, 200]        # outside it
+    assert watcher.colour_pixels(frame, (150, 80, 0), (255, 200, 90)) == 20
+
+
+def test_presence_needs_sustained_absence():
+    """A brief dropout is the icon's fade or a lost frame, not a stop.
+
+    Measured separation is absolute: the ring counts 328 pixels while the
+    activity runs and 0-113 on surrounding scenery, so the threshold is not
+    the hard part - debouncing is.
+    """
+    rule = _rule(kind="presence", present_above=200, absent_seconds=12,
+                 cooldown=0, item="thieving")
+    fired = []
+    now = 0.0
+    # present, then a 6s dropout, then present again
+    for n in [328] * 4 + [0] * 4 + [328] * 6:
+        if n >= rule.present_above:
+            rule._absent_since = 0.0
+            rule._armed = True
+        elif rule._absent_since == 0.0:
+            rule._absent_since = now
+        elif (rule._armed
+              and now - rule._absent_since >= rule.absent_seconds):
+            rule._armed = False
+            fired.append(now)
+        now += 1.5
+    assert fired == []
+
+    # now a sustained absence does fire
+    rule2 = _rule(kind="presence", present_above=200, absent_seconds=12,
+                  cooldown=0, item="thieving")
+    fired2 = []
+    now = 0.0
+    for n in [328] * 3 + [0] * 15:
+        if n >= rule2.present_above:
+            rule2._absent_since = 0.0
+            rule2._armed = True
+        elif rule2._absent_since == 0.0:
+            rule2._absent_since = now
+        elif (rule2._armed
+              and now - rule2._absent_since >= rule2.absent_seconds):
+            rule2._armed = False
+            fired2.append(now)
+        now += 1.5
+    assert len(fired2) == 1
