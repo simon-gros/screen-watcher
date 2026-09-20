@@ -575,6 +575,7 @@ class Rule:
     region: str
     message: str = ""
     alert_body: str = ""
+    out_alert_body: str = ""
     cooldown: float = 120.0
     mask: str | None = None
     sound: str | None = None
@@ -664,10 +665,11 @@ class Rule:
         return (now - self._last_fired) >= self.cooldown
 
     def fire(self, now: float, body: str, source_text: str | None = None,
-             **context) -> Alert:
+             body_template: str | None = None, **context) -> Alert:
         self._last_fired = now
         rendered = body
-        if self.alert_body:
+        template = self.alert_body if body_template is None else body_template
+        if template:
             values = {
                 "body": body,
                 "line": source_text or body,
@@ -675,7 +677,12 @@ class Rule:
                 "text": source_text or body,
                 **context,
             }
-            rendered = self.alert_body.format(**values)
+            try:
+                rendered = template.format(**values)
+            except (KeyError, IndexError, ValueError, AttributeError) as exc:
+                print(f"rule {self.name!r}: invalid alert body template "
+                      f"({exc}); using detector message", file=sys.stderr,
+                      flush=True)
         return Alert(self.name, self.message or self.name, rendered,
                      self.urgency, self.sound, self.timeout_ms, source_text)
 
@@ -947,6 +954,7 @@ def _eval_item_count(rule: Rule, wid: str, region: "Region", box,
         stuck = now - rule._level_since
         extra = f" (empty for {stuck/60:.0f} min)" if stuck >= 120 else ""
         return rule.fire(now, (rule.out_message or f"Out of {rule.item}.") + extra,
+                         body_template=rule.out_alert_body,
                          n=n, level=level, stuck=stuck)
     else:
         noun = rule.item.rstrip("s") if n == 1 else rule.item
@@ -1510,8 +1518,10 @@ def validate_config(cfg: object) -> None:
             raise ValueError(f"rule {name!r} has unknown kind {kind!r}")
         if region not in regions:
             raise ValueError(f"rule {name!r} references unknown region {region!r}")
-        if "alert_body" in rule and not isinstance(rule["alert_body"], str):
-            raise ValueError(f"rule {name!r}: alert_body must be a string")
+        for body_key in ("alert_body", "out_alert_body"):
+            if body_key in rule and not isinstance(rule[body_key], str):
+                raise ValueError(
+                    f"rule {name!r}: {body_key} must be a string")
         unknown = sorted(
             key for key in rule
             if not key.startswith("_") and key not in Rule.__dataclass_fields__)
