@@ -34,37 +34,38 @@ automation process.
 
 ## Configuration
 
-The watcher always loads `config.json` from the directory containing
-`watcher.py`; it does not accept a configuration path as a command-line
-option. `config.json` is the active thieving/pickpocketing configuration in
-this repository. `config.fishing.json` is the fishing profile kept as a
-reference/backup. These are two example profiles, not a limitation to those
-two skills.
+Each skill gets its own profile. The repository currently includes
+`profiles/thieving.json` for thieving/pickpocketing and
+`profiles/fishing.json` for fishing. These are two example profiles among
+RuneScape's 29 skills; add another JSON file under `profiles/` for each
+additional skill rather than combining unrelated skill rules in one profile.
+The root `config.json` and `config.fishing.json` files remain compatibility
+copies for existing workflows.
 
-To switch profiles, stop the watcher, preserve the current file, and copy the
-desired profile into place:
+Select a profile explicitly with `--config`:
 
 ```bash
-cp config.json config.thieving.local.json
-cp config.fishing.json config.json
+python3 watcher.py --config profiles/fishing.json watch
+python3 watcher.py --config profiles/thieving.json watch
 ```
 
-Do not edit a profile while `watch` is running. Region coordinates are relative
-to the detected game window, but rule changes are only read when the process
-starts. Keep local experiments in an untracked file or restore `config.json`
-before committing.
+The default remains `config.json` for compatibility. Stop the watcher before
+editing a profile; rule changes are read when the process starts. Region
+coordinates are relative to the detected game window.
 
 The top-level settings are:
 
 | setting | purpose |
 |---|---|
 | `window.wm_class` | X11/ XWayland class used to find the game window |
+| `skill` | human-readable skill name for the profile |
 | `interval` | seconds between watch-loop polls |
 | `regions` | anchored capture rectangles and optional inventory grids |
 | `rules` | enabled detectors, thresholds, cooldowns, and notification text |
 
-Run `python3 watcher.py regions` after changing anchors or grids to verify the
-resolved rectangles against the current window size.
+Run `python3 watcher.py --config profiles/fishing.json regions` after changing
+anchors or grids to verify the resolved rectangles against the current window
+size.
 
 ## Usage
 
@@ -83,6 +84,9 @@ python3 watcher.py status       # report the watcher's process status
 python3 watcher.py pause        # pause the running watcher
 python3 watcher.py resume       # resume a paused watcher
 ```
+
+Pass `--config profiles/<skill>.json` before the subcommand when using a
+specific skill profile.
 
 Run it in the background so it survives the terminal:
 
