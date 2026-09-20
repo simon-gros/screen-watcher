@@ -381,7 +381,9 @@ def fill_rate(history: list[tuple[float, int]], window: float = 180.0) -> float:
 def mean_abs_diff(a: np.ndarray, b: np.ndarray) -> float:
     if a is None or b is None or a.shape != b.shape:
         return float("nan")
-    return float(np.mean(np.abs(a - b)))
+    # Avoid unsigned integer wraparound turning a small negative difference
+    # into a large positive one.
+    return float(np.mean(np.abs(a.astype(np.float32) - b.astype(np.float32))))
 
 
 def norm_line(s: str) -> str:

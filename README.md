@@ -540,3 +540,24 @@ Flake8 on Python 3.12 and checks `watcher.py`, while excluding the existing
 project formatting conventions (`E226`, `E501`, `E702`, `W503`, and `W504`).
 The workflow does not launch the watcher because CI has no game window, X
 session, or desktop notification service.
+
+## Development and tests
+
+Create the isolated development environment and install the Python
+dependencies:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+```
+
+Run the smoke tests and the same lint policy used by CI:
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python -m flake8 watcher.py tests --ignore=E226,E501,E702,W503,W504
+```
+
+The tests exercise configuration-independent logic only. Commands that capture
+the screen still require the external tools and active XWayland environment
+listed above.
