@@ -733,6 +733,461 @@ Reference:
 - https://secure.runescape.com/m=news/api--plugins-september-preview
 
 
+
+## Third technical research pass: capture, interface readers, and trigger data
+
+This pass focuses on implementation details found in Alt1's public developer
+libraries, RuneKit's Linux architecture, Better Better Buff Bars, SusAlert,
+Clue Trainer, and structured RuneScape Wiki data. It complements the earlier
+architectural research by recording concrete techniques that mature tools
+already use successfully.
+
+### Shared-frame capture scheduler
+
+The current watcher may perform separate capture work for several regions during
+one logical polling cycle. Mature tools instead treat the RuneScape window as a
+continuously sampled source and let multiple readers consume one captured frame.
+
+Future design:
+
+```text
+GameInstance
+    -> CaptureScheduler
+    -> one shared frame / frame cache
+    -> interface readers
+    -> normalized events
+```
+
+Requirements:
+- capture the game window once per scheduler tick when possible;
+- expose zero-copy or low-copy region views into the same frame;
+- support detector-specific cadences rather than one global interval;
+- avoid recapturing the same pixels for chat, inventory, buffs, resources, and
+  progress within the same frame generation;
+- expose capture timestamp and backend metadata with every frame;
+- allow a backend to advertise a sensible minimum capture interval.
+
+Alt1 exposes an advised `captureInterval`, bound regions, and multi-region
+operations. RuneKit similarly caches the most recent frame and avoids a fresh
+X11 capture when callers request another image sooner than the backend refresh
+rate.
+
+Possible initial cadence classes:
+- very fast: combat resources / time-sensitive opportunities;
+- fast: buffs, targets, action/progress bars;
+- medium: chat and inventory;
+- slow: interface relocation/health scans;
+- scheduled: Farming, resets, long timers.
+
+References:
+- https://runeapps.org/apps/alt1/helpoutput.html
+- https://github.com/skillbert/alt1
+- https://github.com/Jcapehart2/RuneKit-Reforged
+
+### Direct X11/XComposite/XShm backend
+
+The current ImageMagick `import` subprocess is practical for the first version
+but should not remain the long-term hot path.
+
+RuneKit's Linux backend provides a useful architectural reference:
+- platform-specific code is isolated behind a `GameInstance`;
+- XComposite redirects the RuneScape window;
+- XShm is used for efficient shared-memory capture;
+- window configure events invalidate/rebuild the backing pixmap;
+- the last image is cached;
+- callers receive a platform-independent image object.
+
+Screen Watcher should eventually implement a native X11 backend with the same
+separation of concerns. A later Wayland backend can use PipeWire/portal capture
+without changing detectors.
+
+Do not copy GPL implementation code unless licensing compatibility has been
+deliberately reviewed; use the architecture and public protocol concepts as
+research guidance.
+
+Reference:
+- https://github.com/Jcapehart2/RuneKit-Reforged
+
+### Stable internal pixel representation
+
+Choose one canonical in-memory frame representation for all readers.
+
+Candidate:
+- NumPy `uint8` array, shape `(height, width, 4)`;
+- document channel order explicitly;
+- keep conversions at backend boundaries;
+- provide cheap region slicing;
+- interoperate efficiently with OpenCV where useful.
+
+RuneKit standardizes on a NumPy BGRA32 representation to avoid repeated channel
+swaps between capture and image-processing layers.
+
+### Reusable interface-reader registry
+
+Alt1's public libraries provide separate readers for chat, buffs, the action bar,
+RuneMetrics XP counters, target information, boss timers, dialogue, tooltips,
+drops, and other interfaces. Screen Watcher should adopt the same separation.
+
+Candidate readers:
+- `ChatReader`;
+- `InventoryReader`;
+- `BuffBarReader`;
+- `ActionBarReader`;
+- `TargetReader`;
+- `RuneMetricsReader`;
+- `ProgressReader`;
+- `BossTimerReader`;
+- `SlayerCounterReader`;
+- `DialogReader`.
+
+Each reader should own:
+1. discovery/location;
+2. structural validation;
+3. capture rectangle;
+4. parsing;
+5. confidence/health;
+6. relocation when the interface moves;
+7. normalized observations.
+
+Profiles should consume reader events rather than duplicate interface geometry.
+
+Reference:
+- https://github.com/skillbert/alt1
+
+### Reader relocation independent of window resize
+
+A RuneScape interface can move while the game window size remains unchanged.
+Therefore "window did not resize" is not evidence that saved interface
+coordinates are still correct.
+
+Each interface reader should periodically validate its anchors. If confidence
+falls below a threshold:
+- mark the reader degraded;
+- stop trusting its gameplay events;
+- attempt reacquisition at a slower retry cadence;
+- restore healthy state only after the interface is structurally validated.
+
+This complements the global detector-health model from the second research pass.
+
+### RuneScape-specific sprite OCR
+
+Alt1 uses sprite/pixel-based OCR built around RuneScape font definitions rather
+than only general-purpose OCR. This works well because many RuneScape UI fonts
+are rendered from predictable sprites.
+
+Future Screen Watcher OCR stack could be:
+
+```text
+specialized numeric/sprite OCR
+    -> RuneScape chat-font OCR
+    -> Tesseract/general OCR fallback
+```
+
+High-value first targets:
+- resource numbers;
+- timers;
+- stack counts;
+- chat timestamps;
+- RuneMetrics numbers;
+- progress percentages.
+
+Advantages:
+- lower ambiguity for known fonts;
+- predictable character set;
+- easier confidence scoring;
+- easier regression fixtures.
+
+Keep Tesseract for unknown/general text.
+
+References:
+- https://github.com/skillbert/alt1/blob/master/docs/ocr.md
+- https://github.com/skillbert/alt1/tree/master/src/ocr
+
+### Timestamp-aware differential chat reader
+
+Alt1's chat reader does substantially more than OCR a rectangle. Its public
+source demonstrates several techniques worth adapting:
+
+- automatically testing multiple supported chat font sizes;
+- identifying different chatbox types structurally;
+- using RuneScape chat colours;
+- preserving fragments/badges;
+- comparing overlap with the previous read;
+- using local chat timestamps to reject old lines;
+- handling the midnight timestamp wrap;
+- normalizing visually confusable characters before line comparison.
+
+Screen Watcher should eventually maintain a persistent `ChatReader` state
+instead of independently OCRing the current crop for each rule.
+
+Recommended normalized output:
+
+```text
+ChatEvent {
+  text
+  normalized_text
+  chat_type
+  source_timestamp
+  observed_at
+  fragments
+  confidence
+  dedup_key
+}
+```
+
+SusAlert independently recommends enabling local chat timestamps because they
+improve event accuracy.
+
+References:
+- https://github.com/skillbert/alt1/tree/master/src/chatbox
+- https://github.com/Raphire/SusAlert
+
+### Profile readiness requirements checked by doctor
+
+Profiles should be able to declare required or recommended RuneScape settings.
+
+Examples:
+- local timestamps enabled;
+- Game Messages enabled;
+- Boss Kill Timer visible;
+- Slayer Counter visible;
+- specific buff-bar category enabled;
+- compatible buff icon size;
+- minimum chat font size;
+- interface transparency assumptions;
+- RuneMetrics panel visible;
+- expected UI scale/layout.
+
+`screen-watcher doctor --profile ...` should distinguish:
+- hard requirement missing;
+- recommended reliability setting missing;
+- requirement cannot be verified automatically.
+
+This converts undocumented setup assumptions into machine-readable profile
+metadata.
+
+### Mask dynamic timer/stack text before icon matching
+
+Alt1's buff reader removes the timer/count text pixels from an icon before
+comparing the underlying artwork. Otherwise the same status icon changes every
+second as `59s`, `58s`, and so on.
+
+This should become a generic image-matching capability:
+- identify a known dynamic-text subregion;
+- OCR/read it separately;
+- mask it before template comparison;
+- compare only stable icon pixels;
+- return both icon identity and dynamic argument/time.
+
+Useful beyond buffs:
+- stacks;
+- cooldown icons;
+- counters;
+- other UI elements with stable artwork plus changing numeric overlays.
+
+Reference:
+- https://github.com/skillbert/alt1/tree/master/src/buffs
+
+### Buff-bar saturation and category awareness
+
+The RuneScape buff/debuff bars cannot display an unlimited number of effects,
+and categories may be disabled. Therefore:
+
+```text
+icon missing != status definitely absent
+```
+
+A missing-icon alert should only be high-confidence when Screen Watcher knows:
+- the relevant buff/debuff category is enabled;
+- the bar reader itself is healthy;
+- the visible bar is not saturated/overflowing;
+- the icon size/layout is supported.
+
+The Wiki documents current display limits of 18 buffs and 12 debuffs and
+multiple icon sizes/categories.
+
+Reference:
+- https://runescape.wiki/w/Buffs_and_debuffs
+
+### Dual-path resource reading
+
+Alt1's action-bar reader attempts exact numeric OCR for HP, Prayer, Adrenaline,
+and Summoning but can fall back to measuring the visual resource bar.
+
+Screen Watcher should use the same principle:
+
+```text
+exact text value
+    OR
+bar proportion
+    -> reconciled resource observation
+```
+
+If both agree, confidence rises. If OCR fails but the bar remains readable,
+alerts still work. If they disagree materially, mark the observation uncertain
+and retain both values in diagnostics.
+
+Reference:
+- https://github.com/skillbert/alt1/tree/master/src/ability
+
+### Capture/backend context as event evidence
+
+Observation context should include backend state, not only pixels.
+
+Candidate fields:
+- capture backend;
+- advised/actual capture cadence;
+- frame age;
+- game-window focus;
+- game-window scale;
+- game-window geometry;
+- renderer if known;
+- world number if reliably available;
+- time since last observed/user game interaction where permitted;
+- frame hash/variance;
+- backend health.
+
+Alt1 and RuneKit both expose host/game state alongside pixels. This provides
+stronger AFK diagnostics and helps explain detector failures.
+
+### Blank/frozen-frame sentinels
+
+Before sending frames into gameplay detectors, perform cheap sanity checks.
+
+Examples:
+- >95% black/near-black;
+- zero or near-zero variance;
+- impossible dimensions;
+- identical full-frame hash for an implausibly long period while game activity
+  is otherwise observed;
+- capture returns the desktop/background instead of the game client.
+
+A sentinel failure should degrade the backend rather than causing rules to
+interpret blank pixels as real game state.
+
+RuneKit already disables overlay behaviour in a detected black-screen condition.
+
+### Authenticated local extension transport
+
+The earlier extension/API plan should require authentication even on localhost.
+
+Possible approach:
+- generate a random per-run or persisted local token;
+- require it during WebSocket/HTTP handshake;
+- Unix-socket peer permissions where supported;
+- scope token permissions to declared extension capabilities;
+- rotate/revoke credentials.
+
+RuneKit's internal browser/RPC layer uses a secret token and rejects requests
+that do not present it.
+
+Reference:
+- https://github.com/Jcapehart2/RuneKit-Reforged
+
+### Mutual-exclusion and supersession groups
+
+AFKWarden/community preset ecosystems often need several related alerts where
+one status supersedes another. Screen Watcher profiles should support explicit
+relationships instead of implementing them through duplicated conditions.
+
+Possible metadata:
+
+```text
+group: overload_family
+supersedes:
+  - overload
+  - antifire
+  - antipoison
+```
+
+Use cases:
+- combined potions replacing component effects;
+- upgraded familiars/statuses replacing weaker variants;
+- mutually exclusive activity modes;
+- boss phases where only one phase-specific alert family is valid.
+
+### Wiki-derived local knowledge datasets
+
+The RuneScape Wiki exposes structured data that can reduce manual maintenance.
+
+A future development/update command could build local, versioned snapshots such
+as:
+
+```text
+data/status-effects.json
+data/trigger-reference.json
+data/items.json
+data/skill-mechanics.json
+data/ge-values.json
+```
+
+The runtime should consume the local snapshot. Updating it should be explicit or
+low-frequency, cached, and respectful of Wiki/Jagex request guidance.
+
+For status effects, useful structured fields include:
+- display location;
+- buff/debuff classification;
+- category;
+- priority;
+- timer presence;
+- stack presence;
+- exact description;
+- internal/status identifier where exposed.
+
+References:
+- https://runescape.wiki/w/Template:Infobox_Buff/doc
+- https://runescape.wiki/w/RuneScape:Grand_Exchange_Market_Watch/Usage_and_APIs
+
+### Versioned trigger-reference dataset
+
+Concrete mechanic thresholds discovered from the Wiki should not remain buried
+in prose. Preserve them in a versioned local dataset with:
+- mechanic ID;
+- value/unit;
+- source;
+- source revision/retrieval date;
+- profile(s) using it;
+- whether the value is authoritative, inferred, or user-tunable.
+
+Initial research seed:
+
+| Mechanic | Reference fact | Future alert use |
+|---|---|---|
+| Mining stamina | 100 stamina gives full damage; 1-99 gives 90%; **0 gives 20%** | Strong efficiency warning at 0 stamina; lower thresholds optional/user-defined |
+| Mining rockertunity | New rockertunity generally appears about **24-36 s** after one is used | Opportunity expectation/overdue diagnostics |
+| Smithing heat | **67-100%** high heat = x2 progress; 34-66% = x1.6; 1-33% = x1.3; 0 = x1 | 67% is a meaningful efficiency-band warning default |
+| Archaeology Sprite Focus | **40%** unlocks stronger XP/precision benefit; **100%** bonus action resets focus to 60% | Warn before falling below 40%; treat 100->60 as expected |
+| Necromancy ritual disturbances | Eligible disturbances are separated by **12 ritual ticks** | Predict opportunity windows and detect suspiciously missed disturbances |
+| Tier-3 ritual glyph lifecycle | Glyphs drawn/repaired together last **36 rituals** | Maintenance counter/warning |
+| Fishing Frenzy | Streak is halved after **6 s** without another spot interaction | Warn shortly before the 6-second deadline |
+| Seren spirit | Remains available for **30 s** | Immediate opportunity plus optional expiry escalation |
+| Divination chronicle | Enhanced catch window is **6 s** | High-priority short countdown |
+| Memory Overflow | Duration **10 min** | Status/buff countdown |
+| Familiar duration | Standard duration families include **16/32/48/64/96/144 min** and can refresh | Visible-timer warning, with duration as fallback metadata only |
+| Sign of the Porter | Uses **stacks/charges, no timer** | Charge thresholds, never expiry-time logic |
+| Buff/debuff visible capacity | Up to **18 buffs / 12 debuffs** visible | Missing icon is weak evidence when saturated |
+| Invention equipment targets | Level 10 for max disassembly XP; 12 for max siphon XP; 9 often best siphon XP/item-XP efficiency | Configurable target-level alerts |
+| Bird's nest on ground | Ground nest disappears after **2 min** | Timed ground-item warning; banked nests can be log-only |
+
+These values must be reverified before being promoted into enabled production
+rules. The purpose of the dataset is to preserve research and provenance, not to
+hard-code every Wiki number permanently.
+
+### Official RuneScape plugin API: keep the boundary, do not guess the SDK
+
+Jagex's public September 2026 material confirms an active plugin/API ecosystem,
+but a complete public SDK/reference comparable to Alt1's developer API was not
+identified during this pass.
+
+Do not invent API calls or couple profiles to assumptions about unpublished
+interfaces. Continue strengthening Screen Watcher's own observation/event
+boundary so an official supported backend can be added later without changing
+rule/profile semantics.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
+
 ## Fishing
 
 ### Seren spirit event
@@ -2270,6 +2725,16 @@ Before implementing an idea from this file:
     can resynchronise it if inferred state drifts.
 15. Ensure newly persisted evidence follows the minimum-crop/privacy rule and
     can be exported without exposing unrelated desktop content.
+16. Prefer one shared frame and scheduled reader cadences over repeated
+    independent captures when several detectors inspect the same game state.
+17. Document which reusable interface reader owns an observation; profiles
+    should not duplicate interface-discovery logic.
+18. For chat-triggered alerts, document freshness/dedup strategy and whether
+    local timestamps materially improve reliability.
+19. For buff/status absence, document saturation/category assumptions before
+    treating a missing icon as proof of expiry.
+20. If a rule uses a Wiki-derived numeric threshold, record the source and
+    revision/retrieval date in the trigger-reference dataset.
 
 Items can remain in this backlog indefinitely. Presence here means only that the
 idea may be useful later.
