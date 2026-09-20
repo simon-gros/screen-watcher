@@ -64,8 +64,8 @@
       "log_occupancy": false,
       "message": "Bank soon",
       "sound": "message-new-instant",
-      "_note": "Advance warning: fires when the projected time-to-full drops under lead_seconds. Paired with pack_filling, which is the overflow backstop - this one says 'about to fill', that one says 'already full and idle'. Distinct sounds so they are told apart without looking. lead_seconds=15 against a measured mean transit of 23s and a fill rate of ~19 slots/min. cooldown=55 is just under the 73s mean cycle, so it fires at most once per bank trip. EXPECT roughly one alert per trip: that is the cost of advance warning at this cycle length - switch this rule off if it becomes noise again. log_occupancy=false because pack_filling owns the log; two writers would double every transition and corrupt `watcher.py stats`.",
-      "enabled": true,
+      "_note": "EXPERIMENTAL BASELINE ONLY. The detector is reusable, but lead_seconds, cooldown, and the cited trip/fill measurements were derived from Fishing rather than Thieving. Keep disabled until Thieving-specific inventory cadence and banking behavior are measured.",
+      "enabled": false,
       "urgency": "normal",
       "timeout_ms": 10000
     },
@@ -79,8 +79,8 @@
       "cooldown": 60,
       "message": "Pack full",
       "sound": "battery-low",
-      "_note": "Overflow mode, not lead-time. Measured over 12 cycles with `watcher.py stats`: mean cycle 73s, mean peak 27.0/28. A predictive warning therefore fired once per bank trip - ~50 alerts an hour - while the stats showed the trips were already being banked correctly without it. Overflow only fires once the pack has been full for overflow_seconds, which is the point where catches are genuinely being lost. Set mode to 'lead' with lead_seconds to go back to predictive warning; that suits a slow grind (mining, woodcutting) where the walk to the bank is long relative to the fill.",
-      "enabled": true,
+      "_note": "EXPERIMENTAL BASELINE ONLY. Overflow detection is reusable, but the current overflow_seconds/cooldown values and supporting measurements came from Fishing. Keep disabled until Thieving-specific inventory behavior is measured and false-positive cases are replayed.",
+      "enabled": false,
       "urgency": "normal",
       "timeout_ms": 12000
     },
@@ -135,8 +135,8 @@
       "cooldown": 90,
       "message": "Thieving stopped",
       "sound": "dialog-warning",
-      "_note": "Fires when pickpocket messages stop arriving. UNVERIFIED WORDING: the pattern is a best guess and must be checked against live chat before it is trusted - every other pattern in this file was confirmed by reading real OCR output first. stop_seconds=30 is carried over from fishing and should be re-measured against the real pickpocket cadence, which is faster than a catch cycle. suppress_pattern is kept because a full pack halts thieving the same way it halts fishing.",
-      "enabled": true,
+      "_note": "UNVERIFIED WORDING AND TIMING. The OCR pattern is a best-effort hypothesis and stop_seconds=30 was inherited from Fishing rather than measured from a Thieving session. Keep disabled until live chat wording is captured, the action cadence is measured, and a sanitized replay fixture confirms the expected alert sequence.",
+      "enabled": false,
       "urgency": "normal",
       "timeout_ms": 20000
     },
