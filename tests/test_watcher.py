@@ -296,3 +296,43 @@ def test_stack_rule_ignores_transient_overlay():
                         fired.append(now)
         now += 1.5
     assert fired == []
+
+
+def test_parse_timer_rejects_impossible_readings():
+    """A garbled frame must not become a bogus elapsed time."""
+    assert watcher.parse_timer("00:32:19") == 1939
+    assert watcher.parse_timer("1:05:00") == 3900
+    assert watcher.parse_timer("02:00:03") == 7203
+    # minute/second fields are anchored on [0-5]\d
+    assert watcher.parse_timer("00:82:09") is None
+    assert watcher.parse_timer("00:12:99") is None
+    assert watcher.parse_timer("garbage") is None
+    assert watcher.parse_timer("") is None
+
+
+def test_timer_milestone_fires_once_per_hour():
+    """Crossing an hour alerts once, not on every poll afterwards."""
+    rule = _rule(kind="timer", step=3600, cooldown=0)
+    fired = []
+    for text in ("00:59:58", "01:00:02", "01:00:05", "01:30:00", "02:00:03"):
+        secs = watcher.parse_timer(text)
+        if secs + 5 < rule._elapsed:
+            rule._milestone = 0
+        rule._elapsed = secs
+        reached = secs // int(rule.step)
+        if reached > rule._milestone:
+            rule._milestone = reached
+            fired.append(reached)
+    assert fired == [1, 2]
+
+
+def test_timer_reset_rewinds_milestones():
+    """Resetting the in-game timer should start a fresh session."""
+    rule = _rule(kind="timer", step=3600, cooldown=0)
+    rule._elapsed = 3700
+    rule._milestone = 1
+    secs = watcher.parse_timer("00:00:03")
+    assert secs + 5 < rule._elapsed
+    rule._milestone = 0
+    rule._elapsed = secs
+    assert rule._milestone == 0
