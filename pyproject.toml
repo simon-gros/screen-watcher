@@ -34,6 +34,5 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [tool.mypy]
-python_version = "3.11"
 check_untyped_defs = true
 warn_unused_ignores = true

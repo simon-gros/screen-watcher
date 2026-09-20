@@ -37,6 +37,7 @@ jobs:
         run: flake8 screen_watcher watcher.py tests --ignore=E226,E501,W503,W504
 
       - name: Type check
+        if: matrix.python-version == '3.12'
         run: mypy screen_watcher --ignore-missing-imports
 
       - name: Build package

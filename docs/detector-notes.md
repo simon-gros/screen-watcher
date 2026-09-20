@@ -50,7 +50,7 @@ Both modes re-arm after the inventory empties.
 If two inventory rules watch the same pack, only one should use
 `log_occupancy: true`.
 
-Two writers would record duplicate transitions in `state/occupancy.jsonl`,
+Two writers would record duplicate transitions in the XDG state occupancy log,
 distorting the cycle analysis performed by `watcher.py stats`.
 
 ### Grid calibration

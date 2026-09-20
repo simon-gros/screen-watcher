@@ -17,7 +17,7 @@ inventory state, XP changes, and notifications.
 Questing and bossing are separate activity families, not additional skills.
 They require their own profiles and cues because generic skill XP or inventory
 changes may be indistinguishable during a transition. Use `profile_type:
-quest` or `profile_type: boss` for those profiles; reserve `profile_type:
+quest` or `profile_type: activity` with `activity_type: boss` for those profiles; reserve `profile_type:
 skill` for the 29 skill profiles.
 
 ## Profile design
@@ -101,7 +101,7 @@ kill and loot messages, death/wipe cues, and encounter-specific food, potions,
 ammunition, prayer, or equipment.
 
 Suggested names are `profiles/quest-<name>.json` and
-`profiles/boss-<name>.json`. These profiles should be switched explicitly just
+`profiles/activity-boss-<name>.json`. These profiles should be switched explicitly just
 like skill profiles; a generic XP tick is not sufficient evidence that the
 current activity is still the same.
 
