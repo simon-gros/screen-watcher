@@ -13,6 +13,9 @@ Subcommands:
   probe       report per-region frame-to-frame diff, to pick thresholds
   watch       run the polling loop and fire notifications
   regions     list configured regions and rules, resolved at current size
+  status      report whether the watcher process is running
+  pause       pause the running watcher
+  resume      resume a paused watcher
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import atexit
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -665,8 +669,8 @@ def _eval_overflow(rule: Rule, now: float, occ: int, free: int) -> None:
     stuck = now - rule._full_since
     if rule._armed and stuck >= rule.overflow_seconds and rule.ready(now):
         rule._armed = False
-        rule.fire(now, f"Pack full for {stuck:.0f}s - fishing has stopped. "
-                       f"Bank now.")
+        rule.fire(now, f"Pack full for {stuck:.0f}s - activity has stopped. "
+                       f"Check the game.")
 
 
 def _eval_activity(rule: Rule, wid: str, box, now: float,
@@ -727,8 +731,8 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
     quiet = now - rule._last_activity
     if rule._armed and quiet >= rule.stop_seconds and rule.ready(now):
         rule._armed = False
-        rule.fire(now, f"No catches for {quiet:.0f}s - the spot has probably "
-                       f"moved. Time to go fishing again.")
+        rule.fire(now, f"No matching activity for {quiet:.0f}s. "
+                       f"Check the game.")
 
 
 def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
@@ -1332,9 +1336,124 @@ def main() -> None:
     al.set_defaults(func=cmd_alerts)
 
     w = sub.add_parser("watch"); w.set_defaults(func=cmd_watch)
+    stp = sub.add_parser("status"); stp.set_defaults(func=cmd_status)
+    pa = sub.add_parser("pause"); pa.set_defaults(func=cmd_pause)
+    res = sub.add_parser("resume"); res.set_defaults(func=cmd_resume)
 
     args = p.parse_args()
     args.func(args)
+
+
+# --------------------------------------------------------------------------
+# CLI helper commands – status, pause, resume
+# --------------------------------------------------------------------------
+
+def _get_pid() -> int | None:
+    """Return watcher PID if it identifies this watcher's live process.
+
+    The PID file is only a hint: Linux can reuse a PID after a crash. Verify
+    both the command line and process start time before sending a signal.
+    """
+    if not PID_FILE.exists():
+        return None
+    try:
+        pid = int(PID_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    identity = _process_identity(pid)
+    if identity is None:
+        return None
+    return pid
+
+
+def _process_identity(pid: int) -> tuple[str, int] | None:
+    """Return command line and Linux start time for a live watcher PID."""
+    proc = Path(f"/proc/{pid}")
+    try:
+        cmdline = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode()
+        stat = (proc / "stat").read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+    fields = stat.rsplit(")", 1)
+    if len(fields) != 2:
+        return None
+    values = fields[1].split()
+    if len(values) <= 19 or "watcher.py" not in cmdline or " watch" not in f" {cmdline}":
+        return None
+    try:
+        return cmdline, int(values[19])
+    except ValueError:
+        return None
+
+
+def _signal_watcher(sig: signal.Signals) -> int | None:
+    """Signal the process recorded by the PID file if its identity is stable."""
+    pid = _get_pid()
+    if pid is None:
+        return None
+    before = _process_identity(pid)
+    if before is None:
+        return None
+    try:
+        pidfd = os.pidfd_open(pid)
+    except (AttributeError, OSError):
+        pidfd = None
+    try:
+        after = _process_identity(pid)
+        if after != before:
+            return None
+        if pidfd is not None and hasattr(signal, "pidfd_send_signal"):
+            signal.pidfd_send_signal(pidfd, sig)
+        else:
+            os.kill(pid, sig)
+        return pid
+    except OSError:
+        return None
+    finally:
+        if pidfd is not None:
+            os.close(pidfd)
+
+
+def cmd_status(args) -> None:
+    """Print a one‑line status of the watcher.
+
+    If the watcher is running, the output looks like::
+
+        running pid 12345
+
+    otherwise::
+
+        stopped
+    """
+    pid = _get_pid()
+    if pid is None:
+        print("stopped")
+    else:
+        print(f"running pid {pid}")
+
+
+def cmd_pause(args) -> None:
+    """Send SIGSTOP to the running watcher, effectively pausing it.
+
+    If the watcher is not running, the command informs the user.
+    """
+    pid = _signal_watcher(signal.SIGSTOP)
+    if pid is None:
+        print("no running watcher to pause")
+        return
+    print(f"paused pid {pid}")
+
+
+def cmd_resume(args) -> None:
+    """Send SIGCONT to a paused watcher to resume it.
+
+    If the watcher is not running, the command informs the user.
+    """
+    pid = _signal_watcher(signal.SIGCONT)
+    if pid is None:
+        print("no running watcher to resume")
+        return
+    print(f"resumed pid {pid}")
 
 
 if __name__ == "__main__":

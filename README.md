@@ -74,6 +74,9 @@ python3 watcher.py inv          # live inventory slot-change feed
 python3 watcher.py stats        # fill/bank cycle analysis from occupancy data
 python3 watcher.py watch        # the actual loop
 python3 watcher.py alerts       # per-rule alert rates - which rule is beeping
+python3 watcher.py status       # report the watcher's process status
+python3 watcher.py pause        # pause the running watcher
+python3 watcher.py resume       # resume a paused watcher
 ```
 
 Run it in the background so it survives the terminal:
@@ -91,6 +94,9 @@ Only one watcher may run at a time. A second instance refuses to start, because
 two watchers double every alert — which looks exactly like a mistuned rule and
 sends you tuning thresholds that were never the problem. The pid lives in
 `state/watcher.pid`; a stale file from a crash is reclaimed automatically.
+`pause` and `resume` verify the recorded process command line and Linux process
+start time before signaling it, so a reused PID cannot target an unrelated
+process.
 
 ## Runtime files
 
@@ -172,7 +178,7 @@ and 50 beeps an hour.
 Waits until the pack has been *full* for `overflow_seconds`, then fires once.
 
 ```
-Pack full: Pack full for 21s - fishing has stopped. Bank now.
+Pack full: Pack full for 21s - activity has stopped. Check the game.
 ```
 
 A full pack does not waste catches — RS3 stops fishing outright — so the cost is
@@ -307,8 +313,7 @@ So this rule is the **inverse of an `ocr` rule**: it fires on the *absence* of a
 message rather than its presence.
 
 ```
-Fishing stopped: No catches for 34s - the spot has probably moved.
-                 Time to go fishing again.
+Fishing stopped: No matching activity for 34s. Check the game.
 ```
 
 **Threshold comes from measurement, not guesswork.** 166 real catch intervals
