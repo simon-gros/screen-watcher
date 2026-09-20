@@ -299,8 +299,8 @@ cutoff. The mask is only worth it on genuinely transparent overlays, where the
   skilling`, confirmed against live chat)
 - ~~**xp_stalled**~~ — disabled, superseded by `fishing_stopped`
 - **urn_full** — fishing urn reaches three-quarters or full
-- **bait_supply** — bait low (4 short trips) or out → *"Bait low"* / *"Out of bait"*
-- **urn_supply** — empty urns low (4 short trips) or out → *"Urns low"* / *"Out of urns"*
+- **bait_supply** — example supply rule: bait low (4 short trips) or out
+- **urn_supply** — example supply rule: empty urns low (4 short trips) or out
 - **out_of_supplies** — chat matches out-of-bait / full-inventory phrasing
 - **level_up** — chat matches a level-up message
 
@@ -384,7 +384,13 @@ for one spot move is just double beeping, so `xp_stalled` is now disabled. It is
 still worth re-enabling for a grind with no per-action chat message, where XP is
 the only evidence of progress.
 
-### The `item_count` rule — urns carried right now
+### The `item_count` rule — an item carried right now
+
+The examples below use decorated fishing urns, but urns are only one of many
+RuneScape items that can be monitored. Item names, uses, and in-game signals
+can be researched on the [RuneScape Wiki](https://runescape.wiki/) and then
+represented in a profile with an `item_count` rule. The detector may need a
+different visual signature or threshold for each item.
 
 ```
 Urns low: 1 urn left. Restock on the next bank trip.
@@ -421,9 +427,15 @@ so the low reading must hold for 8s before it counts.
 To watch a different item, measure its blueness with a captured backpack and set
 `min_blue` between its value and everything else on the grind.
 
-### The `supply` rule — bank running low on bait and urns
+### The `supply` rule — bank running low on a configured item
 
-Four alerts, two consumables: **low** and **out**, for bait and for empty urns.
+Bait and empty urns are the examples used by the active fishing profile, not a
+hard-coded list of supported supplies. Other stackable supplies, tools, food,
+ammunition, runes, resources, and consumables can be configured in the same
+way. Use the RuneScape Wiki to identify the relevant item and its expected
+bank, inventory, chat, or icon signal before adding a rule.
+
+The profile produces **low** and **out** alerts for its configured items:
 
 ```
 Bait low:  Fishing bait low - the bank has come up short 4 trips running.
