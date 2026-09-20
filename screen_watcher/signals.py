@@ -4,8 +4,6 @@ import json
 import re
 import subprocess
 import tempfile
-from pathlib import Path
-
 import numpy as np
 from PIL import Image
 

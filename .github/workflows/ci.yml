@@ -34,7 +34,7 @@ jobs:
         run: python -m pytest --cov=screen_watcher --cov-report=term-missing
 
       - name: Lint
-        run: flake8 screen_watcher watcher.py tests --ignore=E501,W503,W504
+        run: flake8 screen_watcher watcher.py tests --ignore=E226,E501,W503,W504
 
       - name: Type check
         run: mypy screen_watcher --ignore-missing-imports

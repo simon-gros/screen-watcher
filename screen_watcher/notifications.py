@@ -14,7 +14,8 @@ ALERT_LOG = STATE_DIR / "alerts.jsonl"
 
 
 class Notifier(Protocol):
-    def deliver(self, alert: Alert) -> None: ...
+    def deliver(self, alert: Alert) -> None:
+        ...
 
 
 class DesktopNotifier:

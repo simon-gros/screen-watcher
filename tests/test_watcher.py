@@ -12,7 +12,7 @@ from screen_watcher.events import Alert
 from screen_watcher.notifications import JsonlNotifier
 from screen_watcher.regions import Region
 from screen_watcher.replay import replay_document, replay_file
-from screen_watcher.rules import ActivityRule, VisualRule
+from screen_watcher.rules import VisualRule
 from screen_watcher.signals import mean_abs_diff, norm_line
 
 
