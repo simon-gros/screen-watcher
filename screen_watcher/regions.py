@@ -42,7 +42,14 @@ class Region:
             extra = {k for k in grid_spec if not k.startswith("_") and k not in allowed}
             if extra:
                 raise ValueError(f"unknown grid fields: {', '.join(sorted(extra))}")
-            grid = tuple(int(grid_spec[k]) for k in ("x0", "y0", "cell_w", "cell_h", "cols", "rows"))
+            grid = (
+                int(grid_spec["x0"]),
+                int(grid_spec["y0"]),
+                int(grid_spec["cell_w"]),
+                int(grid_spec["cell_h"]),
+                int(grid_spec["cols"]),
+                int(grid_spec["rows"]),
+            )
         return Region(
             anchor,
             int(spec["dx"]),
