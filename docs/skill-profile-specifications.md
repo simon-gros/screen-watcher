@@ -62,6 +62,153 @@ follow its training, item, and activity links before adding OCR patterns.
 For implementation-oriented alert ideas and basic profile seeds for all 29
 skills, see [future-implementation-ideas.md](future-implementation-ideas.md).
 
+
+## Cross-cutting requirements for every future profile
+
+The mature Alt1/RuneApps ecosystem shows that a profile is not complete merely
+because it can detect its happy path. Each profile should eventually describe
+its operating assumptions, detector health, fallback behaviour, and evidence
+quality.
+
+### Compatibility fingerprint
+
+Record, where relevant:
+- game language/locale;
+- interface scale;
+- desktop scale;
+- resolution/window geometry;
+- named RuneScape layout or layout fingerprint;
+- capture backend;
+- renderer;
+- profile/schema version;
+- calibration version/date;
+- expected structural anchors.
+
+A profile should warn or enter degraded mode when the live environment differs
+materially from the environment in which it was verified.
+
+### Detector health
+
+Every important detector should define what "healthy input" looks like.
+
+Examples:
+- expected OCR readability/confidence range;
+- valid resource value range;
+- expected inventory-grid geometry;
+- minimum anchor/template confidence;
+- physically possible occupancy/count limits;
+- expected event cadence where the activity is running.
+
+Health failure should be distinguishable from a real gameplay stop. A broken
+chat OCR path must not automatically become "activity stopped".
+
+### Stability and confirmation policy
+
+Profiles should use reusable stability primitives rather than ad hoc sleeps.
+
+Possible fields:
+- `confirm_frames`;
+- `confirm_seconds`;
+- `minimum_confidence`;
+- `majority_of_last_n`;
+- enter/leave hysteresis.
+
+The selected policy should be justified from live or replay measurements.
+
+### Event provenance and freshness
+
+Any event capable of generating an alert should be traceable to evidence:
+- observation time;
+- source/game timestamp when available;
+- source backend and region;
+- dedup/source hash;
+- confidence;
+- corroborating events;
+- optional privacy-minimized evidence crop.
+
+Profiles that read chat must explicitly handle startup scrollback, stale
+messages, and duplicate OCR interpretations.
+
+### Localization
+
+Do not treat English wording as the semantic event itself. Where OCR/chat is
+used, profile logic should refer to semantic events and locale packs should hold
+verified message patterns for English, German, French, or other tested game
+languages.
+
+A wording change should require updating a locale pattern, not rewriting the
+event state machine.
+
+### Manual/degraded fallback
+
+Document whether useful functionality remains when screen observation fails.
+
+Examples:
+- manually started timer;
+- manual count;
+- checklist;
+- manual state selection;
+- historical analytics;
+- scheduled reminder;
+- explicit `resync`.
+
+A profile that depends on an inferred sequence should always have a recovery
+path when inference drifts.
+
+### Feedback and validation metrics
+
+Where practical, track local user feedback on alerts:
+- correct;
+- false positive;
+- wrong classification;
+- useful but too noisy;
+- missed event.
+
+Profile tuning reports should use this evidence together with replay fixtures,
+not only anecdotal impressions.
+
+### Structural anchors before fixed coordinates
+
+Prefer locating stable interface structure—slot grids, repeated frames, anchor
+clusters, bars, borders—before falling back to fixed offsets. Store derived
+scale and geometry as evidence so the doctor/calibration system can explain how
+the region was found.
+
+### Output class
+
+A profile should classify events by purpose rather than giving every event the
+same notification semantics:
+- routine/progress;
+- opportunity;
+- warning;
+- critical;
+- hidden/log-only.
+
+This allows desktop popup, sound, speech, overlay, status-strip, and history
+outputs to be configured consistently across activities.
+
+### Analytics contract
+
+Profiles should identify which normalized events contribute to useful session
+analytics:
+- actions/laps/kills/trips/cycles;
+- XP/output;
+- resources consumed;
+- active/idle time;
+- failures/deaths;
+- cycle/lap/kill duration;
+- milestones and targets.
+
+When outcomes are variable, prefer median, percentiles, sample counts, and
+confidence intervals where meaningful rather than reporting an average alone.
+
+References:
+- https://runeapps.org/apps/alt1/help_alt1
+- https://runeapps.org/forums/viewtopic.php?id=1913
+- https://runeapps.org/forums/viewtopic.php?id=1324
+- https://runeapps.org/forums/viewtopic.php?id=1822
+
+
 ## All 29 skills
 
 | Skill | Type | Profile focus | Likely signals and items to research | Wiki |
@@ -119,8 +266,12 @@ unlock several skills at once:
    corroborating signals.
 8. Add the activity profile with conservative rules, explicit suppressions,
    confidence expectations, and alert lifecycle policy.
-9. Validate the resolved profile, replay fixtures, and inspect alert/event logs
-   before relying on it live.
+9. Run `doctor`/diagnostics against the live environment and record the
+   compatibility fingerprint plus detector-health baseline.
+10. Validate the resolved profile, replay fixtures, and inspect alert/event logs
+    before relying on it live.
+11. During live use, record false positives, missed events, and degraded-input
+    incidents so the profile has measurable quality history.
 
 The current `profiles/fishing.json` and `profiles/thieving.json` remain the
 reference examples for live measurement and evidence-driven tuning, but future
@@ -161,3 +312,13 @@ current activity is still the same.
 - [RuneScape Wiki: Interface](https://runescape.wiki/w/Interface) — customizable
   windows, layouts, and activity-specific interface areas that affect
   calibration.
+- [Alt1 help](https://runeapps.org/apps/alt1/help_alt1) — mature capture,
+  troubleshooting, and diagnostic patterns worth learning from.
+- [RuneApps Prototyper discussion](https://runeapps.org/forums/viewtopic.php?id=1913)
+  — structural UI location, scale detection, repeated-reading confirmation, and
+  manual correction patterns.
+- [RuneApps Better AoD discussion](https://runeapps.org/forums/viewtopic.php?id=1324)
+  — evidence that localization and changing live game wording are long-term
+  detector-maintenance concerns.
+- [RuneApps Dungeoneering logger discussion](https://runeapps.org/forums/viewtopic.php?id=1822)
+  — structured session history and CSV/Google Sheets export as useful outputs.
