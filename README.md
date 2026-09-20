@@ -1,7 +1,7 @@
 # Screen Watcher
 
 <p align="center">
-  <img src="assets/screen-watcher-banner.webp" alt="Screen Watcher development banner" width="900">
+  <img src="assets/logo.png" alt="Screen Watcher development banner" width="900">
 </p>
 
 > **Development artwork:** this banner was created during the initial v0.0.1 development session. Numerical status text embedded in the image is a historical snapshot; the repository itself is the authoritative source for the current test/CI state.
