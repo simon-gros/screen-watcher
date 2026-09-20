@@ -9,6 +9,12 @@ Profiles should describe the activity being monitored, not attempt to automate
 gameplay. The watcher remains read-only: it observes regions, OCR text,
 inventory state, XP changes, and notifications.
 
+Questing and bossing are separate activity families, not additional skills.
+They require their own profiles and cues because generic skill XP or inventory
+changes may be indistinguishable during a transition. Use `profile_type:
+quest` or `profile_type: boss` for those profiles; reserve `profile_type:
+skill` for the 29 skill profiles.
+
 ## Profile design
 
 Each skill profile should define:
@@ -62,8 +68,9 @@ follow its training, item, and activity links before adding OCR patterns.
 ## Research and implementation order
 
 Create a separate JSON file under `profiles/` for each skill, for example
-`profiles/mining.json` or `profiles/herblore.json`. Do not assume that a rule
-from one skill transfers unchanged to another:
+`profiles/mining.json` or `profiles/herblore.json`. Create separate profiles
+for concrete quest and boss activities as well. Do not assume that a rule from
+one skill or activity transfers unchanged to another:
 
 1. Read the skill page and its current training/activity pages.
 2. Identify one concrete activity and its expected cycle.
@@ -76,6 +83,22 @@ from one skill transfers unchanged to another:
 The current `profiles/fishing.json` and `profiles/thieving.json` are the
 reference examples for this process. The root configuration files remain
 compatibility copies for existing commands.
+
+## Non-skilling activity profiles
+
+Quest profiles should research the quest page and objective/step pages, then
+observe objective text, dialogue, required-item checks, area transitions,
+cutscenes, completion messages, and death or failure cues.
+
+Boss profiles should research the boss page and encounter mechanics, then
+observe phase transitions, enrage or timer indicators, target/health state,
+kill and loot messages, death/wipe cues, and encounter-specific food, potions,
+ammunition, prayer, or equipment.
+
+Suggested names are `profiles/quest-<name>.json` and
+`profiles/boss-<name>.json`. These profiles should be switched explicitly just
+like skill profiles; a generic XP tick is not sufficient evidence that the
+current activity is still the same.
 
 ## Sources
 

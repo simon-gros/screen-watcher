@@ -1,5 +1,6 @@
 {
   "skill": "fishing",
+  "profile_type": "skill",
   "window": {
     "wm_class": "steam_app_1343400",
     "_comment": "RS3 NXT. WM_CLASS survives title changes and skips the Steam launcher window."

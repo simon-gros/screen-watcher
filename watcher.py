@@ -45,6 +45,7 @@ ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
 RULE_KINDS = {"inventory", "activity", "supply", "item_count",
               "ocr", "change", "idle"}
+PROFILE_TYPES = {"skill", "quest", "boss"}
 
 
 # --------------------------------------------------------------------------
@@ -1019,6 +1020,10 @@ def validate_config(cfg: object) -> None:
     if "skill" in cfg and (
             not isinstance(cfg["skill"], str) or not cfg["skill"].strip()):
         raise ValueError("skill must be a non-empty string")
+    profile_type = cfg.get("profile_type", "skill")
+    if profile_type not in PROFILE_TYPES:
+        raise ValueError(
+            f"profile_type must be one of {sorted(PROFILE_TYPES)}")
     interval = cfg.get("interval", 1.0)
     if not isinstance(interval, (int, float)) or isinstance(interval, bool) or interval <= 0:
         raise ValueError("interval must be a positive number")
