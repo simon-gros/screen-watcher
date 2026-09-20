@@ -439,7 +439,7 @@ reusable detector/event primitives that unlock several skills at once:
 
 1. Confirm the required signal belongs to an existing reusable interface reader,
    or extend that reader instead of creating a profile-local capture loop.
-3. Define the normalized event(s) the activity needs.
+2. Define the normalized event(s) the activity needs.
 3. Reuse or build a generic observation/extractor for those events.
 4. Read the skill page and its current training/activity pages.
 5. Identify one concrete activity and its expected cycle/state machine.
