@@ -195,7 +195,7 @@ Top-level profile settings:
 | `profile_type` | `skill`, `quest`, or `boss` |
 | `interval` | delay configured between watch-loop iterations |
 | `regions` | anchored capture rectangles and optional grids |
-| `rules` | detectors, thresholds, cooldowns, messages, and notification options |
+| `rules` | detectors, thresholds, cooldowns, configurable notification copy, and notification options |
 
 Profiles are validated before the watcher searches for the game window.
 Validation covers required sections, anchors, grid bounds, rule kinds, region
@@ -218,6 +218,14 @@ reloaded. Configuration is read at startup.
 
 The watcher prints the selected profile at startup, and alert-log records
 include its skill identity.
+
+Each rule's `message` is the notification title. An optional `alert_body`
+sets the notification body and may use detector context such as `{line}`,
+`{item}`, `{free}`, or `{total}`; without it, the detector's normal body is
+used. OCR alerts retain the matched line separately as `source_text` in
+`state/alerts.jsonl`, so dry or imaginative notification copy does not discard
+the evidence that caused the alert. Non-OCR alerts omit `source_text` unless a
+detector has a concrete source line.
 
 ## How regions work
 
