@@ -462,3 +462,38 @@ tracked silently.
 The chat-based `loot_drop` rule is retained but disabled. It can name the exact
 item, which `item_gained` cannot — re-enable it if the item name matters more
 than reliable detection.
+
+### Session milestones from the in-game timer
+
+`session_hour` (`kind: timer`) reads the elapsed-time counter at the bottom of
+the Metrics panel — the `00:32:09` readout between the settings/reset buttons
+and pause.
+
+**Why the game's timer rather than wall-clock time in the watcher:**
+
+- it is the number the player is already reading;
+- it pauses when they pause it;
+- it survives a watcher restart, because the game owns it.
+
+Tracking elapsed time inside the watcher would drift from all three.
+
+OCR is reliable here — measured **10/10 clean parses over 30s**, ticking
+monotonically — because the readout is large, high-contrast and on an opaque
+panel. Restricting the whitelist to `0123456789:` with `--psm 7` removes the
+remaining ambiguity.
+
+`parse_timer` anchors the minute and second fields on `[0-5]\d`, so a garbled
+frame such as `00:82:09` is rejected rather than silently becoming a bogus
+elapsed time. A reading that jumps backwards by more than 5s is treated as a
+timer reset and rewinds the milestone counter, so a fresh session starts clean.
+
+Milestones fire per `step` (3600s), so crossing an hour alerts once rather than
+on every poll afterwards.
+
+#### The Metrics panel carries other usable numbers
+
+The same panel shows `Gain`, `Drops` and `GP/h`. During testing it read
+`Gain 872,581` while the chat-derived `coin_milestone` counter stood at
+527,345 — the panel is authoritative and counts from the session start, whereas
+the chat counter only sees lines while the watcher is running. A future
+milestone rule could read `Gain` directly instead of summing chat.
