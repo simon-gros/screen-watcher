@@ -1,0 +1,82 @@
+watching 100663297 (steam_app_1343400) 2530x1999 every 1.5s
+  pack_nearly_full   inventory -> backpack
+  pack_filling       inventory -> backpack
+  impling            ocr     -> chat_tail
+  fishing_stopped    activity -> chat_tail
+  urn_full           ocr     -> chat_tail
+  out_of_supplies    ocr     -> chat_tail
+  level_up           ocr     -> chat_tail
+ctrl-c to stop
+[16:18:02] NOTIFY Bank soon: 3 slots left, filling at 18.0/min - full in ~10s. Head to the bank.
+watching 100663297 (steam_app_1343400) 2530x1999 every 1.5s
+  pack_nearly_full   inventory -> backpack
+  pack_filling       inventory -> backpack
+  impling            ocr     -> chat_tail
+  fishing_stopped    activity -> chat_tail
+  urn_full           ocr     -> chat_tail
+  out_of_supplies    ocr     -> chat_tail
+  level_up           ocr     -> chat_tail
+ctrl-c to stop
+[16:19:39] NOTIFY Bank soon: 5 slots left, filling at 21.7/min - full in ~14s. Head to the bank.
+watching 100663297 (steam_app_1343400) 2530x1999 every 1.5s
+  pack_nearly_full   inventory -> backpack
+  pack_filling       inventory -> backpack
+  impling            ocr     -> chat_tail
+  fishing_stopped    activity -> chat_tail
+  urn_full           ocr     -> chat_tail
+  out_of_supplies    ocr     -> chat_tail
+  level_up           ocr     -> chat_tail
+ctrl-c to stop
+[16:21:01] NOTIFY Bank soon: 4 slots left, filling at 19.0/min - full in ~13s. Head to the bank.
+[16:22:30] NOTIFY Bank soon: 4 slots left, filling at 19.9/min - full in ~12s. Head to the bank.
+[16:24:00] NOTIFY Bank soon: 4 slots left, filling at 17.1/min - full in ~14s. Head to the bank.
+[16:25:50] NOTIFY Bank soon: 3 slots left, filling at 14.4/min - full in ~12s. Head to the bank.
+[16:27:01] NOTIFY Bank soon: 4 slots left, filling at 21.3/min - full in ~11s. Head to the bank.
+[16:30:26] NOTIFY Bank soon: 4 slots left, filling at 16.9/min - full in ~14s. Head to the bank.
+[16:30:56] NOTIFY Impling spawned: [16:30:21] A creature is discovered while skilling,
+[16:32:13] NOTIFY Bank soon: 3 slots left, filling at 18.4/min - full in ~10s. Head to the bank.
+[16:34:51] NOTIFY Bank soon: 3 slots left, filling at 19.5/min - full in ~9s. Head to the bank.
+watching 100663297 (steam_app_1343400) 2530x1999 every 1.5s
+  pack_nearly_full   inventory -> backpack
+  pack_filling       inventory -> backpack
+  impling            ocr     -> chat_tail
+  fishing_stopped    activity -> chat_tail
+  urn_full           ocr     -> chat_tail
+  bait_supply        supply  -> chat_tail
+  urn_supply         supply  -> chat_tail
+  out_of_supplies    ocr     -> chat_tail
+  level_up           ocr     -> chat_tail
+ctrl-c to stop
+[16:37:33] NOTIFY Fishing stopped: No catches for 34s - the spot has probably moved. Time to go fishing again.
+watching 100663297 (steam_app_1343400) 2530x1999 every 1.5s
+  pack_nearly_full   inventory -> backpack
+  pack_filling       inventory -> backpack
+  impling            ocr     -> chat_tail
+  fishing_stopped    activity -> chat_tail
+  urn_full           ocr     -> chat_tail
+  urns_carried       item_count -> backpack
+  bait_supply        supply  -> chat_tail
+  urn_supply         supply  -> chat_tail
+  out_of_supplies    ocr     -> chat_tail
+  level_up           ocr     -> chat_tail
+ctrl-c to stop
+[16:42:57] NOTIFY Urns low: No urns in the pack - urn XP is being lost. Grab more.
+[16:43:12] NOTIFY Fishing stopped: No catches for 30s - the spot has probably moved. Time to go fishing again.
+watching 100663297 (steam_app_1343400) 2530x1999 every 1.5s
+  pack_nearly_full   inventory -> backpack
+  pack_filling       inventory -> backpack
+  impling            ocr     -> chat_tail
+  fishing_stopped    activity -> chat_tail
+  urn_full           ocr     -> chat_tail
+  urns_carried       item_count -> backpack
+  out_of_supplies    ocr     -> chat_tail
+  level_up           ocr     -> chat_tail
+ctrl-c to stop
+[16:51:43] NOTIFY Urns low: No urns in the pack - urn XP is being lost. Grab more.
+[16:52:06] NOTIFY Fishing stopped: No catches for 36s - the spot has probably moved. Time to go fishing again.
+[16:54:47] NOTIFY Urns low: No urns in the pack - urn XP is being lost. Grab more. (empty for 3 min)
+capture miss: import failed: import: no window with specified ID exists '100663297': Resource temporarily unavailable @ error/xwindow.c/XImportImage/4950.
+X connection to :0 broken (explicit kill or server shutdown).
+capture miss: import failed: import: unable to open X server `:0' @ error/import.c/ImportImageCommand/350.
+[16:55:48] NOTIFY Screen Watcher: game window gone - stopping
+window gone

@@ -1,0 +1,185 @@
+{
+  "window": {
+    "wm_class": "steam_app_1343400",
+    "_comment": "RS3 NXT. WM_CLASS survives title changes and skips the Steam launcher window."
+  },
+  "interval": 1.5,
+  "_regions_help": "anchor + dx,dy offset from that corner + fixed w,h. RS3 pins panels to edges at fixed size rather than scaling them, so this survives a window resize. Negative dx/dy measure inward from a right/bottom edge.",
+  "regions": {
+    "metrics_xp": {
+      "anchor": "top-left",
+      "dx": 20,
+      "dy": 100,
+      "w": 410,
+      "h": 105,
+      "_note": "XP and XP/h number rows in the Metrics panel"
+    },
+    "chat_tail": {
+      "anchor": "bottom-left",
+      "dx": 5,
+      "dy": -57,
+      "w": 500,
+      "h": 375,
+      "_note": "most recent ~15 lines of All Chat; w trimmed to end of text so the 3D world does not bleed into OCR"
+    },
+    "backpack": {
+      "anchor": "bottom-right",
+      "dx": -13,
+      "dy": -38,
+      "w": 330,
+      "h": 560,
+      "grid": {
+        "x0": 17,
+        "y0": 86,
+        "cell_w": 61,
+        "cell_h": 55,
+        "cols": 5,
+        "rows": 6
+      },
+      "_note": "full backpack panel. grid is relative to the region's top-left; verified against a hand count of 24 occupied slots"
+    },
+    "orbs": {
+      "anchor": "bottom-center",
+      "dx": -29,
+      "dy": -132,
+      "w": 825,
+      "h": 60,
+      "_note": "hp / prayer / summoning / adrenaline readouts"
+    }
+  },
+  "rules": [
+    {
+      "name": "pack_nearly_full",
+      "kind": "inventory",
+      "region": "backpack",
+      "capacity": 28,
+      "mode": "lead",
+      "lead_seconds": 15,
+      "warn_free": 2,
+      "cooldown": 55,
+      "log_occupancy": false,
+      "message": "Bank soon",
+      "sound": "message-new-instant",
+      "_note": "Advance warning: fires when the projected time-to-full drops under lead_seconds. Paired with pack_filling, which is the overflow backstop - this one says 'about to fill', that one says 'already full and idle'. Distinct sounds so they are told apart without looking. lead_seconds=15 against a measured mean transit of 23s and a fill rate of ~19 slots/min. cooldown=55 is just under the 73s mean cycle, so it fires at most once per bank trip. EXPECT roughly one alert per trip: that is the cost of advance warning at this cycle length - switch this rule off if it becomes noise again. log_occupancy=false because pack_filling owns the log; two writers would double every transition and corrupt `watcher.py stats`.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 10000
+    },
+    {
+      "name": "pack_filling",
+      "kind": "inventory",
+      "region": "backpack",
+      "capacity": 28,
+      "mode": "overflow",
+      "overflow_seconds": 20,
+      "cooldown": 60,
+      "message": "Pack full",
+      "sound": "battery-low",
+      "_note": "Overflow mode, not lead-time. Measured over 12 cycles with `watcher.py stats`: mean cycle 73s, mean peak 27.0/28. A predictive warning therefore fired once per bank trip - ~50 alerts an hour - while the stats showed the trips were already being banked correctly without it. Overflow only fires once the pack has been full for overflow_seconds, which is the point where catches are genuinely being lost. Set mode to 'lead' with lead_seconds to go back to predictive warning; that suits a slow grind (mining, woodcutting) where the walk to the bank is long relative to the fill.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 12000
+    },
+    {
+      "name": "xp_stalled",
+      "kind": "idle",
+      "region": "metrics_xp",
+      "idle_seconds": 60,
+      "threshold": 0.5,
+      "_threshold_note": "measured: static floor 0.001, XP tick 1.3-4.0. No mask - the Metrics panel is opaque, and a brightness mask only added antialiasing flicker.",
+      "cooldown": 300,
+      "message": "XP stalled",
+      "sound": "dialog-error-serious",
+      "_disabled_note": "Superseded by fishing_stopped, which detects the same event from chat in 30s instead of 60s. Two rules firing for one spot move is just double beeping. Metrics XP is also the weaker signal: it stalls identically whether the spot moved, the client was minimised, or the panel was closed. Re-enable for a grind with no per-action chat message, where XP is the only evidence of progress.",
+      "enabled": false,
+      "urgency": "normal",
+      "timeout_ms": 30000
+    },
+    {
+      "name": "impling",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "a creature is discovered while skilling|an impling (has )?appear",
+      "cooldown": 30,
+      "message": "Impling spawned",
+      "sound": "message-highlight",
+      "_note": "Implings spawn silently and despawn; the message is easy to miss mid-grind. Rare enough to deserve its own sound - message-highlight is distinct from the warning tones used by pack_filling and xp_stalled, so it is recognisable without looking. Long timeout because the impling despawns: the popup should still be on screen when you glance over.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000
+    },
+    {
+      "name": "fishing_stopped",
+      "kind": "activity",
+      "region": "chat_tail",
+      "pattern": "you catch a|you cast out your line|you attempt to catch",
+      "suppress_pattern": "can'?t carry any more|do not have any space in your inventory|not have any space",
+      "stop_seconds": 30,
+      "cooldown": 90,
+      "message": "Fishing stopped",
+      "sound": "dialog-warning",
+      "_note": "Fires when catch messages stop arriving, which is the only evidence that a fishing spot has depleted and moved - RS3 does not announce it. Measured over 166 real catch intervals from the occupancy log: median 3.7s, p95 10.0s, p99 19.7s, max 21.3s. stop_seconds=30 clears that max by ~9s so normal variance cannot false-fire. The pattern also matches the cast/attempt lines so a slow first catch after recasting does not count as stopped. suppress_pattern is essential: a full pack halts fishing outright, so catch messages stop on EVERY bank trip. Without it this rule fires once per cycle - the same ~50/hour noise the inventory rule was retuned to avoid.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000
+    },
+    {
+      "name": "urn_full",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "urn is (now )?(three-quarters|full)|urn is full",
+      "cooldown": 60,
+      "message": "Urn nearly full",
+      "sound": "message-attention",
+      "_note": "A fishing urn stops collecting once full, so every catch after that is wasted urn XP until it is teleported. RS3 announces one-quarter / half / three-quarters / full; only the last two are worth interrupting for, which is why the pattern skips the first two. Observed wording: 'Your decorated fishing urn is three-quarters full'.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 15000
+    },
+    {
+      "name": "urns_carried",
+      "kind": "item_count",
+      "region": "backpack",
+      "item": "urns",
+      "min_blue": 40,
+      "warn_below": 1,
+      "out_below": 0,
+      "confirm_seconds": 8,
+      "repeat_seconds": 180,
+      "cooldown": 30,
+      "message": "Urns low",
+      "sound": "dialog-question",
+      "out_message": "No urns in the pack - urn XP is being lost. Grab more.",
+      "_note": "Counts urns actually carried, by icon colour. urn_supply watches the BANK coming up short across trips; this watches the pack right now, which is the 'I only have one left' case - the two are independent. Colour beats OCR here: reading the stack digits was measured flickering between 6, 13 and 1 on an unchanging stack, while blueness (mean B - mean R of the icon's bright pixels) separates cleanly - urns +104/+105, coins -174, fish -10..-62. Verified 2/2, 1/1 and 0/0 against real captures at every threshold from 20 to 80. confirm_seconds=8 because a bank or loot interface hides slots and would otherwise read as a false 'out'; a real drain persists, an overlay clears in a frame or two. warn_below=1 fires at exactly one urn left.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 15000
+    },
+    {
+      "name": "out_of_supplies",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "you (have )?(ran|run) out of|you do not have enough|not enough (space|room)",
+      "cooldown": 180,
+      "message": "Supplies problem",
+      "sound": "dialog-information",
+      "_note": "Deliberately does NOT match 'Item could not be found in the quantity required'. That fires on every bank preset load, because the preset requests more bait than is actually carried - it is normal, not a fault. Matching it made the rule fire once per bank trip.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 10000
+    },
+    {
+      "name": "level_up",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "congratulations,? you('ve| have) (just )?(advanced|reached)",
+      "cooldown": 60,
+      "message": "Level up",
+      "sound": "outcome-success",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 8000
+    }
+  ],
+  "_notification_note": "Rules use urgency 'normal' with an explicit timeout_ms so KDE auto-dismisses them. Setting urgency to 'critical' makes KDE keep the popup until it is closed by hand and ignore timeout_ms - only do that for an alert you must not miss."
+}
