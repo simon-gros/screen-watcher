@@ -110,21 +110,37 @@ inspectable so the operator can see exactly why a rule exists.
 
 ### Observation backends
 
-The current screen-capture backend should resolve the game window, maintain
-anchored regions, detect resize/reacquisition, and expose frames without knowing
-what a skill or boss means.
+The current ImageMagick/X11 capture path is an acceptable prototype but should
+not remain the long-term high-frequency architecture. The backend should resolve
+the game window, maintain geometry, detect resize/reacquisition, expose frames,
+and know nothing about Fishing, Thieving, bosses, or skill semantics.
 
-Define a backend interface before capture assumptions spread further. Candidate
-backends:
+Define a `GameInstance`/observation-backend interface before capture
+assumptions spread further. Candidate backends:
 
-- X11/XWayland screen capture;
+- native X11/XComposite/XShm capture;
+- XWayland-compatible capture where appropriate;
 - Wayland portal/PipeWire capture;
 - recorded fixture/replay input;
 - future sanctioned RuneScape API/plugin observations.
 
-Renderer and desktop differences should be treated as backend concerns. Capture
-tests should explicitly cover layout scaling and, where relevant, different
-RuneScape renderer paths such as Vulkan.
+The platform/backend layer should expose:
+- window/process identity;
+- position and size;
+- scale/DPI;
+- focus state;
+- capture health;
+- latest frame and frame timestamp;
+- backend-advised minimum capture cadence;
+- renderer/world/session metadata when reliably available.
+
+Renderer and desktop differences should remain backend concerns. Capture tests
+should explicitly cover layout scaling and, where relevant, different RuneScape
+renderer paths such as Vulkan.
+
+Use one documented internal pixel representation, preferably a NumPy uint8
+array with explicit channel order, and keep format conversion at backend
+boundaries.
 
 The backend must never generate gameplay input.
 
@@ -159,6 +175,67 @@ Health states should be explicit, for example:
 Low-confidence/degraded detectors should suppress or downgrade gameplay alerts
 rather than generate misleading notifications.
 
+Backend health should also include cheap frame sentinels such as:
+- near-all-black frame;
+- near-zero variance;
+- impossible dimensions;
+- implausibly frozen full-window hash;
+- desktop/background capture instead of the RuneScape client.
+
+### Capture scheduler and shared-frame cache
+
+Do not let each detector own an independent capture loop.
+
+A central scheduler should:
+- gather reader cadence requirements;
+- capture the RuneScape window once per necessary frame generation;
+- cache the latest frame;
+- give readers cheap region views into that frame;
+- avoid duplicate full-window or overlapping-region captures;
+- run interface reacquisition at a slower cadence than time-sensitive reads;
+- record frame age so stale data cannot masquerade as current evidence.
+
+Readers can request cadence classes such as very-fast, fast, medium, slow, or
+scheduled. The scheduler decides the actual capture plan.
+
+This follows patterns exposed by Alt1's `captureInterval`/bound-region API,
+RuneKit's cached X11 frames, and modern Alt1 apps that separate read, process,
+and retry intervals.
+
+### Interface-reader registry
+
+Reusable readers should own interface discovery, validation, parsing, health,
+and relocation.
+
+Initial registry:
+- ChatReader;
+- InventoryReader;
+- BuffBarReader;
+- ActionBarReader;
+- TargetReader;
+- RuneMetricsReader;
+- ProgressReader;
+- BossTimerReader;
+- SlayerCounterReader;
+- DialogReader.
+
+Profiles consume normalized observations from these readers rather than
+duplicating geometry and OCR logic.
+
+A reader must periodically validate its anchor even when the game window has not
+resized, because RuneScape interface panels can move independently.
+
+### OCR stack
+
+Use layered OCR rather than one universal engine:
+1. specialized numeric/sprite OCR for known RuneScape fonts;
+2. RuneScape chat-font OCR with supported size/color models;
+3. general-purpose OCR such as Tesseract as fallback.
+
+Known-font readers should expose confidence and reusable font definitions.
+Dynamic timer/stack text should be parsed separately from stable icon artwork
+before image matching.
+
 ### Signal extraction and normalized events
 
 Reusable extractors should convert raw observations into backend-independent
@@ -189,6 +266,15 @@ Each normalized event should carry provenance where possible:
 Freshness and deduplication belong in the event model rather than being
 reimplemented independently by every OCR rule.
 
+A persistent ChatReader should use overlap with prior reads and local timestamps
+when available to determine which lines are genuinely new. It should also carry
+chat/channel type and normalized text. Startup scrollback protection belongs in
+the reader/event layer.
+
+For important numeric resources, prefer dual-path observations: exact OCR/text
+plus graphical bar proportion. Agreement increases confidence; disagreement is
+diagnostic evidence rather than a reason to silently pick one value.
+
 ### Timers, schedules, and resynchronisation
 
 Time-based features should use explicit timer classes rather than one generic
@@ -204,6 +290,31 @@ low-frequency reminders without continuous high-rate polling.
 
 State machines for courses, trips, bosses, rituals, and other sequences must
 support manual or landmark-based resynchronisation when inferred state drifts.
+
+### Local game-knowledge datasets
+
+Do not bury authoritative or research-derived RuneScape mechanics inside Python
+constants.
+
+Maintain versioned local datasets for concepts such as:
+- status effects;
+- trigger thresholds/lifetimes;
+- item/resource metadata;
+- skill/activity mechanics;
+- optional cached values/prices.
+
+A development/update tool may obtain structured data from the RuneScape Wiki,
+recording source URL and revision/retrieval date. Runtime detection should use
+the local snapshot rather than querying external services on every poll.
+
+Status metadata can describe whether an effect has a timer, stacks, category,
+display location, priority, and semantic ID. Trigger-reference data can preserve
+facts such as 0-stamina Mining efficiency, 67% Smithing high-heat threshold,
+6-second Fishing Frenzy inactivity, 30-second Seren spirit lifetime, and similar
+mechanics discovered during research.
+
+All Wiki/API acquisition must be cached and respectful of published usage
+guidance.
 
 ### Rule evaluation
 
@@ -226,6 +337,14 @@ A rule should be able to combine evidence instead of trusting one fragile
 signal. For example, an activity-stop event may become high-confidence only
 when an icon is absent, no new chat activity exists, and XP/progress has also
 stalled.
+
+Rules should also support mutual-exclusion/supersession groups. A combined
+status, upgraded state, or new encounter phase may legitimately suppress
+component or previous-state alerts without disabling those rules permanently.
+
+Missing buff/status icons must be treated as conditional evidence because the
+RuneScape UI has finite visible buff/debuff capacity and user-configurable
+categories/icon sizes.
 
 ### Evidence, history, and analytics
 
@@ -298,6 +417,11 @@ read, evidence-region access, overlay drawing, network access, notification
 emission, or settings access. Capabilities should be denied by default. Do not
 load unrestricted third-party Python as the default extension model.
 
+Localhost is not authentication. Generate a secret/token or use OS peer
+credentials so unrelated local processes cannot silently subscribe to pixels,
+history, or events. Tokens should be revocable/rotatable and scoped to extension
+permissions.
+
 This separation would let experimental dashboards, advisors, accessibility
 outputs, or niche trackers evolve without weakening the trusted read-only core.
 
@@ -346,6 +470,7 @@ multi-client support possible without cross-contaminating alerts.
 ### Current foundation
 
 - Anchored region capture and calibration
+- ImageMagick/X11 subprocess capture suitable for the prototype stage
 - OCR, pixel, inventory, activity, and idle detectors
 - Explicit skill profiles for fishing and thieving
 - Profile validation and skill-aware alert logs
@@ -357,8 +482,13 @@ multi-client support possible without cross-contaminating alerts.
   health, extractors, normalized events, activity/session state, rules, alerts,
   outputs, storage, and CLI modules.
 - Implement `screen-watcher doctor` with PASS/WARN/FAIL diagnostics.
+- Define a `GameInstance` backend interface and a shared-frame capture
+  scheduler before adding many more high-frequency detectors.
+- Prototype native X11/XComposite/XShm capture and benchmark it against the
+  current ImageMagick subprocess path.
 - Define stable internal event names and provenance fields before adding many
   more detector kinds.
+- Add an interface-reader registry with ChatReader as the first complex reader.
 - Add a profile registry and `list-profiles` command.
 - Add compatibility fingerprints and detector-health baselines to profiles.
 - Add profile composition/inheritance for global, combat, gathering, and
@@ -368,9 +498,12 @@ multi-client support possible without cross-contaminating alerts.
 - Add dry-run and replay commands with sanitized fixture directories.
 - Introduce fake capture, OCR, clock, event-source, and notification interfaces.
 - Add evidence/confidence to alert and event records.
+- Add a layered OCR abstraction with a path for RuneScape sprite/numeric OCR.
 - Add an alert lifecycle abstraction beyond simple cooldowns.
 - Add local false-positive/correction feedback records and a basic quality
   report.
+- Add a versioned local trigger-reference dataset and a Wiki-data update tool
+  that records provenance.
 
 ### Broader coverage stage
 
@@ -386,7 +519,11 @@ multi-client support possible without cross-contaminating alerts.
 - Add recorded fixtures for common overlays, failures, deaths, and transitions.
 - Add structural UI anchors, layout fingerprints, named calibrations, UI-scale
   metadata, compatibility warnings, and confidence reporting.
-- Add locale packs and a data-driven status/buff catalog.
+- Add locale packs and a data-driven status/buff catalog generated or enriched
+  from structured Wiki data.
+- Add buff-bar saturation/category awareness and timer-text masking to the
+  BuffBarReader.
+- Add dual-path ActionBar resource reading (numeric OCR plus bar proportion).
 - Add timer taxonomy plus RuneScape reset/calendar support.
 - Add stable CSV/JSON session/event exports and resource-ledger analytics.
 - Add compact status-strip and optional click-through overlay output.
