@@ -169,6 +169,8 @@ Rule = RuleBase
 def rule_from_dict(spec: dict) -> RuleBase:
     cleaned = {key: value for key, value in spec.items() if not key.startswith("_")}
     kind = cleaned.get("kind")
+    if not isinstance(kind, str):
+        raise ValueError(f"unknown rule kind {kind!r}")
     cls = RULE_CLASS.get(kind)
     if cls is None:
         raise ValueError(f"unknown rule kind {kind!r}")
