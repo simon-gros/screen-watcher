@@ -1473,10 +1473,21 @@ def validate_config(cfg: object) -> None:
             raise ValueError(f"rule {name!r} has unknown kind {kind!r}")
         if region not in regions:
             raise ValueError(f"rule {name!r} references unknown region {region!r}")
-        if kind in {"activity", "ocr", "supply"} and not rule.get("pattern"):
+        unknown = sorted(
+            key for key in rule
+            if not key.startswith("_") and key not in Rule.__dataclass_fields__)
+        if unknown:
+            raise ValueError(
+                f"rule {name!r} has unknown option(s): {', '.join(unknown)}")
+        if kind in {"activity", "ocr", "supply", "counter"} and not rule.get("pattern"):
             raise ValueError(f"rule {name!r} requires pattern")
-        if kind in {"inventory", "item_count"} and not regions[region].grid:
+        if kind == "loot" and not rule.get("item_pattern"):
+            raise ValueError(f"rule {name!r} requires item_pattern")
+        if kind in {"inventory", "item_count", "stack"} and not regions[region].grid:
             raise ValueError(f"rule {name!r} requires a region grid")
+        if kind == "inventory" and rule.get("mode", "lead") not in {"lead", "overflow"}:
+            raise ValueError(
+                f"rule {name!r}: mode must be 'lead' or 'overflow'")
         corroborate_region = rule.get("corroborate_region")
         corroborate_pattern = rule.get("corroborate_pattern")
         if (corroborate_region is None) != (corroborate_pattern is None):
@@ -1496,9 +1507,12 @@ def validate_config(cfg: object) -> None:
             pattern = rule.get(key)
             if pattern is not None:
                 try:
-                    re.compile(pattern)
+                    compiled = re.compile(pattern)
                 except re.error as exc:
                     raise ValueError(f"rule {name!r} has invalid {key}: {exc}") from exc
+                if kind == "counter" and key == "pattern" and compiled.groups < 1:
+                    raise ValueError(
+                        f"rule {name!r}: counter pattern needs a capture group")
         for key in ("cooldown", "idle_seconds", "threshold", "lead_seconds",
                     "overflow_seconds", "stop_seconds", "confirm_seconds",
                     "repeat_seconds", "absent_seconds", "present_above",

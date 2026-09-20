@@ -149,11 +149,11 @@
       "cooldown": 120,
       "message": "Thieving stopped",
       "sound": "dialog-warning",
-      "_note": "Fires when ALL evidence of pickpocketing stops. VERIFIED wording from live chat. The pattern deliberately includes the money-pouch line and the stun notice, not just the success message: OCR of this font degrades badly when a busy 3D scene shows through the semi-transparent chat panel (observed 'ACE rrire aasws Bamrs'), and with only the success line this rule fired 4 times in 3 minutes while pickpocketing was demonstrably continuing - the coin counter advanced throughout. Any of the four lines proves activity. stop_seconds=45 (up from 20) because a stun alone pauses gains for ~3s and a garbled OCR run can hide several polls; 45s is still well under the fishing profile's 60s idle rule while leaving room for transient unreadability. The stun notice was removed from this pattern: being stunned is not evidence of activity, it is evidence of the opposite, and counting it kept the stop timer alive through a genuine halt.",
+      "_note": "Fires when ALL evidence of pickpocketing stops. VERIFIED wording from live chat. The pattern uses three independent activity signals: the pickpocket success line, the money-pouch line, and the camouflage-outfit line. OCR of this font degrades badly when a busy 3D scene shows through the semi-transparent chat panel (observed 'ACE rrire aasws Bamrs'), and with only the success line this rule fired 4 times in 3 minutes while pickpocketing was demonstrably continuing - the coin counter advanced throughout. Any of the three activity lines proves progress. stop_seconds=45 (up from 20) because a stun alone pauses gains for ~3s and a garbled OCR run can hide several polls; 45s still leaves room for transient unreadability. The stun notice is deliberately excluded: being stunned is evidence of a halt, and counting it kept the stop timer alive through a genuine stop.",
       "enabled": false,
       "urgency": "normal",
       "timeout_ms": 20000,
-      "_disabled_note": "Superseded by activity_icon_gone, which reads the top-centre skill icon instead of inferring a stop from missing chat lines. The visual state is the stronger signal: it does not depend on OCR, which degrades badly over a busy 3D scene, and it cannot be fooled by chat scrolling. This rule also needed four corroborating message patterns to avoid false positives; the icon needs none. Re-enable for a skill with no activity icon."
+      "_disabled_note": "Superseded by activity_icon_gone, which uses the top-centre skill icon as the primary signal and chat as corroboration during icon blackouts. This avoids inferring a stop solely from missing OCR lines while still protecting against false icon absences. Re-enable this chat-only rule for a skill or layout where the activity icon cannot be monitored reliably."
     },
     {
       "name": "target_alerted",
@@ -217,7 +217,7 @@
       "region": "backpack",
       "capacity": 28,
       "stack_tolerance": 3,
-      "cell_threshold": 8.0,
+      "cell_threshold": 8,
       "confirm_seconds": 4,
       "cooldown": 120,
       "message": "Item gained",

@@ -329,13 +329,16 @@ minutes** while pickpocketing was demonstrably continuing — the coin counter
 advanced throughout. The cause was garbled OCR passes that saw no success line
 and started the stop timer.
 
-The pattern now also accepts the money-pouch line and the stun notice. Any of
-the four proves activity, and the money-pouch line is the most reliably read:
-it is short, high-contrast, and appears on roughly 76% of successes.
+The pattern now accepts three independent signs of ongoing activity: the
+pickpocket success line, the money-pouch line, and the camouflage-outfit line.
+The stun notice is deliberately excluded because being stunned is evidence of
+a halt, not evidence that pickpocketing is continuing. The money-pouch line is
+the most reliably read: it is short, high-contrast, and appears on roughly 76%
+of successes.
 
 | setting | was | now |
 |---|---|---|
-| evidence lines | 1 | 4 |
+| evidence lines | 1 | 3 |
 | `stop_seconds` | 20 | 45 |
 | false alerts / 3 min | 4 | **0** |
 
@@ -498,17 +501,19 @@ The same panel shows `Gain`, `Drops` and `GP/h`. During testing it read
 the chat counter only sees lines while the watcher is running. A future
 milestone rule could read `Gain` directly instead of summing chat.
 
-### Activity icon presence — the strongest stop signal
+### Activity icon presence — useful when corroborated
 
 `activity_icon_gone` (`kind: presence`) watches the skill icon RS3 shows at the
 top-centre of the screen while XP is accruing: a dark disc with an orange
-progress ring. Its presence *is* the activity; it vanishes when the skill stops.
+progress ring. Its presence is strong evidence of recent XP gain, but its
+absence is not by itself proof that the activity stopped.
 
-**This is a better stop detector than chat.** A chat rule must infer a stop from
-the *absence* of messages, which fails exactly when OCR degrades over a busy 3D
-scene — and `thieving_stopped` needed four corroborating message patterns to
-stop false-firing (it fired 4 times in 3 minutes before that fix). Reading a
-visual state needs none of that.
+**The current detector deliberately combines two imperfect signals.** Chat-only
+stop detection can false-fire when OCR degrades over a busy 3D scene, while
+icon-only detection false-fires during legitimate XP-popup gaps. The
+`activity_icon_gone` rule therefore treats sustained icon absence as the
+primary signal and uses fresh chat activity as corroboration before reporting a
+stop.
 
 **The icon alone is not sufficient — corrected after false positives.**
 
@@ -541,8 +546,11 @@ The ring's orange simply does not occur in the environment here, so
 The count was also flat across `dx` −20…+10, giving the region ~30px of framing
 tolerance.
 
-`absent_seconds: 12` debounces the icon's own fade animation and the occasional
-dropped frame. Threshold selection was trivial; debouncing is the real work.
+`absent_seconds: 75` clears the longest measured 60s icon blackout with
+margin. During a blackout, newly observed matching chat lines refresh the
+activity clock; scrollback already visible when the blackout starts is primed
+and does not count as fresh evidence. Threshold selection was trivial; combining
+and timing the signals is the real work.
 
 The chat-based `thieving_stopped` rule is retained but disabled. Re-enable it
 for a skill that has no activity icon.
