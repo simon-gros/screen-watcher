@@ -165,7 +165,7 @@ def fill_rate(history: list[tuple[float, int]], window: float = 180.0) -> float:
     return max(0.0, float(np.polyfit(ts, values, 1)[0]))
 
 
-def mean_abs_diff(a: np.ndarray, b: np.ndarray) -> float:
+def mean_abs_diff(a: np.ndarray | None, b: np.ndarray | None) -> float:
     if a is None or b is None or a.shape != b.shape:
         return float("nan")
     return float(np.mean(np.abs(a.astype(np.float32) - b.astype(np.float32))))
