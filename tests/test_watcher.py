@@ -2,7 +2,8 @@ import numpy as np
 
 import pytest
 
-from watcher import Region, Rule, mean_abs_diff, norm_line, validate_config
+from watcher import (Region, Rule, load_config, mean_abs_diff, norm_line,
+                     validate_config)
 
 
 def test_region_resolves_bottom_right_anchor():
@@ -58,6 +59,11 @@ def valid_config():
 
 def test_validate_config_accepts_valid_configuration():
     validate_config(valid_config())
+
+
+def test_skill_profiles_load_and_validate():
+    assert load_config("profiles/fishing.json")["skill"] == "fishing"
+    assert load_config("profiles/thieving.json")["skill"] == "thieving"
 
 
 @pytest.mark.parametrize(

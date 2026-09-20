@@ -986,13 +986,14 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
 # config
 # --------------------------------------------------------------------------
 
-def load_config() -> dict:
-    if not CONFIG_PATH.exists():
-        sys.exit(f"no config at {CONFIG_PATH}")
+def load_config(path: Path = CONFIG_PATH) -> dict:
+    path = Path(path)
+    if not path.exists():
+        sys.exit(f"no config at {path}")
     try:
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        sys.exit(f"invalid JSON in {CONFIG_PATH}: {exc}")
+        sys.exit(f"invalid JSON in {path}: {exc}")
     try:
         validate_config(cfg)
     except ValueError as exc:
@@ -1009,6 +1010,9 @@ def validate_config(cfg: object) -> None:
     window = cfg.get("window")
     if not isinstance(window, dict) or not isinstance(window.get("wm_class"), str):
         raise ValueError("window.wm_class must be a string")
+    if "skill" in cfg and (
+            not isinstance(cfg["skill"], str) or not cfg["skill"].strip()):
+        raise ValueError("skill must be a non-empty string")
     interval = cfg.get("interval", 1.0)
     if not isinstance(interval, (int, float)) or isinstance(interval, bool) or interval <= 0:
         raise ValueError("interval must be a positive number")
@@ -1088,7 +1092,7 @@ def resolve_window(cfg: dict) -> tuple[str, tuple[int, int]]:
 # --------------------------------------------------------------------------
 
 def cmd_calibrate(args) -> None:
-    cfg = load_config()
+    cfg = load_config(args.config)
     wid, size = resolve_window(cfg)
     out = ROOT / "calibrate.png"
     capture(wid, None, out, resize=args.scale)
@@ -1100,7 +1104,7 @@ def cmd_calibrate(args) -> None:
 
 
 def cmd_shot(args) -> None:
-    cfg = load_config()
+    cfg = load_config(args.config)
     wid, size = resolve_window(cfg)
     if args.box:
         parts = args.box.split(",")
@@ -1118,7 +1122,7 @@ def cmd_shot(args) -> None:
 
 
 def cmd_regions(args) -> None:
-    cfg = load_config()
+    cfg = load_config(args.config)
     wid, size = resolve_window(cfg)
     print(f"window {wid}  {size[0]}x{size[1]}\n")
     print(f"{'region':<16} {'anchor':<14} {'resolved x,y,w,h'}")
@@ -1133,7 +1137,7 @@ def cmd_regions(args) -> None:
 
 
 def cmd_probe(args) -> None:
-    cfg = load_config()
+    cfg = load_config(args.config)
     wid, size = resolve_window(cfg)
     regs = cfg["_regions"]
     masks = {r["region"]: r.get("mask") for r in cfg["rules"]}
@@ -1157,7 +1161,7 @@ def cmd_probe(args) -> None:
 
 def cmd_inv(args) -> None:
     """Live per-slot inventory change feed."""
-    cfg = load_config()
+    cfg = load_config(args.config)
     wid, size = resolve_window(cfg)
     reg = cfg["_regions"][args.region]
     if not reg.grid:
@@ -1211,7 +1215,7 @@ def cmd_inv(args) -> None:
 
 
 def cmd_stats(args) -> None:
-    cfg = load_config()
+    cfg = load_config(args.config)
     cap = next((r.get("capacity", 28) for r in cfg["rules"]
                 if r["kind"] == "inventory"), 28)
     cycles = load_cycles(cap)
@@ -1333,7 +1337,7 @@ def _release_singleton() -> None:
 
 def cmd_watch(args) -> None:
     claim_singleton()
-    cfg = load_config()
+    cfg = load_config(args.config)
     wid, size = resolve_window(cfg)
     regs = cfg["_regions"]
     rules = [Rule(**{k: v for k, v in r.items() if not k.startswith("_")})
@@ -1399,6 +1403,8 @@ def main() -> None:
     REGION_DIR.mkdir(exist_ok=True)
     p = argparse.ArgumentParser(prog="watcher", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--config", type=Path, default=CONFIG_PATH,
+                   help="skill profile JSON (default: config.json)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("calibrate"); c.add_argument("--scale", default="30%")
