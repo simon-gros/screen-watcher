@@ -113,6 +113,626 @@ support stateful policies beyond a simple cooldown:
 Reference:
 - https://secure.runescape.com/m=news/api--plugins-september-preview
 
+
+## Second ecosystem research pass: lessons from Alt1, RuneApps, and mature tools
+
+This section records a second research pass focused less on individual
+RuneScape mechanics and more on what mature companion tools have already
+learned in production. The goal is not to clone Alt1 or any particular app.
+Instead, reuse the engineering lessons that repeatedly appear across Alt1,
+RuneApps applications, Linux alternatives, official Jagex plugin previews, and
+long-running community feature requests.
+
+Several ideas below overlap conceptually with the cross-profile detector ideas
+later in this document. They are retained here because they add concrete
+operational requirements learned from existing tools: diagnostics, degradation
+detection, structural calibration, user correction, extension permissions,
+localization, scheduling, historical export, multi-client state, and graceful
+fallbacks.
+
+### First-class self-diagnostics: `screen-watcher doctor`
+
+Mature screen-reading tools expose capture troubleshooting, debug overlays,
+scan/diagnostic modes, and explicit UI-region selection because silent capture
+failure is otherwise extremely difficult to distinguish from "nothing happened
+in game".
+
+A future `screen-watcher doctor` command should test, at minimum:
+
+- RuneScape process/window discovery;
+- selected capture backend;
+- window geometry and renderer visibility;
+- each configured region resolving in bounds;
+- OCR executable and representative OCR confidence/readability;
+- template/icon anchor confidence;
+- inventory-grid geometry;
+- notification delivery;
+- sound playback;
+- state/log directory writability;
+- profile schema/version compatibility;
+- locale and UI scaling assumptions;
+- optional network/API dependencies;
+- whether expected anchors have drifted from the saved calibration.
+
+Output should be concise PASS/WARN/FAIL with actionable remediation rather than
+a raw stack trace. A graphical diagnostic mode should be able to draw or save
+the exact regions and anchors Screen Watcher believes it is using.
+
+References:
+- https://runeapps.org/apps/alt1/help_alt1
+- https://runeapps.org/apps/alt1/alt1
+
+### Detector-health monitoring and degraded mode
+
+A detector can be syntactically healthy while its inputs have become nonsense
+after a RuneScape UI, font, renderer, scaling, or layout change. The application
+should monitor its own confidence and explicitly enter a degraded state rather
+than continue issuing authoritative-looking alerts from bad evidence.
+
+Possible health signals:
+- OCR confidence/readability collapses relative to the calibration baseline;
+- expected anchor/template disappears for many consecutive samples;
+- inventory occupancy becomes physically impossible;
+- all slots or all resource bars suddenly report the same state;
+- observed region geometry changes without a corresponding calibration change;
+- a normally active signal family goes completely silent while independent
+  evidence says the activity continues;
+- one detector's false-positive/uncertainty rate rises sharply.
+
+Possible states:
+- `healthy`;
+- `degraded`;
+- `uncalibrated`;
+- `backend_failure`;
+- `profile_incompatible`.
+
+Gameplay alerts from a degraded detector should be suppressed or clearly marked
+low-confidence until health recovers.
+
+Community history is important here: RuneScape UI and chat changes have broken
+multiple Alt1 screen-reading applications at once, demonstrating that
+self-health monitoring is a product requirement rather than a convenience.
+
+Reference:
+- https://www.reddit.com/r/runescape/comments/1ge0fgu/
+
+### Structural UI detection instead of coordinates alone
+
+Recent RuneApps work demonstrates a useful alternative to one fixed template:
+detect the geometry of repeated UI structures, derive exact scale/position, and
+then measure relative to that detected structure.
+
+Future calibration should therefore support:
+- repeated-slot/grid geometry detection;
+- border/row/column structure detection;
+- anchor clusters rather than one fragile pixel template;
+- automatic scale estimation;
+- relative region derivation from a detected parent component;
+- fallback from structural detection to saved coordinates when confidence is
+  insufficient.
+
+This is especially promising for:
+- backpack slots;
+- action bars;
+- buff/debuff rows;
+- bank preset buttons;
+- repeated resource/status modules;
+- Make-X interfaces.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?id=1913
+
+### Generic stability gates for noisy observations
+
+Some mature tools require several identical consecutive readings before
+accepting a state change. Screen Watcher already uses confirmation windows in a
+few places; this should become a reusable detector primitive.
+
+Possible options:
+- `confirm_frames`;
+- `confirm_seconds`;
+- `minimum_confidence`;
+- `majority_of_last_n`;
+- `require_consecutive`;
+- hysteresis for numeric thresholds;
+- separate enter/leave thresholds.
+
+This primitive should be usable by OCR, item recognition, progress bars, buff
+icons, resource values, temporary opportunities, and structural calibration.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?id=1913
+
+### User correction and local detector feedback
+
+A mature detector should learn from operation even when it is not using machine
+learning. The user should eventually be able to classify an alert or detected
+state as:
+
+- correct;
+- false positive;
+- wrong event/classification;
+- useful but too noisy;
+- event was missed;
+- detector needs recalibration.
+
+Store this locally with the original event/evidence reference. Session or
+profile reports could then show:
+- alerts fired;
+- accepted/rejected alerts;
+- estimated false-positive rate;
+- rules most often rejected;
+- contexts where errors cluster.
+
+This gives future tuning work evidence instead of memory and makes live play a
+repeatable detector-validation process.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?id=1913
+
+### Graceful manual fallback when observation fails
+
+Not every companion feature needs a live pixel feed. Existing tools often retain
+manual timers, browser/checklist views, or history features when screen reading
+fails.
+
+Profiles or capabilities should declare degraded/manual fallbacks where useful:
+- manual counters;
+- manually started absolute timers;
+- checklists;
+- stored farming/research schedules;
+- historical reports;
+- manual state selection for a state machine;
+- manual "mark resolved" / "resynchronise" actions.
+
+The application should degrade by capability rather than collapsing entirely
+because one OCR or capture path failed.
+
+### Extension manifests and a permission model
+
+If Screen Watcher ever supports third-party extensions, do not load arbitrary
+Python modules with unrestricted machine access by default. Alt1's permission
+model is a useful design lesson.
+
+A future extension manifest could request capabilities such as:
+- `event_stream.read`;
+- `history.read`;
+- `history.write`;
+- `screen_regions.read`;
+- `ocr.request`;
+- `overlay.draw`;
+- `network`;
+- `notifications.emit`;
+- `settings.read`.
+
+Permissions should be explicit, minimal, reviewable, and denied by default.
+Core read-only/game-safety guarantees should apply to extensions as well.
+
+Reference:
+- https://runeapps.org/apps/alt1/alt1
+
+### Local extension/event API
+
+A controlled local API would let dashboards, trackers, and experimental tools
+consume Screen Watcher's normalized events without linking directly against
+capture internals.
+
+Possible interfaces:
+- local-only HTTP;
+- WebSocket event stream;
+- Unix domain socket;
+- stdin/stdout subprocess protocol.
+
+Example consumers:
+- a web dashboard;
+- a tiny always-on-top status strip;
+- a personal analytics notebook;
+- an accessibility output;
+- a profile-specific advisor.
+
+The trusted core should own observation, normalization, permissions, and
+history. Extensions should normally consume events rather than raw desktop
+pixels.
+
+Alt1's web-app ecosystem demonstrates the scalability advantage of a stable host
+API over putting every niche feature in the core application.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?id=101
+
+### Event freshness, provenance, and proof
+
+Every normalized event should eventually carry enough provenance to answer
+"why did Screen Watcher believe this was new and real?"
+
+Candidate fields:
+- `observed_at`;
+- source/game timestamp where available;
+- source backend;
+- source region;
+- source hash/dedup key;
+- event age when detected;
+- confidence;
+- corroborating event IDs;
+- profile/activity/session IDs;
+- optional evidence-crop reference.
+
+This generalizes the startup-scrollback protection already used for OCR. Mature
+trackers reject stale chat events, deduplicate submissions, preserve proof, and
+queue network work separately from detection.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?pid=5879
+
+### Minimal evidence crops and privacy-preserving diagnostics
+
+When evidence images are useful, store only the smallest relevant region rather
+than full desktop screenshots.
+
+Potential policy:
+- opt-in only;
+- short retention by default;
+- crop only the source region or event line;
+- redact/avoid account names and unrelated chat where practical;
+- attach hashes/metadata so an alert can be reproduced;
+- fixtures committed to Git must be intentionally sanitized.
+
+This improves false-positive analysis while minimizing privacy exposure and disk
+usage.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?pid=5879
+
+### Localization packs for OCR/chat semantics
+
+Long-running Alt1 apps show that language support and Jagex wording changes are
+maintenance concerns. Do not permanently bind semantic rules to English regexes.
+
+Possible layout:
+- semantic event: `thieving.stunned`;
+- locale packs: English, German, French, and others as verified;
+- each locale contains known live wording variants and OCR-tolerant patterns;
+- game-language detection/manual selection belongs to profile/session metadata.
+
+This makes it possible to update one phrase without changing detector logic and
+makes community contributions safer.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?id=1324
+
+### Compatibility fingerprints for profiles and calibrations
+
+A saved profile/calibration should record the environment in which it was
+verified:
+
+- RuneScape UI generation/build where known;
+- game language;
+- interface scaling;
+- desktop scaling;
+- resolution/window geometry;
+- capture backend;
+- renderer;
+- layout fingerprint/anchor confidence;
+- profile/schema version;
+- last successful validation time.
+
+On startup, compare the live environment to this fingerprint. Significant drift
+should trigger a warning or doctor scan instead of silently trusting old
+coordinates and thresholds.
+
+### Timer taxonomy: activity, absolute, reset, and schedule
+
+Existing RuneScape companion tools solve several fundamentally different timer
+problems. Screen Watcher should not force all of them through one `timer`
+rule.
+
+Future timer classes:
+- `activity_timer` — resets or pauses based on detected activity;
+- `countdown_timer` — manually/event-started duration;
+- `absolute_deadline` — fires at a real timestamp and never resets from game
+  interaction;
+- `periodic_schedule` — recurring interval;
+- `daily_reset`;
+- `weekly_reset`;
+- `monthly_reset`;
+- game-tick/activity-specific timers where appropriate.
+
+Examples include AFK warnings, Farming, Archaeology research, Bik troves,
+D&Ds, familiar durations, aura expiry, and manually tracked long activities.
+
+References:
+- https://runeapps.org/forums/viewtopic.php?id=1736
+- https://pc.runeapps.org/forums/viewtopic.php?id=1910
+
+### RuneScape-time and reset calendar
+
+A small `GameCalendar` service could calculate RuneScape/UTC reset boundaries
+instead of continuously polling.
+
+Potential uses:
+- daily/weekly/monthly activities;
+- farm/research schedules;
+- D&D windows;
+- shops or user-defined routines;
+- "time until reset" status;
+- low-frequency reminders that work even when no active skill detector needs a
+  1.5-second loop.
+
+This should remain a scheduling/information feature, never automatic gameplay.
+
+### Compact status strip and presentation levels
+
+Not every useful state should become a desktop popup. Existing timer/plugin
+feedback shows demand for compact persistent status.
+
+Possible presentation modes:
+1. notification-only;
+2. tiny click-through/status strip;
+3. detailed dashboard/diagnostics.
+
+A minimal strip might show:
+`Fishing | 3 slots | urn x1 | active 00:42`
+
+Only actionable or selected values should appear. Avoid turning the screen into
+a wall of gauges.
+
+References:
+- https://runeapps.org/forums/viewtopic.php?id=1736
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
+### Optional click-through overlay
+
+A read-only overlay can place information near the relevant RuneScape UI without
+generating input.
+
+Potential uses:
+- outline a monitored resource/buff;
+- mark the backpack slot that changed;
+- show a countdown beside an existing status icon;
+- show detector-health/calibration boxes;
+- highlight a relevant interface region.
+
+The overlay must be click-through by default and should never decide or execute
+a game action.
+
+Examples in the mature ecosystem include ability cues and bank-preset labels.
+
+References:
+- https://runeapps.org/forums/viewtopic.php?id=1840
+
+### Manual state-machine resynchronisation
+
+Sequence inference will sometimes drift. Boss timers, Agility courses,
+Runecrafting trips, ritual phases, and similar state machines need an explicit
+resynchronisation path.
+
+Possible controls:
+- `resync` command/hotkey;
+- select current state manually;
+- resync automatically when an authoritative landmark event appears;
+- expose uncertainty rather than pretending the inferred state is exact.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?id=1375
+
+### Historical performance as a first-class product
+
+Long-running companion tools record more than alerts: floor times, kill times,
+party size, deaths, bonus percentages, success/failure history, and trends.
+
+Screen Watcher should eventually maintain profile-appropriate session records
+such as:
+- lap/floor/kill/trip/cycle durations;
+- difficulty/variant metadata;
+- deaths/failures;
+- resources consumed;
+- loot/output;
+- XP;
+- idle time;
+- personal bests and rolling baselines.
+
+This complements, rather than replaces, the generic normalized event history.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?id=1822
+
+### Stable CSV/JSON export before elaborate dashboards
+
+Structured exports are high value and low coupling. Before investing heavily in
+charts, provide stable export schemas for:
+- sessions;
+- events;
+- alerts;
+- counters;
+- resource ledger;
+- performance summaries.
+
+CSV enables spreadsheets; JSON preserves richer event structure. SQLite can
+serve built-in querying later.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?id=1822
+
+### Statistical uncertainty rather than averages alone
+
+RuneScape outcomes are often skewed by rare drops and variable action times.
+Analytics should therefore expose:
+- median;
+- p90/p95;
+- variance/standard deviation where meaningful;
+- sample count;
+- confidence intervals where the model justifies them;
+- rolling baseline versus current session.
+
+Do not let one rare outcome distort the meaning of "expected" performance.
+
+References:
+- https://pc.runeapps.org/forums/viewtopic.php?id=1850
+
+### Generic resource gain/consumption ledger
+
+Represent inputs and outputs as normalized resource events:
+
+```text
+resource.consume(item, quantity, value?)
+resource.gain(item, quantity, value?)
+```
+
+The same ledger could power:
+- Fishing bait/fish;
+- Herblore ingredients/potions;
+- Archaeology materials/artefacts;
+- combat supplies/loot;
+- Slayer profit;
+- Invention components;
+- Runecrafting essence/runes.
+
+Jagex's official Drop Log preview validates the usefulness of jointly tracking
+supplies consumed and loot obtained.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
+### Generic importance/value tiers and filters
+
+Events should eventually support more than enabled/disabled.
+
+Possible tiers:
+- hidden;
+- routine;
+- informational;
+- opportunity;
+- warning;
+- critical.
+
+For loot/resources, optional value tiers can supplement explicit include/exclude
+lists. Sounds and persistent presentation should be configurable by tier.
+
+This generalizes the filtering concepts used by official Ground Items and other
+loot tools.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
+### Data-driven buff/status catalog
+
+Rather than hand-writing every buff detector, maintain a status catalog with
+metadata such as:
+- semantic ID;
+- category;
+- icon templates/official identifiers;
+- uses duration, stack count, presence, or combination;
+- default warning thresholds;
+- relevant skills/activities;
+- locale/display names.
+
+Potential categories mirror RuneScape's actual status ecosystem: potions,
+prayers, abilities, item effects, pets/familiars, skilling, Invention perks, and
+boss-specific effects.
+
+Reference:
+- https://runescape.wiki/w/Settings/Interfaces/Buff_Bar
+
+### Account-aware prerequisites and optional advisor layer
+
+Some tools use account levels, quests, unlocks, prices, and goals to determine
+which methods or equipment are relevant.
+
+Screen Watcher could eventually resolve optional prerequisites such as:
+- skill level;
+- quest completion;
+- equipment/unlocks;
+- Grace of the Elves/Brooch requirements;
+- manually declared capabilities;
+- public/sanctioned account data where available.
+
+The core observer should remain distinct from an optional advisor layer. An
+advisor may calculate or suggest, but it must expose assumptions/data sources
+and must never operate the game.
+
+Reference:
+- https://pc.runeapps.org/forums/viewtopic.php?id=1909
+
+### Multi-client architecture
+
+Alt1 eventually added explicit support for multiple RuneScape clients. Screen
+Watcher should avoid global state that makes this difficult.
+
+Each client/session should have independent:
+- process/window identity;
+- capture backend;
+- active profile/activity;
+- normalized event stream;
+- timers/state machines;
+- history/session ID;
+- notification routing.
+
+This is another reason to retire global variables such as a single
+`ACTIVE_SKILL` as the architecture matures.
+
+### Optional shared/party state
+
+Much later, group activities could exchange selected normalized facts between
+trusted Screen Watcher instances, analogous to party-oriented tools that share
+keys or encounter state.
+
+Possible uses:
+- Dungeoneering;
+- group bosses;
+- shared timers/checklists.
+
+This requires authentication, privacy controls, and explicit opt-in. It should
+exchange normalized state, never game input.
+
+### Optional remote/mobile notifications
+
+Existing AFK tools demonstrate that phone notifications are useful when the
+player steps away.
+
+A future companion path could:
+- pair explicitly via QR/token;
+- send only normalized alerts/status;
+- default to local network or privacy-preserving relay;
+- never expose screenshots unless explicitly requested.
+
+Reference:
+- https://runeapps.org/forums/viewtopic.php?id=1144
+
+### Linux-native operation as a differentiator
+
+Linux alternatives to Alt1 exist partly because the mature ecosystem remains
+Windows-centric. Current Linux implementations also identify native Wayland
+capture as a major technical boundary.
+
+Screen Watcher should treat:
+- X11/XWayland capture;
+- Wayland portal/PipeWire capture;
+- desktop notifications/audio;
+- renderer differences;
+- packaging on Arch/CachyOS and other distributions
+
+as first-class engineering concerns rather than compatibility afterthoughts.
+
+Reference:
+- https://github.com/Jcapehart2/RuneKit-Reforged
+
+### Presets and progressive disclosure instead of settings overload
+
+Official plugin development has already encountered the problem of too many
+independently configurable widgets. Screen Watcher should avoid exposing every
+threshold and internal option in one flat settings surface.
+
+Possible UX:
+- presets: `minimal`, `standard`, `diagnostic`, `accessibility`;
+- profile-provided sensible defaults;
+- grouped advanced detector settings;
+- expert/raw configuration still available;
+- import/export/share settings.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
+
 ## Fishing
 
 ### Seren spirit event
@@ -1640,6 +2260,16 @@ Before implementing an idea from this file:
    and what confidence level should be assigned.
 10. Confirm that any web/API integration respects Jagex rules, sanctioned
     interfaces, and conservative request rates.
+11. Record detector-health expectations and the conditions that should mark a
+    profile or observation source degraded.
+12. Record the locale, UI scale/layout, capture backend, and other compatibility
+    assumptions used when the detector was validated.
+13. Prefer a reusable stability gate/confirmation primitive over detector-specific
+    sleeps or repeated-frame hacks.
+14. Define whether the capability has a manual/degraded fallback and how a user
+    can resynchronise it if inferred state drifts.
+15. Ensure newly persisted evidence follows the minimum-crop/privacy rule and
+    can be exported without exposing unrelated desktop content.
 
 Items can remain in this backlog indefinitely. Presence here means only that the
 idea may be useful later.
