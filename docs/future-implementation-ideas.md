@@ -1,14 +1,450 @@
 # Future implementation ideas
 
-This document is an **idea backlog**, not a roadmap or commitment. Items here are
-possible future directions discovered while comparing the current Screen Watcher
-profiles with RuneScape mechanics and the RuneScape Wiki. Some ideas may never
-be implemented because they depend on equipment, activities, UI layouts, or
-play styles that are not currently relevant.
+This document is primarily an **idea backlog**, but it now begins with one
+explicit exception: the **Priority 0 Linux technical foundation**. That section is
+the implementation gate for the next coding work and should be reviewed first
+whenever development resumes.
 
-An item should move from this document into the active roadmap only after it has
-a concrete use case, a reproducible in-game signal, and enough live measurements
-to tune it without creating noisy or unreliable alerts.
+All later sections remain research/backlog material unless promoted. Some ideas
+may never be implemented because they depend on equipment, activities, UI
+layouts, game changes, or play styles that are not currently relevant.
+
+An ordinary backlog item should move into active implementation only after it
+has a concrete use case, a reproducible in-game signal, and enough live
+measurements to tune it without creating noisy or unreliable alerts. Priority 0
+items are different: they are infrastructure required to make later detectors,
+profiles, overlays, diagnostics, and Linux support reliable.
+
+## PRIORITY 0 — Linux/CachyOS technical foundation
+
+**This section must be served first when coding resumes.** Before adding another
+large batch of skill-specific rules, the project should establish the Linux
+observation foundation described here. New skill detectors may still be used as
+small validation cases, but they should not postpone this work.
+
+The target development environment is CachyOS/Arch Linux, especially KDE Plasma
+6 with KWin, while keeping the architecture portable enough for other Linux
+desktops.
+
+### Priority 0 implementation order
+
+Implement in this order unless live testing proves a dependency must move:
+
+1. Split capture/platform code behind a `GameInstance` / `CaptureBackend`
+   interface.
+2. Add a central shared-frame scheduler and frame cache.
+3. Implement/benchmark a native X11/XComposite/XShm backend against the current
+   ImageMagick subprocess capture.
+4. Add backend/frame health diagnostics and make them part of
+   `screen-watcher doctor`.
+5. Introduce a reusable interface-reader registry, beginning with `ChatReader`
+   and then inventory/resource/buff readers.
+6. Add a layered OCR abstraction: specialized numeric/sprite OCR first where
+   appropriate, Tesseract as fallback.
+7. Add read-only KWin window discovery/state support for native KDE Wayland.
+8. Prototype native Wayland capture through XDG ScreenCast portal + PipeWire,
+   first using the simplest reliable Python/Qt/GStreamer path.
+9. Add a native KDE/Wayland overlay prototype with PySide6/Qt and
+   `layer-shell-qt`, remaining click-through and read-only.
+10. Convert current rules to consume normalized reader/events rather than owning
+    capture/OCR loops directly.
+11. Only after these primitives are stable, accelerate broader skill/profile
+    implementation.
+
+### Architecture target
+
+```text
+                         Screen Watcher
+                              |
+                     GameInstance / Backend
+                              |
+             +----------------+----------------+
+             |                                 |
+        X11/XWayland                      native Wayland
+     XCB/XComposite/XShm          XDG ScreenCast + PipeWire
+             |                                 |
+             +----------------+----------------+
+                              |
+                    Shared Frame Scheduler
+                              |
+          +-------------------+-------------------+
+          |                   |                   |
+      ChatReader       InventoryReader       BuffBarReader
+          |                   |                   |
+          +-------------------+-------------------+
+                              |
+                    Normalized Event Stream
+                              |
+              Profiles / Rules / State Machines
+                              |
+             Alerts / History / Analytics / UI
+```
+
+The project should treat the RuneScape window as a continuously sampled data
+source, not as a sequence of unrelated screenshot subprocesses.
+
+### CachyOS/Arch toolchain: preferred building blocks
+
+Prefer official Arch/CachyOS repository packages where practical.
+
+**Platform/capture**
+- `python-xcffib` — XCB bindings for native X11 work;
+- XComposite + XShm — direct X11 window capture/frame transport;
+- `pipewire` — native low-latency video/audio transport;
+- `xdg-desktop-portal` + `xdg-desktop-portal-kde` — user-approved Wayland
+  capture;
+- `kpipewire` — KDE's PipeWire integration;
+- `gst-plugin-pipewire` + GStreamer/PyGObject — practical Python-side
+  PipeWire prototype route.
+
+**Window state / KDE**
+- KWin scripting API — read-only discovery of active/add/remove/move/focus
+  window state;
+- D-Bus via `python-dbus-next` for KDE/portal integration;
+- techniques demonstrated by `kdotool` may be useful for querying KWin, but
+  Screen Watcher must not use input-generation features.
+
+**UI / overlay**
+- `pyside6` / Qt 6 — preferred native Python GUI stack;
+- `layer-shell-qt` — KDE/Qt integration with `wl-layer-shell`;
+- QML/QtQuick may be appropriate for a compact status strip or overlay;
+- X11 fallback: transparent frameless always-on-top input-transparent Qt window.
+
+**Vision/OCR**
+- NumPy — canonical image arrays;
+- `python-opencv` — structural detection, template matching, bars, grids,
+  morphology, histograms, frame health;
+- Pillow — image interchange/debug output;
+- `python-scikit-image` — SSIM and higher-level image metrics where useful;
+- Tesseract + language packs — general OCR fallback;
+- custom RuneScape sprite/numeric OCR — preferred for constrained known fonts;
+- OpenVINO — optional later lightweight inference backend if classical vision
+  becomes insufficient.
+
+**Storage/analytics**
+- SQLite — runtime sessions/events/alerts/calibration/counters;
+- SQLAlchemy optional for models/migrations;
+- DuckDB — later analytical querying over exports;
+- PyArrow/Parquet — optional compact historical exports;
+- CSV/JSON remain stable interchange formats.
+
+**Local APIs/integration**
+- `python-websockets` or `aiohttp` — authenticated local event API;
+- Pydantic + JSON Schema — profile/event/extension schema validation;
+- `python-watchdog` — development-time profile/template hot reload;
+- desktop notifications/D-Bus and optional TTS output.
+
+**Testing/development**
+- pytest;
+- Hypothesis for state-machine/config invariants;
+- Xvfb for X11 test environments;
+- Gamescope as an optional controlled nested-game/display test environment;
+- GPU Screen Recorder/OBS for collecting replay material;
+- Ruff as a future fast lint/format/check option;
+- `uv` for Python environment/lock/workflow management;
+- Graphviz/PlantUML for architecture/state-machine documentation.
+
+These are not all required runtime dependencies. The production dependency set
+must remain smaller than the development toolchain.
+
+References:
+- https://archlinux.org/packages/extra/any/python-xcffib/
+- https://archlinux.org/packages/extra/x86_64/pyside6/
+- https://archlinux.org/packages/extra/x86_64/layer-shell-qt/
+- https://archlinux.org/packages/extra/x86_64/xdg-desktop-portal-kde/
+- https://archlinux.org/packages/extra/x86_64/python-opencv/
+- https://wiki.archlinux.org/title/PipeWire
+
+### X11/XWayland foundation
+
+Replace the current repeated ImageMagick hot path with a direct backend after
+the abstraction exists.
+
+Preferred design:
+- discover and own the RuneScape window identity;
+- capture through XComposite/XShm;
+- cache the latest full-game frame;
+- expose NumPy region views;
+- listen for configure/geometry changes;
+- invalidate/reacquire backing resources on resize/recreation;
+- maintain a backend minimum refresh interval;
+- benchmark CPU time, frame latency, allocations, and missed captures against
+  the existing implementation.
+
+RuneKit provides a particularly useful reference architecture: platform-specific
+code is isolated inside its game layer, it caches recent captures, uses
+XComposite/XShm on Linux/X11, and exposes generic position/scaling/focus/frame
+state to higher layers.
+
+Reference:
+- https://github.com/Jcapehart2/RuneKit-Reforged
+
+### Native KDE Wayland capture
+
+Use the standard permission model rather than trying to bypass the compositor.
+
+The XDG ScreenCast portal flow is:
+1. `CreateSession`;
+2. `SelectSources`;
+3. `Start` (normally presents user selection/consent);
+4. receive one or more PipeWire stream descriptors;
+5. `OpenPipeWireRemote` and consume frames.
+
+The current portal interface supports monitor, window, and virtual sources.
+Persistent sessions may use restore tokens so the user does not necessarily
+need to reselect the source every launch. Restore tokens are single-use and must
+be replaced by the newly returned token after restoration.
+
+For modern portal version 6 streams, prefer the stream's
+`pipewire-serial`/target object mechanism rather than assuming a PipeWire node
+ID remains stable across hotplug, suspend, or stream recreation.
+
+Frame consumers must be prepared for different PipeWire buffer types:
+- direct memory;
+- memfd;
+- DMA-BUF.
+
+Do **not** assume DMA-BUF is safely linear-mappable; hardware tiling,
+compression, and synchronization may require EGL/Vulkan/graphics-API handling.
+Start with a correct CPU-mappable path and optimize only after profiling.
+
+References:
+- https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html
+- https://docs.pipewire.org/group__spa__buffer.html
+- https://docs.pipewire.org/1.4/page_dma_buf.html
+
+### Arena Tracker as a Wayland capture reference
+
+Arena Tracker is especially relevant because it supports Linux and documents
+CachyOS use. Its Wayland path separates capture into a small `captureHelper`
+process.
+
+Useful patterns from its source:
+- detect Wayland via `XDG_SESSION_TYPE`;
+- launch a capture helper only when needed;
+- exchange the latest frame through shared memory;
+- keep a small header containing capture status, width, height, and screen index;
+- attach read-only to the shared-memory segment in the main application;
+- copy the newest frame into the application when requested;
+- restart the helper on a defined restart exit code;
+- terminate/kill it cleanly on shutdown;
+- surface helper stdout/stderr for diagnostics.
+
+This validates an important fallback architecture for Screen Watcher: if direct
+Python/Qt PipeWire capture becomes cumbersome, a very small native Qt/C++ helper
+can own the portal/PipeWire stream and publish frames through shared memory while
+the rest of Screen Watcher remains Python.
+
+Reference:
+- https://github.com/supertriodo/Arena-Tracker
+
+### KWin read-only window integration
+
+Native Wayland intentionally prevents ordinary applications from enumerating and
+capturing arbitrary windows the X11 way. On KDE, use KWin's supported scripting/
+window-state mechanisms for metadata and the portal for pixel access.
+
+Useful KWin state/signals include:
+- active window;
+- `windowAdded`;
+- `windowRemoved`;
+- `windowActivated`;
+- screen/output changes;
+- geometry/focus properties available on window objects.
+
+Screen Watcher should use these only for discovery, identity, focus, geometry,
+and health. Never use desktop APIs to inject RuneScape input.
+
+References:
+- https://develop.kde.org/docs/plasma/kwin/api/
+- https://github.com/jinliu/kdotool
+
+### Wayland overlay foundation
+
+A compositor-level overlay is preferable to injecting into RuneScape's Vulkan or
+OpenGL process.
+
+For KDE/Qt, investigate:
+- PySide6 + QML/QtQuick;
+- `layer-shell-qt`;
+- `wl-layer-shell` OVERLAY layer;
+- empty input region / click-through by default;
+- temporary opt-in interactivity only for Screen Watcher's own controls;
+- correct monitor anchoring;
+- focus-aware show/hide;
+- compact and detailed modes.
+
+The Path of Exile 2 Linux overlay ecosystem provides direct evidence that common
+X11/Electron overlay-window techniques fail on native KWin Wayland, while
+layer-shell surfaces work. One reference project explicitly targets
+CachyOS/KDE Plasma 6/KWin Wayland and documents layer-shell as the working
+mechanism.
+
+References:
+- https://github.com/andre-lund/poe2-overlay
+- https://github.com/brendancohan/PathofTrading
+- https://archlinux.org/packages/extra/x86_64/layer-shell-qt/
+
+### Lessons from poe2-overlay and PathofTrading
+
+Transferable ideas:
+- isolate platform-specific overlay code;
+- use a real Wayland layer-shell surface rather than an X11 overlay shim;
+- use an empty input region for click-through behaviour;
+- keep the application persistent rather than spawning a process per event;
+- make fullscreen/borderless/exclusive-fullscreen behaviour an explicit test
+  matrix;
+- treat monitor selection and game focus as first-class state;
+- maintain architecture-decision records for fragile compositor-specific
+  choices.
+
+Do **not** copy their input-synthesis features. Screen Watcher has no legitimate
+need for `ydotool`, `uinput`, or synthetic game keypresses.
+
+### GPU Screen Recorder as a capture/replay reference
+
+GPU Screen Recorder is now available in Arch's official repositories and
+supports X11 and Wayland across NVIDIA/AMD/Intel. Its CLI distinguishes X11
+window/focused capture from Wayland portal capture and supports restoring portal
+sessions.
+
+For Screen Watcher its main uses are:
+- study of production-grade portal/Wayland capture behaviour;
+- development fixture/session recording;
+- instant-replay-style collection of the last N seconds around rare events;
+- testing capture behaviour on the user's NVIDIA system;
+- a benchmark/reference point, not a runtime dependency.
+
+The Arch manual documents `-w portal` for Wayland and an optional
+`-restore-portal-session` path.
+
+References:
+- https://man.archlinux.org/man/gpu-screen-recorder.1.en
+- https://archlinux.org/packages/extra/x86_64/gpu-screen-recorder/
+
+### MangoHud lessons without graphics injection
+
+MangoHud is useful as a design reference, not as Screen Watcher's overlay
+mechanism.
+
+Borrowable concepts:
+- per-application configuration;
+- layered configuration precedence;
+- compact/horizontal HUD modes;
+- runtime config reload;
+- presets;
+- low-overhead continuously updated presentation;
+- optional metric logging.
+
+Avoid:
+- Vulkan/OpenGL layer injection;
+- `LD_PRELOAD`-style coupling to the game process.
+
+Screen Watcher's overlay should remain compositor/desktop-level.
+
+References:
+- https://github.com/flightlessmango/MangoHud
+- https://github.com/flightlessmango/MangoHud/blob/master/data/MangoHud.conf
+
+### Gamescope as a development harness
+
+Gamescope should be optional and development-only.
+
+Potential test uses:
+- fixed nested resolutions;
+- known aspect ratios;
+- borderless/fullscreen transitions;
+- XWayland behaviour;
+- scaling/DPI experiments;
+- reproducible capture/overlay compatibility checks.
+
+Do not require players to launch RuneScape through Gamescope.
+
+### Vision foundation
+
+Make OpenCV the default computer-vision engine for reusable readers.
+
+Candidate primitives:
+- template matching;
+- structural anchor detection;
+- connected components;
+- morphology;
+- edge/line detection;
+- colour/HSV segmentation;
+- progress/resource bar estimation;
+- grid detection;
+- histogram comparison;
+- absolute frame difference;
+- crop normalization;
+- feature matching where template scale varies.
+
+Use scikit-image selectively for metrics such as SSIM or functionality that is
+clearer there.
+
+ML remains optional. If classical vision is insufficient, OpenVINO is a
+CachyOS/Arch-friendly inference path and currently has packaged Python bindings.
+It may later support tiny classifiers for a constrained inventory/status/event
+problem without making a full deep-learning framework part of the core.
+
+References:
+- https://archlinux.org/packages/extra/x86_64/python-opencv/
+- https://archlinux.org/packages/extra/x86_64/python-openvino/
+
+### Storage and analytics foundation
+
+Keep SQLite as the live application database.
+
+Suggested separation:
+- SQLite: observations, normalized events, sessions, alerts, counters,
+  calibration, feedback, trigger references;
+- JSONL: transparent debug/export stream;
+- CSV/JSON: stable interchange;
+- Parquet/PyArrow: optional efficient archival export;
+- DuckDB: later analytical queries over historical exports.
+
+Do not replace SQLite with a heavier analytics engine just because historical
+analysis may eventually be large.
+
+### Packaging/dependency policy for CachyOS
+
+Prefer:
+1. Arch/CachyOS official repositories;
+2. bundled pure-Python dependencies through the project environment;
+3. AUR only when a capability has no reasonable repository alternative.
+
+Development setup should be reproducible with `uv` or an equivalent locked
+environment, but Linux system libraries such as Qt, PipeWire, XCB, portals, and
+Wayland should generally remain distro-managed.
+
+Keep three dependency groups conceptually separate:
+- required runtime;
+- optional feature runtime;
+- development/research tools.
+
+This prevents the final application from inheriting the entire research stack.
+
+### Priority 0 acceptance criteria
+
+Do not call the Linux foundation complete until all of these are true:
+
+- existing Fishing and Thieving behaviour still works through the new backend
+  abstraction;
+- one shared frame can feed multiple readers without repeated game-window
+  screenshot subprocesses;
+- X11/XWayland direct capture is benchmarked and stable;
+- `doctor` can identify backend, session type, geometry, focus, frame health,
+  OCR readiness, notification readiness, and missing dependencies;
+- reader health degrades cleanly on blank/frozen/lost frames;
+- the application can recover from RuneScape resize/recreation without restart;
+- a replay backend exercises the same reader/event code as live capture;
+- the Wayland design has at least a working portal/PipeWire proof of concept on
+  KDE/CachyOS;
+- overlay proof of concept can draw read-only click-through content above the
+  game on supported KDE/Wayland configurations;
+- no implementation path introduces synthetic RuneScape input;
+- profile/rule code is no longer coupled directly to ImageMagick capture.
+
+After these criteria are met, broader skill coverage becomes the main priority.
 
 ## September 2026 research pass: strategic implications
 
