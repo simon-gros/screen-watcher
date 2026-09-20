@@ -1,424 +1,278 @@
 # Screen Watcher
 
-Screen Watcher is a read-only RuneScape companion for Linux that watches
-configured regions of the game client and notifies you when something needs
-attention. It can combine OCR, visual change detection, inventory state,
-activity timing, and profile-specific rules without clicking, typing, moving
-the mouse, or otherwise sending input to the game.
+Screen Watcher is a read-only RuneScape observability and notification tool for
+Linux. It watches configured regions of the game client, extracts signals from
+pixels and OCR, evaluates profile-specific rules, and tells the player when
+something needs attention.
 
-> **Read-only by design.** Screen Watcher observes pixels and produces local
-> notifications. It does not automate gameplay or generate game input.
+> **Read-only by architecture.** Screen Watcher does not click, type, move the
+> mouse, press keys, bank, fight, or otherwise send input to the game. It only
+> observes the screen and produces local output.
 
-The project is currently an early, functional foundation for a broader
-RuneScape observability application. Fishing and thieving/pickpocketing
-profiles are included today; most other skills, quests, bosses, and minigames
-still need researched profiles, calibration, and fixtures.
+The project currently ships calibrated Fishing and Thieving profiles. The core
+architecture supports reusable visual, OCR, activity, inventory, item-count,
+and supply detectors; additional skills, quests, bosses, minigames, and other
+activities should be added as versioned profiles and fixtures rather than
+hard-coded into the runtime.
 
-For the longer-term architecture and roadmap, see
-[docs/application-outline.md](docs/application-outline.md).
+## Current architecture
 
-## Current status
+The application is split into explicit layers:
 
-- **Platform:** Linux desktop
-- **Display path:** X11/XWayland
-- **Game window detection:** configurable through `window.wm_class`
-- **Included profiles:** fishing and thieving/pickpocketing
-- **Profile families supported by validation:** `skill`, `quest`, and `boss`
-- **Outputs:** desktop notifications, sounds, terminal output, and local JSONL history
-- **Automation boundary:** observation only; no synthetic input
-- **CI:** pytest and Flake8 on pushes and pull requests
+```text
+profile/configuration
+        ↓
+window + one-frame-per-cycle capture
+        ↓
+signal extraction (OCR, image, inventory)
+        ↓
+typed rule evaluation
+        ↓
+Alert + evidence
+        ↓
+terminal / JSONL / desktop notification backends
+```
 
-The current implementation is still centered on a single `watcher.py` module.
-The planned modular architecture is documented separately and should not be
-confused with functionality that has already landed.
+Key modules:
 
-## Features
+- `screen_watcher/platform.py` — desktop session and game-window discovery
+- `screen_watcher/capture.py` — full-window capture and per-cycle frame reuse
+- `screen_watcher/signals.py` — OCR, frame differences, inventory signals
+- `screen_watcher/rules.py` — typed rule classes and pure evaluation logic
+- `screen_watcher/config.py` — schema/version validation and profile loading
+- `screen_watcher/events.py` — structured alerts and evidence
+- `screen_watcher/notifications.py` — replaceable output backends
+- `screen_watcher/replay.py` — deterministic replay of sanitized observations
+- `screen_watcher/cli.py` — operator commands and watch loop
 
-Screen Watcher currently provides:
+The historical `watcher.py` command remains as a small compatibility entry
+point.
 
-- anchored regions that follow a resized game window;
-- OCR of chat and other text regions;
-- frame-to-frame visual change and inactivity detection;
-- inventory occupancy and fill-rate monitoring;
-- item detection from visual signatures;
-- activity-stop detection from missing recurring messages;
-- supply-state tracking across repeated bank trips;
-- configurable cooldowns, suppression rules, urgency, and sounds;
-- per-rule alert history and inventory-cycle statistics;
-- calibration, screenshots, probing, and inventory diagnostics;
-- explicit profile selection for different activities;
-- singleton protection so two watchers cannot double every alert.
+## Requirements
 
-Detailed detector behaviour, measurements, and tuning notes live in
-[docs/detector-notes.md](docs/detector-notes.md).
+Runtime Python dependencies are declared in `pyproject.toml`. The current
+Linux capture stack also expects:
 
-## Quick start
-
-### 1. Install dependencies
-
-Screen Watcher currently expects:
-
-- Python 3
-- `numpy`
-- Pillow
 - `xdotool`
 - ImageMagick (`import`)
 - Tesseract OCR
 - `notify-send`
+- `paplay` for optional per-rule sounds
+
+On Arch/CachyOS:
+
+```bash
+sudo pacman -S xdotool imagemagick tesseract libnotify libpulse
+```
 
 On Debian/Ubuntu:
 
 ```bash
-sudo apt install xdotool imagemagick tesseract-ocr libnotify-bin python3-pil python3-numpy
+sudo apt install xdotool imagemagick tesseract-ocr libnotify-bin pulseaudio-utils
 ```
 
-For development and tests:
+## Installation
+
+For development:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 ```
 
-### 2. Enter the repository
+This installs the `screen-watcher` command.
+
+## Quick start
+
+List bundled profiles:
 
 ```bash
-cd screen-watcher
+screen-watcher list-profiles
 ```
 
-### 3. Choose a profile
-
-The repository currently includes:
-
-```text
-profiles/fishing.json
-profiles/thieving.json
-```
-
-Use `--config` before the subcommand:
+Verify all bundled profiles:
 
 ```bash
-python3 watcher.py --config profiles/fishing.json regions
-python3 watcher.py --config profiles/fishing.json watch
+screen-watcher validate-profiles
 ```
 
-or:
+Inspect resolved regions before enabling alerts:
 
 ```bash
-python3 watcher.py --config profiles/thieving.json regions
-python3 watcher.py --config profiles/thieving.json watch
+screen-watcher --profile fishing regions
+screen-watcher --profile fishing shot chat_tail
 ```
 
-The root `config.json` and `config.fishing.json` files remain compatibility
-copies for older workflows, but explicit profile paths are clearer and are
-recommended.
-
-### 4. Verify regions before watching
+Run the watcher:
 
 ```bash
-python3 watcher.py --config profiles/fishing.json regions
-python3 watcher.py --config profiles/fishing.json shot chat_tail
+screen-watcher --profile fishing watch
 ```
 
-If the regions do not match your interface layout, calibrate them before
-depending on alerts:
+Run without desktop popups or sounds while tuning rules:
 
 ```bash
-python3 watcher.py --config profiles/fishing.json calibrate
+screen-watcher --profile fishing watch --dry-run
 ```
 
-### 5. Start the watcher
+The old entry point still works:
 
 ```bash
-python3 watcher.py --config profiles/fishing.json watch
+python watcher.py --profile fishing watch
 ```
 
-Stop it with Ctrl-C.
+## Profile selection
 
-To keep it running after a terminal closes:
+Bundled profiles live under `profiles/`. Select one by name:
 
 ```bash
-nohup python3 watcher.py --config profiles/fishing.json watch \
-  >> state/watch.log 2>&1 &
+screen-watcher --profile thieving watch
 ```
+
+or pass an explicit file:
+
+```bash
+screen-watcher --config /path/to/custom-profile.json watch
+```
+
+Profiles are validated before capture begins. Unknown fields are rejected so a
+typo such as `cooldwon` cannot silently become a runtime failure.
+
+Every profile declares:
+
+```json
+{
+  "schema_version": 1,
+  "profile_version": 1,
+  "profile_type": "skill"
+}
+```
+
+`profile_type` is normally `skill`, `quest`, or `activity`. Activity
+profiles can add `activity_type`, such as `boss` or `minigame`. The legacy
+`boss` profile type is still accepted for migration, but new profiles should
+use `activity`.
+
+See `docs/profile-schema.md` for the schema and detector-specific fields.
 
 ## Commands
 
-| command | purpose |
-|---|---|
-| `regions` | show configured regions resolved against the current window |
-| `calibrate` | save a scaled full-window image for coordinate calibration |
-| `shot [region]` | capture one configured region |
-| `probe` | measure frame-to-frame differences for threshold tuning |
-| `inv` | show a live inventory slot-change feed |
-| `stats` | analyse logged inventory fill/bank cycles |
-| `watch` | run the polling and notification loop |
-| `alerts` | show per-rule alert counts and rates |
-| `status` | report whether a watcher process is running |
-| `pause` | pause the running watcher |
-| `resume` | resume the paused watcher |
-
-Use:
-
-```bash
-python3 watcher.py --help
-python3 watcher.py <command> --help
-```
-
-for command-specific options.
-
-Only one watcher may run at a time. A second instance refuses to start.
-`state/watcher.pid` is used as the singleton marker, and stale PID files are
-reclaimed after the recorded process is verified.
-
-## Profiles
-
-Each activity should have an explicit profile rather than combining unrelated
-rules into one file.
-
-Examples:
+Common commands:
 
 ```text
-profiles/fishing.json
-profiles/thieving.json
-profiles/quest-dragon-slayer.json
-profiles/boss-vindicta.json
+list-profiles       list bundled profiles
+validate-profiles   validate every bundled profile
+regions             show resolved regions and active rules
+calibrate           capture a scaled full-window calibration image
+shot                capture one configured region
+probe               measure frame-to-frame visual noise
+inv                 inspect inventory slot changes
+watch               run the observer
+status              show process status and recent health telemetry
+pause               SIGSTOP the running watcher
+resume              SIGCONT the running watcher
+stats               summarize inventory fill/bank cycles
+alerts              summarize alert history
+replay              replay sanitized observations through live rule logic
 ```
 
-Only the first two are currently included.
+## One frame per polling cycle
 
-Top-level profile settings:
+A watch cycle captures the game window once. Every detector receives a crop of
+that same immutable frame. This prevents one rule from seeing a different
+moment than another and avoids launching ImageMagick separately for each
+region.
 
-| setting | purpose |
-|---|---|
-| `window.wm_class` | X11/XWayland class used to locate the game window |
-| `skill` | human-readable activity/skill identity |
-| `profile_type` | `skill`, `quest`, or `boss` |
-| `interval` | delay configured between watch-loop iterations |
-| `regions` | anchored capture rectangles and optional grids |
-| `rules` | detectors, thresholds, cooldowns, messages, and notification options |
+OCR uses the same captured frame. A Tesseract failure raises an OCR-specific
+error and is treated as an unavailable detector, not as an empty chat box.
+Consequently, OCR failure does not advance an activity-stop timer.
 
-Profiles are validated before the watcher searches for the game window.
-Validation covers required sections, anchors, grid bounds, rule kinds, region
-references, numeric values, and regular-expression syntax.
+## Timing model
 
-### Switching profiles
+Screen Watcher deliberately uses two clocks:
 
-Profile changes are explicit. Stop the current watcher and start another one
-with the new profile:
+- `time.monotonic()` for cooldowns, inactivity windows, polling deadlines, and
+  other durations;
+- `time.time()` for persisted JSONL timestamps.
 
-```bash
-python3 watcher.py status
-python3 watcher.py --config profiles/fishing.json watch
-# Ctrl-C
-python3 watcher.py --config profiles/thieving.json watch
-```
+Monotonic timestamps are never written to long-lived history because they are
+not meaningful across reboots.
 
-Do not edit a profile underneath a running watcher and assume it will be
-reloaded. Configuration is read at startup.
+If a detector cycle takes longer than the configured interval, missed polls are
+skipped. The watcher does not issue a burst of catch-up captures.
 
-The watcher prints the selected profile at startup, and alert-log records
-include its skill identity.
+## Evidence and health
 
-## How regions work
+Alerts carry structured evidence in addition to their human-readable message.
+Examples include the OCR line that matched, visual-difference magnitude,
+inventory occupancy, fill rate, elapsed inactivity, or item count.
 
-Regions are anchored to the game window instead of relying entirely on absolute
-desktop coordinates.
+Alert history is stored as JSONL. `screen-watcher status` also reads the
+latest health snapshot and reports capture health and rule-specific errors.
 
-Example:
+## Runtime data and privacy
 
-```json
-{
-  "anchor": "bottom-left",
-  "dx": 5,
-  "dy": -57,
-  "w": 500,
-  "h": 375
-}
-```
+Runtime state no longer lives inside the Git repository.
 
-Supported anchors are:
+Screen Watcher follows the XDG directory convention:
 
 ```text
-top-left
-top-right
-bottom-left
-bottom-right
-top-center
-bottom-center
-center
+~/.config/screen-watcher/
+~/.local/state/screen-watcher/
+~/.cache/screen-watcher/
 ```
 
-For right/bottom anchors, negative `dx` or `dy` values measure inward from
-that edge. When the detected game window changes size, the watcher resolves the
-regions again.
+Calibration and diagnostic screenshots go under the cache directory unless an
+explicit `--out` path is supplied. Screenshots and live runtime logs should
+not be committed. Test fixtures must be deliberately sanitized.
 
-Inventory-like regions can also declare a grid:
+## Replay testing
 
-```json
-{
-  "grid": {
-    "x0": 17,
-    "y0": 86,
-    "cell_w": 61,
-    "cell_h": 55,
-    "cols": 5,
-    "rows": 6
-  }
-}
-```
-
-Grid coordinates are relative to the region's top-left corner.
-
-## Rule types
-
-| kind | fires when | typical use |
-|---|---|---|
-| `inventory` | inventory approaches full or remains full | banking / overflow |
-| `activity` | a recurring OCR event stops arriving | stopped skilling activity |
-| `item_count` | a visually identified carried item falls below a threshold | consumables or tools |
-| `supply` | repeated bank/preset evidence indicates low or exhausted stock | long-run supplies |
-| `idle` | a region remains visually unchanged | stalled XP/activity |
-| `change` | a region changes beyond a configured threshold | appearance/state changes |
-| `ocr` | a newly observed line matches a regular expression | level-ups, messages, events |
-
-`cooldown` throttles repeat alerts per rule.
-
-For detector-specific algorithms, measurements, false-positive handling, and
-the fishing experiments that informed the current defaults, see
-[docs/detector-notes.md](docs/detector-notes.md).
-
-## Diagnosing excessive alerts
-
-Every delivered notification is recorded in `state/alerts.jsonl`. Use:
+Text-based detectors can be replayed without RuneScape, X11, or Tesseract:
 
 ```bash
-python3 watcher.py alerts
+screen-watcher replay tests/fixtures/activity-replay.json --evidence
 ```
 
-Example output:
-
-```text
-15 alerts over 4.57h  (3.3/hour)
-
-rule                  count  per hour  median gap
-pack_nearly_full         15       3.3         82s
-```
-
-If a rule's median gap closely matches the activity's natural cycle, it may be
-firing once per cycle rather than only when intervention is useful.
-
-For inventory tuning:
-
-```bash
-python3 watcher.py stats
-```
-
-For visual thresholds:
-
-```bash
-python3 watcher.py --config profiles/fishing.json probe
-```
-
-## X11 / XWayland access
-
-The watcher must be able to access the active X/XWayland session. This matters
-especially when it is launched from a service, automation shell, or other
-environment that does not inherit the desktop session.
-
-The program attempts to recover `DISPLAY` and `XAUTHORITY` from a live
-desktop process such as Plasma/KWin or GNOME Shell when needed.
-
-To inspect the values manually on Plasma:
-
-```bash
-tr '\0' '\n' < /proc/$(pgrep -u "$USER" plasmashell | head -1)/environ \
-  | grep -E '^(DISPLAY|XAUTHORITY)='
-```
-
-If window discovery fails, first verify:
-
-```bash
-xdotool search --onlyvisible --class steam_app_1343400
-```
-
-The exact `wm_class` is profile-specific and can be changed.
-
-## Runtime files
-
-Runtime state is stored under `state/` and ignored by Git except for the
-placeholder file.
-
-| path | contents |
-|---|---|
-| `watch.log` | stdout/stderr when started with the background example |
-| `alerts.jsonl` | structured notification history |
-| `occupancy.jsonl` | inventory transitions used by `stats` |
-| `watcher.pid` | singleton process marker |
-| temporary captures | local OCR/image-analysis scratch data |
-
-Do not commit runtime screenshots, logs, or account-specific captures unless
-they have been deliberately sanitized and added as test fixtures.
+Replay uses the same text-rule evaluation functions as the live watcher. This
+makes detector changes regression-testable without reproducing the gameplay
+session.
 
 ## Development
 
-Run tests:
+Run the local checks with:
 
 ```bash
-.venv/bin/python -m pytest -q
+python -m compileall -q screen_watcher watcher.py
+screen-watcher validate-profiles
+pytest
+flake8 screen_watcher watcher.py tests
+mypy screen_watcher
+python -m build
 ```
 
-Run the lint policy used by CI:
+GitHub Actions performs compilation, profile validation, tests with coverage,
+linting, type checking, and package building.
 
-```bash
-.venv/bin/python -m flake8 watcher.py tests \
-  --ignore=E226,E501,E702,W503,W504
-```
+## Extending Screen Watcher
 
-The GitHub Actions workflow runs pytest and Flake8 on pushes and pull requests.
-It does not run live capture tests because CI has no RuneScape window,
-X session, or desktop notification service.
+Do not create a new detector when an existing signal extractor and typed rule
+can express the behavior. New activity coverage should normally be introduced
+as:
 
-Rule evaluation returns an `Alert` value, while notification delivery,
-sound playback, and alert logging happen afterward. This keeps part of the
-detector logic testable without a desktop session.
+1. a versioned profile;
+2. measured thresholds or verified OCR patterns;
+3. sanitized replay/fixture data;
+4. tests describing the expected alert sequence.
 
-Implementation history, reliability fixes, capture benchmarks, and known
-architectural limitations are documented in
-[docs/engineering-notes.md](docs/engineering-notes.md).
+New capture or detector code belongs in the package layer, not inside the
+profile.
 
-## Known limitations
-
-- Linux/X11/XWayland is the currently implemented capture path.
-- Desktop notifications are the implemented notification backend.
-- OCR-based rules require the relevant text region to remain visible.
-- Region calibration depends on the user's RuneScape interface layout.
-- Only fishing and thieving profiles are currently included.
-- Quest and boss profile types are accepted by validation, but the repository
-  does not yet include complete quest or boss profiles.
-- `watcher.py` is still monolithic and is planned to be split into capture,
-  profiles, signals, rules, events, notifications, and CLI modules.
-- Multiple rules can still perform separate image captures of the same region
-  during one polling cycle; per-cycle frame sharing is planned.
-- Image/OCR capture still uses shared scratch paths, so concurrent diagnostic
-  capture commands should be avoided while the watcher is active.
-- The loop currently sleeps after processing each cycle, so expensive OCR or
-  capture work increases the effective poll period beyond `interval`.
-
-See [docs/application-outline.md](docs/application-outline.md) for the planned
-architecture and delivery stages.
-
-## Release archives
-
-To build an archive containing only Git-tracked files:
-
-```bash
-git archive --format=tar.gz --prefix=screen-watcher/ \
-  -o screen-watcher.tar.gz HEAD
-```
-
-This excludes ignored runtime state, virtual environments, local calibration
-captures, and Python caches.
+See `docs/application-outline.md`, `docs/profile-schema.md`,
+`docs/detector-notes.md`, and `docs/engineering-notes.md` for further
+design notes.
 
 ## License
 
-See [LICENSE](LICENSE).
+MIT.

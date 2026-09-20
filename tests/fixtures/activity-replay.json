@@ -1,0 +1,16 @@
+{
+  "profile": "fishing",
+  "rule": {
+    "name": "fishing_stopped",
+    "kind": "activity",
+    "region": "chat_tail",
+    "pattern": "you catch",
+    "stop_seconds": 5,
+    "cooldown": 0
+  },
+  "observations": [
+    {"t": 10, "text": "You catch a shark."},
+    {"t": 12, "text": "You catch a shark."},
+    {"t": 16, "text": "A clan message appears."}
+  ]
+}

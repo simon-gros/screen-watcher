@@ -2,185 +2,154 @@
 
 ## Purpose
 
-Screen Watcher should become a read-only observability and notification
-application for RuneScape gameplay. It observes the client, interprets
-skill-specific and activity-specific signals, and tells the player when
-attention is needed. It should cover the whole game rather than being a
-fishing/thieving tool built around urns and bait.
+Screen Watcher is a read-only observability application for RuneScape. It
+observes the client, extracts reusable signals, evaluates an explicitly chosen
+activity profile, and tells the player when attention is needed. It does not
+perform gameplay actions.
 
-It must not play the game: no clicks, key presses, movement, combat actions,
-banking, item use, or other synthetic input. The player remains responsible for
-all decisions and actions.
+## Product boundary
 
-## Scope
+The application may observe:
 
-The final application should support three profile families:
+- pixels and frame changes;
+- OCR text;
+- inventory occupancy and visual item signatures;
+- XP, health, prayer, adrenaline, timers, targets, phases, and interface state;
+- elapsed time and transitions derived from those observations.
 
-1. **Skill profiles** — one profile per each of RuneScape's 29 skills.
-2. **Quest profiles** — one profile per quest or quest activity where objective
-   and progression cues matter.
-3. **Boss/activity profiles** — one profile per boss, encounter, minigame, or
-   other repeatable activity with its own phases and failure states.
+It must not generate mouse, keyboard, movement, combat, banking, item-use, or
+other synthetic game input.
 
-Fishing, thieving/pickpocketing, urns, and bait are initial examples only. They
-are not the product boundary.
+## Profile families
 
-## User experience
+New profiles should use one of these families:
 
-The player should be able to:
+- `skill` — a RuneScape skill or concrete training activity;
+- `quest` — a quest or quest-stage workflow;
+- `activity` — bosses, minigames, repeatable encounters, and other activities.
 
-- select one explicit profile before starting;
-- see the profile family, name, version, and monitored rules at startup;
-- switch profiles using a visible stop–switch–start workflow;
-- receive alerts with profile, activity, rule, severity, and recommended action;
-- inspect why an alert fired and which evidence supported it;
-- review alert rates, false-positive patterns, and recent activity history;
-- run calibration and diagnostics without enabling notifications;
-- disable individual rules or run in dry-run mode;
-- maintain separate profiles for different activities within the same skill.
+Activity profiles add `activity_type`, for example `boss` or `minigame`.
+The older top-level `boss` type is accepted only for migration.
 
-Automatic inference of the current activity should be optional and
-conservative. A generic XP tick, inventory change, or open game window is not
-enough evidence to silently switch from one profile to another.
+Profiles are versioned independently from the application schema.
 
-## System layers
+## Implemented architecture
 
 ```text
 Profile manager
-    -> capture and observation
-    -> signal extraction
-    -> activity/rule evaluation
-    -> evidence and event model
-    -> notification and history outputs
+    -> platform/window discovery
+    -> one-frame-per-cycle capture
+    -> reusable signal extraction
+    -> typed rule evaluation
+    -> structured Alert + evidence
+    -> terminal / JSONL / desktop backends
 ```
 
-### Profile manager
+The runtime is now split across the `screen_watcher` package rather than a
+single application module. `watcher.py` is only a compatibility entry point.
 
-Profiles should be versioned, validated JSON or a similarly portable format.
-Each profile should declare:
+### Capture
 
-- `profile_type`: `skill`, `quest`, or `boss`;
-- activity and skill identity;
-- required regions and calibration assumptions;
-- observations and detectors;
-- thresholds, cooldowns, and suppressions;
-- supplies, resources, outputs, and failure conditions;
-- profile-specific documentation and source links.
+Each polling cycle captures one full game-window frame. Region consumers crop
+that shared frame. OCR and image detectors therefore observe the same instant
+and repeated ImageMagick launches are avoided.
 
-The manager should reject incomplete or ambiguous profiles before screen
-capture begins. Profile identity should be present in startup output, logs,
-alerts, and exported diagnostics.
+### Time
 
-### Capture and observation
+Duration logic uses a monotonic clock. Persistent logs use wall-clock Unix
+timestamps. Missed polling deadlines are skipped rather than replayed.
 
-The capture layer should resolve the game window, maintain anchored regions,
-detect resize/reacquisition, and expose frames without knowing what a skill or
-boss means. It should support screenshots, frame sampling, OCR input, and
-optional future observation backends.
+### Signals
 
-### Signal extraction
+Reusable signals currently include:
 
-Reusable extractors should convert raw observations into signals such as:
+- OCR and normalized line identity;
+- mean absolute frame differences;
+- inventory occupancy;
+- per-slot signatures;
+- simple item-colour counts;
+- fill-rate estimates.
 
-- OCR lines and normalized message events;
-- frame differences and region state changes;
-- XP, life-point, prayer, adrenaline, and resource-bar changes;
-- inventory occupancy and item signatures;
-- action-bar, target, boss-health, timer, and phase indicators;
-- interface/objective/dialogue state;
-- elapsed time since the last successful activity.
+Tesseract failure is represented as an OCR error, not an empty text result.
 
-Extractors should be testable with recorded frames and OCR fixtures, without a
-live X session.
+### Rules
 
-### Rule evaluation
+Runtime rules are typed by detector family rather than one dataclass containing
+every possible detector field. Profile validation derives the allowed fields
+from those rule classes and rejects unknown properties before capture begins.
 
-Rules should be pure decision logic where possible. An evaluator should return
-an event containing the profile, rule, timestamp, evidence, severity, and
-human-readable message. It should not directly call desktop notification,
-sound, or filesystem APIs.
+Current rule families are:
 
-Rules should support:
+- visual change;
+- visual idle;
+- OCR match;
+- activity stop;
+- inventory lead/overflow;
+- item count;
+- supply streak.
 
-- positive events, such as a kill, level-up, completion, or resource gain;
-- negative events, such as inactivity, depletion, failure, or death;
-- temporal windows, cooldowns, streaks, and re-arming;
-- explicit suppression for expected transitions and overlays;
-- dry-run evaluation and replay against historical observations.
+### Events and outputs
 
-### Evidence and history
+Rule evaluation produces a structured `Alert` containing presentation fields,
+profile identity, confidence when available, and machine-readable evidence.
 
-Every alert should be explainable. Store bounded evidence such as the matched
-OCR line, measured diff, item count, phase label, or elapsed interval. Runtime
-history must remain local and ignored by Git by default. Sensitive screenshots
-should be opt-in fixtures, never accidental repository content.
+Delivery is independent of evaluation. Current backends are:
 
-### Outputs
+- terminal;
+- local JSONL history;
+- Linux desktop notifications and optional sounds.
 
-Notification delivery should be replaceable and independent of rule logic:
+### Replay
 
-- desktop notifications and sounds;
-- terminal/log output;
-- structured JSONL history;
-- optional future integrations such as dashboards or external channels.
+Sanitized observation files can exercise text-rule logic without a live game
+client. Replay and live OCR share the same pure evaluation functions.
 
-All outputs should include profile identity so events from adjacent activities
-cannot be confused.
+### Runtime state
 
-## Safety and reliability requirements
+State and captures use XDG directories rather than the source checkout.
+Repository screenshots must be deliberate sanitized fixtures.
 
-- Read-only operation must remain a hard architectural boundary.
-- Profile changes must be explicit and visible.
-- Stale PID files must never signal unrelated processes.
-- Missing windows, X authentication failures, truncated captures, OCR errors,
-  and malformed profiles must produce clear diagnostics.
-- One broken rule must not silently disable every other rule.
-- Notifications must be rate-limited, explainable, and suppressible.
-- Secrets, account data, screenshots, and runtime logs must not enter Git.
-- CI must validate profiles, run unit tests, compile the application, and test
-  the non-desktop path.
+## Reliability requirements
 
-## Delivery stages
+- profile validation precedes capture;
+- stale or PID-reused singleton files must not signal unrelated processes;
+- one broken rule must not terminate all other rules;
+- capture failure and OCR failure are distinct;
+- resize or window reacquisition resets detector observation state;
+- alert history contains profile identity and evidence;
+- health telemetry reports capture state and rule errors;
+- CI compiles the package, validates profiles, runs tests, lints, type-checks,
+  and builds the distributable package.
 
-### Current foundation
+## Current coverage
 
-- Anchored region capture and calibration
-- OCR, pixel, inventory, activity, and idle detectors
-- Explicit skill profiles for fishing and thieving
-- Profile validation and skill-aware alert logs
-- Quest/boss profile type support and development tests
+Bundled, calibrated profiles:
 
-### Next engineering stage
+- Fishing
+- Thieving / pickpocketing
 
-- Split the monolithic script into capture, profiles, signals, rules, events,
-  notifications, and CLI modules.
-- Add a profile registry and `list-profiles` command.
-- Add dry-run and replay commands.
-- Introduce fake capture, OCR, clock, and notification interfaces.
-- Add evidence to the `Alert` model and JSONL records.
+The project should not claim coverage for activities that have only planning
+notes. New activities require verified cues, thresholds, and regression
+fixtures.
 
-### Broader coverage stage
+## Next coverage work
 
-- Build profiles for the remaining skills from RuneScape Wiki research.
-- Add quest and boss profile templates with encounter-specific state machines.
-- Add recorded fixtures for common overlays, failures, deaths, and transitions.
-- Add profile-level calibration and confidence reporting.
+With the architecture stabilized, additional skills should mostly be profile
+and calibration work. Good next candidates are activities with clear recurring
+signals, such as Mining, Woodcutting, Archaeology, Divination, Cooking, or
+Smithing.
 
-### Mature application stage
-
-- Provide a stable CLI and configuration format.
-- Offer an operator-facing status/diagnostics view.
-- Support profile packages and version compatibility.
-- Add optional dashboards and notification integrations without coupling them to
-  game control.
-- Publish releases with tested profile bundles and migration notes.
+Boss and quest support should begin only with a specific encounter or quest,
+not a generic "boss" or "quest" detector. Their profiles should model
+activity-specific phases, objectives, supplies, suppressions, and failure
+states.
 
 ## Non-goals
 
-Screen Watcher should not become:
+Screen Watcher is not:
 
 - a bot or macro;
 - an input automation framework;
-- a combat rotation assistant that chooses or performs actions;
-- a credential, browser, clipboard, or network data collector;
-- a repository of committed personal screenshots or runtime logs.
+- an autonomous combat system;
+- a credential, clipboard, browser-history, or network-data collector;
+- a storage location for unsanitized personal screenshots.

@@ -1,4 +1,6 @@
 {
+  "schema_version": 1,
+  "profile_version": 1,
   "skill": "thieving",
   "profile_type": "skill",
   "window": {
