@@ -212,3 +212,52 @@ git archive --format=tar.gz --prefix=screen-watcher/ \
 
 This avoids accidentally bundling virtual environments, runtime logs, caches,
 or local calibration screenshots.
+
+
+## Priority 0, step 1 — capture backend abstraction
+
+`CaptureBackend` and `GameInstance` separate *which window and how do we get
+pixels* from *what those pixels mean*.
+
+```text
+GameInstance(wm_class, backend)
+    .acquire()            find the window
+    .refresh_size()       notice a resize
+    .begin_cycle(n)       start a sampling pass
+    .frame(box, mask)     cached RGB array
+    .save(box, path)      write a capture to disk
+```
+
+`X11ImageMagickBackend` wraps the existing xdotool/ImageMagick path unchanged.
+It stays the default deliberately: a native XCB/XShm backend (step 3) has to be
+benchmarked against a known quantity, so the current behaviour must remain
+measurable rather than being rewritten at the same time.
+
+### Why introduce the seam before the backends exist
+
+Retrofitting an interface underneath a dozen call sites is the expensive part.
+Adding it first means the Wayland/PipeWire backend, the replay backend, and the
+`doctor` command each plug into a defined surface instead of each one
+re-plumbing capture.
+
+It also makes capture testable without a desktop. `RecordingBackend` in the
+test suite runs with no X11, no ImageMagick, and no game, which is what lets
+these paths run in CI at all.
+
+### Shared frames
+
+`GameInstance` owns a per-cycle frame cache keyed on `(box, mask)`.
+
+- Several detectors reading one region in one cycle cost **one** capture.
+- A masked view is derived from the cached raw frame, so asking for both a
+  plain and a `bright`-masked view of the same region still costs one capture.
+- `begin_cycle` keys the cache on an explicit cycle number rather than a
+  timestamp, so every detector in a pass sees identical pixels and two rules
+  cannot disagree about a frame that changed between them.
+- A detected resize clears the cache, so stale geometry cannot be served.
+
+### Not yet done
+
+The rule evaluators still call `capture_array`/`ocr_cached` with a raw window
+id. Migrating them onto `GameInstance` is step 10 of the Priority 0 order and
+is what finally removes the direct ImageMagick coupling from profile code.
