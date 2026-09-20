@@ -153,9 +153,10 @@ Only one watcher may run at a time. A second instance refuses to start, because
 two watchers double every alert — which looks exactly like a mistuned rule and
 sends you tuning thresholds that were never the problem. The pid lives in
 `state/watcher.pid`; a stale file from a crash is reclaimed automatically.
-`pause` and `resume` verify the recorded process command line and Linux process
-start time before signaling it, so a reused PID cannot target an unrelated
-process.
+`pause` and `resume` verify the current process command line and take two
+closely spaced process-identity readings before signaling, so a reused PID
+cannot target an unrelated process. The PID file stores only the numeric PID;
+it is not a persistent start-time record.
 
 ## Runtime files
 
