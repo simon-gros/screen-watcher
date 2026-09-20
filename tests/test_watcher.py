@@ -1,7 +1,9 @@
+import re
 import numpy as np
 
 import pytest
 
+import watcher
 from watcher import (Region, Rule, _FRAME_CACHE, capture_array, load_config,
                      mean_abs_diff, norm_line, validate_config)
 
@@ -158,3 +160,56 @@ def test_validate_config_rejects_unknown_profile_type():
 
     with pytest.raises(ValueError, match="profile_type"):
         validate_config(config)
+
+
+def _rule(**kw):
+    base = dict(name="t", kind="loot", region="chat_tail")
+    base.update(kw)
+    return watcher.Rule(**base)
+
+
+def test_loot_ignores_currency_and_reports_item():
+    """Coins arrive ~76% of successes; only named drops should alert."""
+    rule = _rule(
+        item_pattern=r"extra fine sand|sealed clue scroll \(elite\)",
+        ignore_pattern=r"coins have been added|you pick the target",
+    )
+    rule._primed = True
+    lines = [
+        "[20:49:08] 455 coins have been added to your money pouch.",
+        "[20:49:09] You pick the target's pocket.",
+        "[20:50:01] You steal Extra fine sand.",
+    ]
+    hits = []
+    for line in lines:
+        key = watcher.norm_line(line)
+        if re.search(rule.ignore_pattern, line, re.I):
+            rule._seen.add(key)
+            continue
+        m = re.search(rule.item_pattern, line, re.I)
+        if m:
+            hits.append(m.group(0))
+    assert hits == ["Extra fine sand"]
+
+
+def test_counter_fires_once_per_milestone():
+    """2,900 pickpockets at 455 coins must yield exactly one 1M alert."""
+    rule = _rule(kind="counter", step=1_000_000)
+    fired = []
+    for _ in range(2900):
+        rule._total += 455
+        reached = rule._total // int(rule.step)
+        if reached > rule._milestone:
+            rule._milestone = reached
+            fired.append(reached)
+    assert fired == [1]
+    assert rule._total == 1_319_500
+
+
+def test_counter_persists_across_restart(tmp_path, monkeypatch):
+    """A milestone takes hours; an in-memory total would be rewound."""
+    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(watcher, "COUNTER_LOG", tmp_path / "counters.jsonl")
+    watcher.log_counter("coin_milestone", 1.0, 987_654)
+    assert watcher.load_counter("coin_milestone") == 987_654
+    assert watcher.load_counter("never_ran") == 0

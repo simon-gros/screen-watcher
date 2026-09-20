@@ -45,7 +45,7 @@ ACTIVE_SKILL = ""
 ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
 RULE_KINDS = {"inventory", "activity", "supply", "item_count",
-              "ocr", "change", "idle"}
+              "ocr", "change", "idle", "loot", "counter"}
 PROFILE_TYPES = {"skill", "quest", "boss"}
 
 
@@ -307,6 +307,42 @@ def diff_slots(prev: list[dict], cur: list[dict],
 
 
 OCCUPANCY_LOG = STATE_DIR / "occupancy.jsonl"
+COUNTER_LOG = STATE_DIR / "counters.jsonl"
+
+
+def log_counter(name: str, ts: float, total: int) -> None:
+    """Persist a running counter so a restart does not reset progress.
+
+    A milestone like 'one million coins' takes hours of pickpocketing. Holding
+    the total only in memory would mean a watcher restart - or the game window
+    briefly disappearing - silently rewinds it to zero and the alert never
+    arrives.
+    """
+    try:
+        STATE_DIR.mkdir(exist_ok=True)
+        with COUNTER_LOG.open("a") as f:
+            f.write(json.dumps({"t": round(ts, 1), "name": name,
+                                "total": total}) + "\n")
+    except OSError:
+        pass
+
+
+def load_counter(name: str) -> int:
+    """Last recorded total for a counter, or 0 if it has never run."""
+    if not COUNTER_LOG.exists():
+        return 0
+    total = 0
+    try:
+        for line in COUNTER_LOG.read_text().splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("name") == name:
+                total = int(row.get("total", 0))
+    except OSError:
+        return 0
+    return total
 
 
 def log_occupancy(ts: float, occ: int) -> None:
@@ -563,6 +599,12 @@ class Rule:
     out_pattern: str | None = None
     out_message: str = ""
     warn_streak: int = 3
+    # loot
+    item_pattern: str | None = None
+    ignore_pattern: str | None = None
+    # counter
+    step: float = 1_000_000
+    milestone_message: str = "{total} reached."
     # item_count
     min_blue: float = 40.0
     warn_below: int = 2
@@ -582,6 +624,9 @@ class Rule:
     _last_activity: float = field(default=0.0, repr=False)
     _streak: int = field(default=0, repr=False)
     _level: str = field(default="", repr=False)
+    _counts: dict = field(default_factory=dict, repr=False)
+    _total: int = field(default=0, repr=False)
+    _milestone: int = field(default=0, repr=False)
     _level_since: float = field(default=0.0, repr=False)
 
     def ready(self, now: float) -> bool:
@@ -933,9 +978,107 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
             rule._streak = 0
 
 
+def _eval_loot(rule: Rule, wid: str, box, now: float,
+               cycle: int = 0) -> Alert | None:
+    """Announce a named item drop, ignoring the routine currency line.
+
+    Pickpocketing a Menaphos market guard yields coins on ~76% of successes,
+    straight into the money pouch. Alerting on those would fire roughly every
+    two seconds and drown the drops that actually matter - an elite clue scroll
+    is ~0.5%, a master ~0.005%. So `ignore_pattern` drops the currency line and
+    the plain success line, and only a match against `item_pattern` - built
+    from the wiki drop table - is announced.
+
+    The item name is echoed back in the alert body, because 'you got something'
+    is not useful when the table spans extra fine sand and a master clue.
+    """
+    text = ocr_cached(wid, box, cycle)
+    if not rule.item_pattern:
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        key = norm_line(line)
+        if len(key) < 8 or key in rule._seen:
+            continue
+        if rule.ignore_pattern and re.search(rule.ignore_pattern, line, re.I):
+            rule._seen.add(key)
+            continue
+        m = re.search(rule.item_pattern, line, re.I)
+        if not m:
+            continue
+        rule._seen.add(key)
+        if not rule._primed:
+            continue
+        item = (m.group(0) or "").strip(" .,;:")
+        rule._counts[item.lower()] = rule._counts.get(item.lower(), 0) + 1
+        if rule.ready(now):
+            n = rule._counts[item.lower()]
+            suffix = f" (x{n} this session)" if n > 1 else ""
+            return rule.fire(now, f"{item}{suffix}")
+    rule._primed = True
+    if len(rule._seen) > 400:
+        rule._seen.clear()
+        rule._primed = False
+    return None
+
+
+def _eval_counter(rule: Rule, wid: str, box, now: float,
+                  cycle: int = 0) -> Alert | None:
+    """Sum a repeating numeric chat line and alert on each milestone.
+
+    Coins from pickpocketing go to the money pouch, which the backpack grid
+    cannot see - the only evidence is the chat line, so the total has to be
+    accumulated from it. Each distinct line is counted once via the same
+    dedup key the OCR rules use, because the chat tail keeps old lines on
+    screen for many polls.
+
+    Milestones fire per `step` (1,000,000 by default), not per gain, so a
+    target of a million coins produces one alert rather than ~2,200.
+    """
+    text = ocr_cached(wid, box, cycle)
+    if not rule.pattern:
+        return None
+    gained = 0
+    for line in text.splitlines():
+        line = line.strip()
+        key = norm_line(line)
+        if len(key) < 8 or key in rule._seen:
+            continue
+        m = re.search(rule.pattern, line, re.I)
+        if not m:
+            continue
+        rule._seen.add(key)
+        if not rule._primed:
+            continue
+        try:
+            gained += int(re.sub(r"[^0-9]", "", m.group(1)))
+        except (ValueError, IndexError):
+            continue
+    if len(rule._seen) > 400:
+        rule._seen.clear()
+        rule._primed = False
+    if not rule._primed:
+        rule._primed = True
+        return None
+    if gained:
+        rule._total += gained
+        log_counter(rule.name, now, rule._total)
+    step = max(1, int(rule.step))
+    reached = rule._total // step
+    if reached > rule._milestone:
+        rule._milestone = reached
+        return rule.fire(now, rule.milestone_message.format(
+            total=f"{rule._total:,}", n=reached, step=f"{step:,}"))
+    return None
+
+
 def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
              cycle: int = 0) -> Alert | None:
     box = region.resolve(size)
+    if rule.kind == "loot":
+        return _eval_loot(rule, wid, box, now, cycle)
+    if rule.kind == "counter":
+        return _eval_counter(rule, wid, box, now, cycle)
     if rule.kind == "inventory":
         return _eval_inventory(rule, wid, region, box, now, cycle)
     if rule.kind == "activity":
@@ -1374,6 +1517,12 @@ def cmd_watch(args) -> None:
              for r in cfg["rules"] if r.get("enabled", True)]
     if not rules:
         sys.exit("no enabled rules")
+    for r in rules:
+        if r.kind == "counter":
+            r._total = load_counter(r.name)
+            r._milestone = int(r._total // max(1, int(r.step)))
+            if r._total:
+                print(f"  {r.name}: resuming from {r._total:,}", flush=True)
 
     interval = cfg.get("interval", 1.0)
     wm_class = cfg["window"]["wm_class"]
