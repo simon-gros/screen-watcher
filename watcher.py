@@ -504,7 +504,8 @@ def play(sound: str | None) -> None:
 ALERT_LOG = STATE_DIR / "alerts.jsonl"
 
 
-def log_alert(rule_name: str, title: str, body: str) -> None:
+def log_alert(rule_name: str, title: str, body: str,
+              source_text: str | None = None) -> None:
     """Append a fired alert.
 
     Without this there is no record of what fired and when, so a complaint that
@@ -516,20 +517,23 @@ def log_alert(rule_name: str, title: str, body: str) -> None:
     try:
         STATE_DIR.mkdir(exist_ok=True)
         with ALERT_LOG.open("a") as f:
-            f.write(json.dumps({
+            record = {
                 "t": round(time.time(), 1),
                 "skill": ACTIVE_SKILL or "unknown",
                 "rule": rule_name,
                 "title": title,
                 "body": body[:200],
-            }) + "\n")
+            }
+            if source_text is not None:
+                record["source_text"] = source_text[:200]
+            f.write(json.dumps(record) + "\n")
     except OSError:
         pass
 
 
 def notify(title: str, body: str, urgency: str = "normal",
            sound: str | None = None, timeout_ms: int = 8000,
-           rule_name: str = "") -> None:
+           rule_name: str = "", source_text: str | None = None) -> None:
     """Post a desktop notification.
 
     KDE treats `critical` urgency as sticky: it ignores the expiry timeout and
@@ -543,7 +547,7 @@ def notify(title: str, body: str, urgency: str = "normal",
     cmd += [title, body]
     subprocess.run(cmd, capture_output=True)
     play(sound)
-    log_alert(rule_name or title, title, body)
+    log_alert(rule_name or title, title, body, source_text)
     print(f"[{time.strftime('%H:%M:%S')}] NOTIFY {title}: {body}", flush=True)
 
 
@@ -561,6 +565,7 @@ class Alert:
     urgency: str
     sound: str | None
     timeout_ms: int
+    source_text: str | None = None
 
 
 @dataclass
@@ -569,6 +574,7 @@ class Rule:
     kind: str                       # idle | change | ocr
     region: str
     message: str = ""
+    alert_body: str = ""
     cooldown: float = 120.0
     mask: str | None = None
     sound: str | None = None
@@ -632,6 +638,7 @@ class Rule:
     _history: list = field(default_factory=list, repr=False)
     _full_since: float = field(default=0.0, repr=False)
     _last_activity: float = field(default=0.0, repr=False)
+    _last_activity_source: str | None = field(default=None, repr=False)
     _streak: int = field(default=0, repr=False)
     _level: str = field(default="", repr=False)
     _counts: dict = field(default_factory=dict, repr=False)
@@ -656,10 +663,21 @@ class Rule:
             return True
         return (now - self._last_fired) >= self.cooldown
 
-    def fire(self, now: float, body: str) -> Alert:
+    def fire(self, now: float, body: str, source_text: str | None = None,
+             **context) -> Alert:
         self._last_fired = now
-        return Alert(self.name, self.message or self.name, body,
-                     self.urgency, self.sound, self.timeout_ms)
+        rendered = body
+        if self.alert_body:
+            values = {
+                "body": body,
+                "line": source_text or body,
+                "source_text": source_text or "",
+                "text": source_text or body,
+                **context,
+            }
+            rendered = self.alert_body.format(**values)
+        return Alert(self.name, self.message or self.name, rendered,
+                     self.urgency, self.sound, self.timeout_ms, source_text)
 
     def reset(self) -> None:
         self._last = None
@@ -667,6 +685,7 @@ class Rule:
         self._history.clear()
         self._full_since = 0.0
         self._last_activity = 0.0
+        self._last_activity_source = None
         self._primed = False
         self._level = ""
         self._level_since = 0.0
@@ -731,7 +750,7 @@ def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float,
                     f"full in ~{eta:.0f}s. Head to the bank.")
         else:
             body = f"{free} slots left. Head to the bank."
-        return rule.fire(now, body)
+        return rule.fire(now, body, free=free, rate=rate, eta=eta)
 
 
 def _eval_overflow(rule: Rule, now: float, occ: int, free: int) -> Alert | None:
@@ -764,7 +783,7 @@ def _eval_overflow(rule: Rule, now: float, occ: int, free: int) -> Alert | None:
     if rule._armed and stuck >= rule.overflow_seconds and rule.ready(now):
         rule._armed = False
         return rule.fire(now, f"Pack full for {stuck:.0f}s - activity has stopped. "
-                         f"Check the game.")
+                         f"Check the game.", stuck=stuck)
 
 
 def _eval_activity(rule: Rule, wid: str, box, now: float,
@@ -806,6 +825,7 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
         if re.search(rule.pattern, line, re.I):
             rule._last_activity = now
             rule._armed = True
+            rule._last_activity_source = line
     if len(rule._seen) > 400:
         rule._seen.clear()
         rule._primed = False
@@ -824,7 +844,8 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
     if rule._armed and quiet >= rule.stop_seconds and rule.ready(now):
         rule._armed = False
         return rule.fire(now, f"No matching activity for {quiet:.0f}s. "
-                         f"Check the game.")
+                         f"Check the game.",
+                         source_text=rule._last_activity_source, quiet=quiet)
 
 
 def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
@@ -925,10 +946,12 @@ def _eval_item_count(rule: Rule, wid: str, region: "Region", box,
     if level == "out":
         stuck = now - rule._level_since
         extra = f" (empty for {stuck/60:.0f} min)" if stuck >= 120 else ""
-        return rule.fire(now, (rule.out_message or f"Out of {rule.item}.") + extra)
+        return rule.fire(now, (rule.out_message or f"Out of {rule.item}.") + extra,
+                         n=n, level=level, stuck=stuck)
     else:
         noun = rule.item.rstrip("s") if n == 1 else rule.item
-        return rule.fire(now, f"{n} {noun} left. Restock on the next bank trip.")
+        return rule.fire(now, f"{n} {noun} left. Restock on the next bank trip.",
+                         n=n, noun=noun, level=level)
 
 
 def _eval_supply(rule: Rule, wid: str, box, now: float,
@@ -958,6 +981,8 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
     saw_trip = False
     saw_fail = False
     saw_out = False
+    fail_line = None
+    out_line = None
     for line in text.splitlines():
         line = line.strip()
         key = norm_line(line)
@@ -968,8 +993,10 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
             saw_trip = True
         if rule.out_pattern and re.search(rule.out_pattern, line, re.I):
             saw_out = True
+            out_line = line
         if re.search(rule.pattern, line, re.I):
             saw_fail = True
+            fail_line = line
     if len(rule._seen) > 400:
         rule._seen.clear()
         rule._primed = False
@@ -982,7 +1009,8 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
     if saw_out and rule.ready(now):
         rule._streak = 0
         return rule.fire(now, rule.out_message or
-                         f"Out of {rule.item}. Restock before the next trip.")
+                         f"Out of {rule.item}. Restock before the next trip.",
+                         source_text=out_line)
 
     if saw_trip:
         if saw_fail:
@@ -990,7 +1018,8 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
             if rule._streak >= rule.warn_streak and rule.ready(now):
                 return rule.fire(
                     now, f"{rule.item} low - the bank has come up short "
-                    f"{rule._streak} trips running. Restock soon.")
+                    f"{rule._streak} trips running. Restock soon.",
+                    source_text=fail_line)
         else:
             # A clean load means the bank is stocked again.
             rule._streak = 0
@@ -1079,6 +1108,7 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
             if re.search(rule.corroborate_pattern, line, re.I):
                 # Fresh independent evidence that the activity is still alive.
                 rule._last_activity = now
+                rule._last_activity_source = line.strip()
         if len(rule._seen) > 400:
             # Retain the current viewport as the new baseline. Clearing the set
             # outright would make old scrollback look fresh on the next poll.
@@ -1092,7 +1122,7 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
 
     rule._armed = False
     return rule.fire(now, f"No activity icon for {gone:.0f}s - "
-                          f"{rule.item} has stopped.")
+                          f"{rule.item} has stopped.", gone=gone)
 
 
 TIMER_RE = re.compile(r"(\d{1,2}):([0-5]\d):([0-5]\d)")
@@ -1149,7 +1179,8 @@ def _eval_timer(rule: Rule, wid: str, box, now: float,
     if step % 3600 == 0 and reached >= 1:
         label = f"{reached} hour" + ("s" if reached > 1 else "")
     return rule.fire(now, rule.milestone_message.format(
-        label=label, elapsed=text.strip(), n=reached))
+        label=label, elapsed=text.strip(), n=reached),
+        source_text=text.strip(), label=label, elapsed=text.strip(), n=reached)
 
 
 def _eval_stack(rule: Rule, wid: str, region: "Region", box, now: float,
@@ -1221,7 +1252,8 @@ def _eval_stack(rule: Rule, wid: str, region: "Region", box, now: float,
     if not grew or not rule.ready(now):
         return None
     where = ", ".join(f"slot {i + 1}" for i in grew[:4])
-    return rule.fire(now, f"Item gained in {where}. Check the backpack.")
+    return rule.fire(now, f"Item gained in {where}. Check the backpack.",
+                     where=where)
 
 
 def _eval_loot(rule: Rule, wid: str, box, now: float,
@@ -1260,7 +1292,8 @@ def _eval_loot(rule: Rule, wid: str, box, now: float,
         if rule.ready(now):
             n = rule._counts[item.lower()]
             suffix = f" (x{n} this session)" if n > 1 else ""
-            return rule.fire(now, f"{item}{suffix}")
+            return rule.fire(now, f"{item}{suffix}", source_text=line,
+                             item=item, count=n)
     rule._primed = True
     if len(rule._seen) > 400:
         rule._seen.clear()
@@ -1285,6 +1318,7 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
     if not rule.pattern:
         return None
     gained = 0
+    source_line = None
     for line in text.splitlines():
         line = line.strip()
         key = norm_line(line)
@@ -1298,6 +1332,7 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
             continue
         try:
             gained += int(re.sub(r"[^0-9]", "", m.group(1)))
+            source_line = line
         except (ValueError, IndexError):
             continue
     if len(rule._seen) > 400:
@@ -1314,7 +1349,9 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
     if reached > rule._milestone:
         rule._milestone = reached
         return rule.fire(now, rule.milestone_message.format(
-            total=f"{rule._total:,}", n=reached, step=f"{step:,}"))
+            total=f"{rule._total:,}", n=reached, step=f"{step:,}"),
+            source_text=source_line, total=f"{rule._total:,}", n=reached,
+            step=f"{step:,}")
     return None
 
 
@@ -1354,7 +1391,8 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
                 # is already on screen without alerting, so the first poll
                 # cannot fire on an event from before the watcher existed.
                 if rule._primed and rule.ready(now):
-                    return rule.fire(now, line[:120])
+                    return rule.fire(now, line[:120], source_text=line,
+                                     line=line, text=line)
         rule._primed = True
         if len(rule._seen) > 400:
             # Dropping the whole set would let lines still on screen re-fire,
@@ -1387,7 +1425,8 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
         still = now - rule._last_change
         if rule._armed and still >= rule.idle_seconds and rule.ready(now):
             rule._armed = False
-            return rule.fire(now, f"nothing for {still:.0f}s - probably needs you")
+            return rule.fire(now, f"nothing for {still:.0f}s - probably needs you",
+                             still=still)
 
 
 # --------------------------------------------------------------------------
@@ -1471,6 +1510,8 @@ def validate_config(cfg: object) -> None:
             raise ValueError(f"rule {name!r} has unknown kind {kind!r}")
         if region not in regions:
             raise ValueError(f"rule {name!r} references unknown region {region!r}")
+        if "alert_body" in rule and not isinstance(rule["alert_body"], str):
+            raise ValueError(f"rule {name!r}: alert_body must be a string")
         unknown = sorted(
             key for key in rule
             if not key.startswith("_") and key not in Rule.__dataclass_fields__)
@@ -1837,7 +1878,8 @@ def cmd_watch(args) -> None:
                     alert = evaluate(rule, wid, regs[rule.region], size, now, cycle)
                     if alert is not None:
                         notify(alert.title, alert.body, alert.urgency,
-                               alert.sound, alert.timeout_ms, alert.rule_name)
+                               alert.sound, alert.timeout_ms, alert.rule_name,
+                               alert.source_text)
                 except CaptureError:
                     raise            # handled below: miss counter / reacquire
                 except Exception as e:
