@@ -136,7 +136,7 @@
       "pattern": "urn is (now )?(three-quarters|full)|urn is full",
       "cooldown": 60,
       "message": "Urn nearly full",
-      "alert_body": "Fishing urn is full. It has completed its one job; replace it.",
+      "alert_body": "The fishing urn is nearing the end of its one job. Consider replacing it.",
       "sound": "message-attention",
       "_note": "A fishing urn stops collecting once full, so every catch after that is wasted urn XP until it is teleported. RS3 announces one-quarter / half / three-quarters / full; only the last two are worth interrupting for, which is why the pattern skips the first two. Observed wording: 'Your decorated fishing urn is three-quarters full'.",
       "enabled": true,
@@ -161,7 +161,8 @@
       "_note": "Counts urns actually carried, by icon colour. urn_supply watches the BANK coming up short across trips; this watches the pack right now, which is the 'I only have one left' case - the two are independent. Colour beats OCR here: reading the stack digits was measured flickering between 6, 13 and 1 on an unchanging stack, while blueness (mean B - mean R of the icon's bright pixels) separates cleanly - urns +104/+105, coins -174, fish -10..-62. Verified 2/2, 1/1 and 0/0 against real captures at every threshold from 20 to 80. confirm_seconds=8 because a bank or loot interface hides slots and would otherwise read as a false 'out'; a real drain persists, an overlay clears in a frame or two. warn_below=1 fires at exactly one urn left.",
       "enabled": true,
       "urgency": "normal",
-      "timeout_ms": 15000
+      "timeout_ms": 15000,
+      "out_alert_body": "No urns remain. Urn XP is now being donated to the void; restock."
     },
     {
       "name": "out_of_supplies",
