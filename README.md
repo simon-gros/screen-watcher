@@ -19,6 +19,48 @@ Already present on this machine:
 - Python 3 with `PIL` and `numpy`
 - `notify-send` — desktop notifications
 
+Install the system tools and Python libraries on a Debian/Ubuntu system with:
+
+```bash
+sudo apt install xdotool imagemagick tesseract-ocr libnotify-bin python3-pil python3-numpy
+```
+
+The watcher also requires access to the active XWayland session. See
+[Running it](#running-it) below when launching it from a terminal, service, or
+automation process.
+
+## Configuration
+
+The watcher always loads `config.json` from the directory containing
+`watcher.py`; it does not accept a configuration path as a command-line
+option. `config.json` is the active thieving configuration in this repository.
+`config.fishing.json` is the fishing profile kept as a reference/backup.
+
+To switch profiles, stop the watcher, preserve the current file, and copy the
+desired profile into place:
+
+```bash
+cp config.json config.thieving.local.json
+cp config.fishing.json config.json
+```
+
+Do not edit a profile while `watch` is running. Region coordinates are relative
+to the detected game window, but rule changes are only read when the process
+starts. Keep local experiments in an untracked file or restore `config.json`
+before committing.
+
+The top-level settings are:
+
+| setting | purpose |
+|---|---|
+| `window.wm_class` | X11/ XWayland class used to find the game window |
+| `interval` | seconds between watch-loop polls |
+| `regions` | anchored capture rectangles and optional inventory grids |
+| `rules` | enabled detectors, thresholds, cooldowns, and notification text |
+
+Run `python3 watcher.py regions` after changing anchors or grids to verify the
+resolved rectangles against the current window size.
+
 ## Usage
 
 ```bash
@@ -28,6 +70,8 @@ python3 watcher.py regions      # show regions resolved at the current window si
 python3 watcher.py calibrate    # scaled full-window shot for picking coordinates
 python3 watcher.py shot chat_tail   # capture one region to check framing
 python3 watcher.py probe        # per-region frame-to-frame diff, for thresholds
+python3 watcher.py inv          # live inventory slot-change feed
+python3 watcher.py stats        # fill/bank cycle analysis from occupancy data
 python3 watcher.py watch        # the actual loop
 python3 watcher.py alerts       # per-rule alert rates - which rule is beeping
 ```
@@ -38,10 +82,32 @@ Run it in the background so it survives the terminal:
 nohup python3 watcher.py watch >> state/watch.log 2>&1 &
 ```
 
+Use `python3 watcher.py --help` or `python3 watcher.py <command> --help` for
+the complete option list. `shot` accepts a configured region name and can write
+to a custom path with `--out`; `probe`, `inv`, and `alerts` also expose timing,
+duration, or filtering options.
+
 Only one watcher may run at a time. A second instance refuses to start, because
 two watchers double every alert — which looks exactly like a mistuned rule and
 sends you tuning thresholds that were never the problem. The pid lives in
 `state/watcher.pid`; a stale file from a crash is reclaimed automatically.
+
+## Runtime files
+
+The watcher creates or appends these files under `state/`:
+
+| path | contents |
+|---|---|
+| `watch.log` | stdout/stderr when using the background command above |
+| `alerts.jsonl` | one JSON record for each notification |
+| `occupancy.jsonl` | inventory transitions used by `stats` |
+| `watcher.pid` | temporary singleton lock, removed on normal exit |
+
+Diagnostic captures such as OCR screenshots and temporary PPM files may also
+appear in `state/`; they are local runtime artifacts and should not be treated
+as source files. Do not commit new runtime captures or logs unless they are
+deliberately being preserved as test fixtures; copy them separately when
+transferring a working setup to another machine.
 
 ## Diagnosing "it beeps too much"
 
@@ -461,3 +527,11 @@ interactive crosshair mode and hangs waiting for a click.
 - `backpack` and `orbs` regions are defined and framed but no rule uses them
   yet. Inventory-full detection would go on `backpack`.
 - Chat must be visible and on the All Chat tab.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on pushes and pull requests. It installs
+Flake8 on Python 3.12 and checks `watcher.py`, while excluding the existing
+project formatting conventions (`E226`, `E501`, `E702`, `W503`, and `W504`).
+The workflow does not launch the watcher because CI has no game window, X
+session, or desktop notification service.
