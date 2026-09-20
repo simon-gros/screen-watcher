@@ -16,11 +16,18 @@ all decisions and actions.
 
 The final application should support three profile families:
 
-1. **Skill profiles** — one profile per each of RuneScape's 29 skills.
+1. **Skill/activity profiles** — coverage for all 29 RuneScape skills, with
+   separate method/activity profiles where one skill contains materially
+   different loops (for example Necromancy combat vs rituals).
 2. **Quest profiles** — one profile per quest or quest activity where objective
    and progression cues matter.
 3. **Boss/activity profiles** — one profile per boss, encounter, minigame, or
    other repeatable activity with its own phases and failure states.
+
+Profiles should compose reusable global capabilities for events such as level-up,
+inventory capacity, HP/Prayer thresholds, AFK/lobby warnings, familiar expiry,
+porter depletion, and session milestones rather than duplicating those rules in
+every activity file.
 
 Fishing, thieving/pickpocketing, urns, and bait are initial examples only. They
 are not the product boundary.
@@ -47,12 +54,25 @@ enough evidence to silently switch from one profile to another.
 
 ```text
 Profile manager
-    -> capture and observation
+    -> observation backend
     -> signal extraction
-    -> activity/rule evaluation
-    -> evidence and event model
-    -> notification and history outputs
+    -> normalized event stream
+    -> activity/session state
+    -> rule evaluation
+    -> alert lifecycle
+    -> history / analytics / outputs
 ```
+
+The central architectural rule is that **observation is replaceable**. Screen
+capture, OCR, image matching, replay fixtures, and a future sanctioned Jagex
+API/plugin source should all be capable of producing the same normalized events.
+Rules and profiles should not care which backend produced them. This is
+important because Jagex's official 2026 plugin/API work explicitly demonstrates
+the limitations of unreliable screen reading while opening richer sanctioned
+data paths.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
 
 ### Profile manager
 
@@ -71,27 +91,44 @@ The manager should reject incomplete or ambiguous profiles before screen
 capture begins. Profile identity should be present in startup output, logs,
 alerts, and exported diagnostics.
 
-### Capture and observation
+### Observation backends
 
-The capture layer should resolve the game window, maintain anchored regions,
-detect resize/reacquisition, and expose frames without knowing what a skill or
-boss means. It should support screenshots, frame sampling, OCR input, and
-optional future observation backends.
+The current screen-capture backend should resolve the game window, maintain
+anchored regions, detect resize/reacquisition, and expose frames without knowing
+what a skill or boss means.
 
-### Signal extraction
+Define a backend interface before capture assumptions spread further. Candidate
+backends:
 
-Reusable extractors should convert raw observations into signals such as:
+- X11/XWayland screen capture;
+- Wayland portal/PipeWire capture;
+- recorded fixture/replay input;
+- future sanctioned RuneScape API/plugin observations.
 
-- OCR lines and normalized message events;
-- frame differences and region state changes;
-- XP, life-point, prayer, adrenaline, and resource-bar changes;
-- inventory occupancy and item signatures;
-- action-bar, target, boss-health, timer, and phase indicators;
-- interface/objective/dialogue state;
-- elapsed time since the last successful activity.
+Renderer and desktop differences should be treated as backend concerns. Capture
+tests should explicitly cover layout scaling and, where relevant, different
+RuneScape renderer paths such as Vulkan.
+
+The backend must never generate gameplay input.
+
+### Signal extraction and normalized events
+
+Reusable extractors should convert raw observations into backend-independent
+events such as:
+
+- `chat.message` and `chat.level_up`;
+- `inventory.free_slots.changed`, `inventory.full`, and item gains;
+- `activity.progress`, `activity.stopped`, and `activity.completed`;
+- `resource.hp.changed`, `resource.prayer.low`, and other numeric resources;
+- buff/debuff/status appearance, stacks, and expiry;
+- target, boss-health, timer, phase, dialogue, and objective changes;
+- temporary opportunities such as rockertunities, time sprites, or ritual
+  disturbances;
+- session milestones and inferred AFK/lobby risk.
 
 Extractors should be testable with recorded frames and OCR fixtures, without a
-live X session.
+live desktop session. The same event schema should also be usable by future
+non-screen sources.
 
 ### Rule evaluation
 
@@ -106,26 +143,56 @@ Rules should support:
 - negative events, such as inactivity, depletion, failure, or death;
 - temporal windows, cooldowns, streaks, and re-arming;
 - explicit suppression for expected transitions and overlays;
+- multi-signal corroboration and confidence levels;
+- ordered sequences/state machines for courses, trips, rituals, and encounters;
 - dry-run evaluation and replay against historical observations.
 
-### Evidence and history
+A rule should be able to combine evidence instead of trusting one fragile
+signal. For example, an activity-stop event may become high-confidence only
+when an icon is absent, no new chat activity exists, and XP/progress has also
+stalled.
+
+### Evidence, history, and analytics
 
 Every alert should be explainable. Store bounded evidence such as the matched
-OCR line, measured diff, item count, phase label, or elapsed interval. Runtime
-history must remain local and ignored by Git by default. Sensitive screenshots
-should be opt-in fixtures, never accidental repository content.
+OCR line, measured diff, item count, phase label, confidence, corroborating
+signals, or elapsed interval. Runtime history must remain local and ignored by
+Git by default. Sensitive screenshots should be opt-in fixtures, never
+accidental repository content.
 
-### Outputs
+JSONL should remain available as a transparent debug/export format. If the
+application begins storing months of multi-profile observations, add an
+optional SQLite event store with separate concepts for raw observations,
+normalized events, sessions, alerts, and persistent counters.
 
-Notification delivery should be replaceable and independent of rule logic:
+The same event history should support session analytics such as actions, XP,
+items in/out, active vs idle time, bank/travel time, median/p95 cycle times,
+failure counts, and estimated remaining time/actions.
 
-- desktop notifications and sounds;
+### Alert lifecycle and outputs
+
+Notification delivery should be replaceable and independent of rule logic.
+Alerts should also have lifecycle state rather than relying only on cooldowns:
+
+- enter warning/critical state once;
+- repeat only while unresolved when configured;
+- escalate after a configured duration;
+- clear when evidence recovers;
+- remember acknowledgement for the current state.
+
+Possible outputs:
+- desktop notifications;
+- sound;
+- text-to-speech;
 - terminal/log output;
-- structured JSONL history;
-- optional future integrations such as dashboards or external channels.
+- persistent status/diagnostics view;
+- optional edge/screen flash for accessibility;
+- structured JSONL/SQLite history;
+- optional future dashboards or external channels.
 
-All outputs should include profile identity so events from adjacent activities
-cannot be confused.
+Output combinations should be selectable by alert class so an opportunity,
+progress notice, warning, and critical condition do not all behave identically.
+All outputs should include profile/activity identity.
 
 ## Safety and reliability requirements
 
@@ -135,10 +202,15 @@ cannot be confused.
 - Missing windows, X authentication failures, truncated captures, OCR errors,
   and malformed profiles must produce clear diagnostics.
 - One broken rule must not silently disable every other rule.
-- Notifications must be rate-limited, explainable, and suppressible.
+- Notifications must be stateful, rate-limited, explainable, and suppressible.
+- Any future web/API enrichment must use sanctioned interfaces where available,
+  cache results, and avoid excessive automated requests.
 - Secrets, account data, screenshots, and runtime logs must not enter Git.
 - CI must validate profiles, run unit tests, compile the application, and test
-  the non-desktop path.
+  non-desktop/replay paths.
+- The read-only boundary must remain compatible with Jagex rules: no generated
+  gameplay input, no direct unapproved game-world communication, and no client
+  modification.
 
 ## Delivery stages
 
@@ -152,28 +224,45 @@ cannot be confused.
 
 ### Next engineering stage
 
-- Split the monolithic script into capture, profiles, signals, rules, events,
-  notifications, and CLI modules.
+- Split the monolithic script into observation backends, profiles, extractors,
+  normalized events, activity/session state, rules, alerts, outputs, storage,
+  and CLI modules.
+- Define stable internal event names before adding many more detector kinds.
 - Add a profile registry and `list-profiles` command.
-- Add dry-run and replay commands.
-- Introduce fake capture, OCR, clock, and notification interfaces.
-- Add evidence to the `Alert` model and JSONL records.
+- Add profile composition/inheritance for global, combat, gathering, and
+  production bases.
+- Add dry-run and replay commands with sanitized fixture directories.
+- Introduce fake capture, OCR, clock, event-source, and notification interfaces.
+- Add evidence/confidence to alert and event records.
+- Add an alert lifecycle abstraction beyond simple cooldowns.
 
 ### Broader coverage stage
 
-- Build profiles for the remaining skills from RuneScape Wiki research.
+- Prioritise reusable detectors that unlock several activities: resource bars,
+  buff timers, progress bars, temporary opportunities, Make-X batches, target
+  state, and multi-ingredient supplies.
+- Use Archaeology, Mining, Necromancy rituals, Farming, Combat/Slayer, Agility,
+  and Runecrafting as high-value experiments for those primitives.
+- Build activity-specific profiles across the remaining skills from RuneScape
+  Wiki research instead of forcing one monolithic profile per skill.
 - Add quest and boss profile templates with encounter-specific state machines.
 - Add recorded fixtures for common overlays, failures, deaths, and transitions.
-- Add profile-level calibration and confidence reporting.
+- Add layout fingerprints, named calibrations, UI-scale metadata, and confidence
+  reporting.
 
 ### Mature application stage
 
-- Provide a stable CLI and configuration format.
-- Offer an operator-facing status/diagnostics view.
-- Support profile packages and version compatibility.
+- Provide a stable CLI, normalized event schema, and configuration format.
+- Offer an operator-facing status/diagnostics and session-analytics view.
+- Support shareable profile packages, reusable presets, schema versions, and
+  migration compatibility.
+- Support X11/XWayland and native Wayland capture where practical.
+- Add a sanctioned RuneScape API/plugin observation backend if Jagex exposes a
+  suitable public path and its terms permit this use.
 - Add optional dashboards and notification integrations without coupling them to
   game control.
-- Publish releases with tested profile bundles and migration notes.
+- Publish releases with tested profile bundles, fixture corpora, and migration
+  notes.
 
 ## Non-goals
 
@@ -182,5 +271,6 @@ Screen Watcher should not become:
 - a bot or macro;
 - an input automation framework;
 - a combat rotation assistant that chooses or performs actions;
-- a credential, browser, clipboard, or network data collector;
+- a credential, browser, clipboard, or indiscriminate network data collector;
+- an unofficial direct game-world protocol client;
 - a repository of committed personal screenshots or runtime logs.
