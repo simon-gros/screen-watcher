@@ -380,9 +380,35 @@ startup. A milestone of this size takes hours, so an in-memory total would be
 silently rewound by any restart or by the game window briefly disappearing —
 verified by restarting mid-grind and seeing `resuming from 96,460`.
 
-### Stun mechanics
+### Stun mechanics, and two events that are not the same
 
 Per the wiki: a stun lasts 5 ticks (~3s) and deals 200 + 3% of base life
 points. Success is 100% only for the first ~43s (25 attempts) before decaying,
-so stuns are expected rather than exceptional. `cooldown=20` collapses a run of
-them into one alert.
+so stuns are expected rather than exceptional.
+
+The failure path is **two lines, one second apart**:
+
+```text
+[21:03:25] You fail to steal from the target.
+[21:03:26] You've been stunned.
+```
+
+Both are matched, because OCR frequently catches only one of them.
+
+An earlier *guessed* pattern used `you (have been |are )?stunned` and
+`you fail to pick`. It missed **both** real lines: the game uses the
+contraction `You've`, and says `fail to steal from the target` rather than
+`fail to pick`. Only the yellow notice matched, and that was luck. This is the
+clearest argument in this document for reading live OCR before writing a
+pattern.
+
+These are now two rules, because the consequences differ:
+
+| rule | line | effect | sound |
+|---|---|---|---|
+| `target_alerted` | `becomes aware of your presence` | warning; pickpocketing continues | `dialog-warning-auth` |
+| `stunned` | `You've been stunned` / `You fail to steal from the target` | **halts pickpocketing** | `dialog-error-serious` |
+
+The stun lines were also **removed from `thieving_stopped`'s activity
+pattern**. Being stunned is not evidence of activity but of the opposite, and
+counting it kept the stop timer alive through a genuine halt.

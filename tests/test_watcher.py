@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 import numpy as np
 
 import pytest
@@ -213,3 +214,33 @@ def test_counter_persists_across_restart(tmp_path, monkeypatch):
     watcher.log_counter("coin_milestone", 1.0, 987_654)
     assert watcher.load_counter("coin_milestone") == 987_654
     assert watcher.load_counter("never_ran") == 0
+
+
+def test_stun_pattern_matches_real_contraction():
+    """The game says "You've been stunned", not "you have been stunned".
+
+    An earlier guessed pattern used ``you (have been |are )?stunned`` and
+    ``you fail to pick``; both missed the real lines, so a stun that halts
+    pickpocketing went unreported.
+    """
+    cfg = load_config(Path("profiles/thieving.json"))
+    rules = {r["name"]: r for r in cfg["rules"]}
+    stun = rules["stunned"]["pattern"]
+    alerted = rules["target_alerted"]["pattern"]
+    activity = rules["thieving_stopped"]["pattern"]
+
+    for line in ("You've been stunned.", "You've been stunned,",
+                 "You fail to steal from the target."):
+        assert re.search(stun, line, re.I), line
+        assert not re.search(alerted, line, re.I), line
+        # a stun is the opposite of activity and must not keep the timer alive
+        assert not re.search(activity, line, re.I), line
+
+    warn = "Your pickpocket target becomes aware of your presence."
+    assert re.search(alerted, warn, re.I)
+    assert not re.search(stun, warn, re.I)
+
+    for line in ("You pick the target's pocket.",
+                 "455 coins have been added to your money pouch."):
+        assert re.search(activity, line, re.I), line
+        assert not re.search(stun, line, re.I), line
