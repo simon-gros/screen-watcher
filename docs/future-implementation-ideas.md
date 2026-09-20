@@ -1092,6 +1092,179 @@ Potential users:
 A generic implementation would be preferable to a separate detector function
 for every event.
 
+### Generic progress-bar detector
+
+Several skills expose progress directly rather than only through chat or XP.
+
+Candidate uses:
+- Smithing item progress;
+- Archaeology excavation progress;
+- Necromancy ritual progress;
+- Fort Forinthry construction progress;
+- boss/activity progress bars in future non-skill profiles.
+
+Possible configuration:
+
+```text
+kind: progress
+region: activity_progress
+warn_below_rate: ...
+complete_at: 100
+stalled_seconds: ...
+```
+
+The detector should support both absolute percentage and rate-of-change. A
+progress bar that is still moving slowly is different from one that has stopped.
+
+Reference:
+- https://runescape.wiki/w/Interface
+
+### Generic production / Make-X batch detector
+
+Crafting, Fletching, Cooking, Herblore, Construction workbenches, and several
+other production methods share the same basic loop: open a production
+interface, consume one or more inputs repeatedly, create outputs, then stop.
+
+A reusable batch detector could model:
+- expected input ingredients and ratios;
+- current output quantity;
+- production progress/interface presence;
+- expected batch end;
+- unexpected early stop;
+- limiting ingredient.
+
+Possible alerts:
+- batch complete;
+- production stopped early;
+- ingredient X will run out first;
+- bank preset did not restore the expected recipe.
+
+This is preferable to implementing "Crafting stopped", "Cooking stopped",
+"Herblore stopped", etc. as independent copies of the same logic.
+
+### Ordered-sequence / lightweight state-machine rules
+
+Some profiles are not well represented by independent thresholds.
+
+Candidate uses:
+- Agility obstacle order and lap completion;
+- Dungeoneering floor stages;
+- Runecrafting bank -> travel -> altar -> return loops;
+- Construction Contracts;
+- Big Game Hunter;
+- multi-stage potion or production chains.
+
+Possible concept:
+
+```text
+kind: sequence
+states:
+  - banked
+  - travelling
+  - producing
+  - returning
+timeout_by_state: ...
+reset_on: ...
+```
+
+The goal is not automation. It is to recognize when an expected sequence has
+stalled, skipped a necessary step, or completed.
+
+### Profile composition / reusable bases
+
+As profile coverage grows, copying common rules into every JSON file will
+create configuration drift.
+
+Possible future structure:
+- reusable `combat-base` for HP/prayer/target state;
+- reusable `production-base` for Make-X and inventory flow;
+- reusable `gathering-base` for activity continuity and capacity;
+- small activity profiles that override only method-specific regions and rules.
+
+Any inheritance/composition system should remain explicit when loaded so the
+operator can see the final resolved rules. Avoid hidden inheritance that makes
+it difficult to explain why an alert fired.
+
+### Profile prerequisites and optional capabilities
+
+Profiles should be able to state that some rules only make sense when a
+particular item, unlock, interface, or activity is present.
+
+Examples:
+- Seren spirit alert requires Grace of the Elves;
+- divine blessing alert requires Brooch of the Gods;
+- porter warnings require a porter source;
+- Slayer Counter rules require that interface to be visible;
+- Crystal Mask rules only apply when using Crystal Mask.
+
+Possible metadata:
+
+```text
+requires:
+  equipment: [...]
+  unlocks: [...]
+  visible_interfaces: [...]
+optional_features:
+  seren_spirit: false
+```
+
+This would help prevent the future-ideas backlog from becoming a collection of
+alerts that are technically supported but irrelevant to the current setup.
+
+### Evidence recording and detector replay
+
+The current promotion criteria require live measurements. A future recording
+mode should make that process reproducible.
+
+Possible workflow:
+1. record bounded, sanitized frames/OCR results for selected regions;
+2. annotate important events and false positives;
+3. replay them through detector code without RuneScape running;
+4. compare old and new detector behaviour before changing thresholds.
+
+This would be particularly useful for:
+- rockertunities;
+- time sprites;
+- ritual disturbances;
+- target/combat state;
+- Make-X completion;
+- tooltips and inventory overlays.
+
+Recorded fixtures must remain opt-in and sanitized; account names, chat, or
+other personal information should not be committed accidentally.
+
+### Template/icon matching with per-layout calibration
+
+Many future ideas depend on stable icons rather than OCR: buffs, debuffs,
+rockertunities, time sprites, familiar state, activity opportunities, and
+inventory items.
+
+A generic image/template detector should:
+- allow several scale variants or tolerate small UI scaling changes;
+- use a confidence score rather than exact pixel equality;
+- expose calibration/diagnostic output;
+- define a minimum persistence time when flicker is possible;
+- support profile-specific templates without hard-coding them into Python.
+
+Do not assume one user's interface scale or theme will generalize to every
+layout.
+
+### Scheduled / low-frequency observation mode
+
+Not every skill benefits from a 1.5-second polling loop. Farming in particular
+contains real-time growth states that can change on much longer timescales.
+
+A future profile could declare a slower observation cadence or scheduled checks
+for:
+- Farming patches;
+- Player-Owned Farm animals;
+- long cooldowns;
+- daily/periodic activities.
+
+This should remain separate from desktop automation: Screen Watcher would only
+observe and notify when the game/interface is available, not log in or perform
+the activity.
+
 ### RuneMetrics performance monitoring
 
 The current thieving profile already reads the RuneMetrics session timer. Future
