@@ -42,6 +42,8 @@ STATE_DIR = ROOT / "state"
 
 ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
+RULE_KINDS = {"inventory", "activity", "supply", "item_count",
+              "ocr", "change", "idle"}
 
 
 # --------------------------------------------------------------------------
@@ -501,6 +503,18 @@ def notify(title: str, body: str, urgency: str = "normal",
 # rules
 # --------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class Alert:
+    """A rule result that can be delivered by any notification backend."""
+
+    rule_name: str
+    title: str
+    body: str
+    urgency: str
+    sound: str | None
+    timeout_ms: int
+
+
 @dataclass
 class Rule:
     name: str
@@ -568,10 +582,10 @@ class Rule:
             return True
         return (now - self._last_fired) >= self.cooldown
 
-    def fire(self, now: float, body: str) -> None:
+    def fire(self, now: float, body: str) -> Alert:
         self._last_fired = now
-        notify(self.message or self.name, body,
-               self.urgency, self.sound, self.timeout_ms, self.name)
+        return Alert(self.name, self.message or self.name, body,
+                     self.urgency, self.sound, self.timeout_ms)
 
     def reset(self) -> None:
         self._last = None
@@ -584,7 +598,7 @@ class Rule:
         self._level_since = 0.0
 
 
-def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float) -> None:
+def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float) -> Alert | None:
     """Warn *before* the pack fills, with enough lead time to reach a bank.
 
     A 'pack is full' alert is useless: by then the grind has already stopped.
@@ -639,10 +653,10 @@ def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float) -> 
                     f"full in ~{eta:.0f}s. Head to the bank.")
         else:
             body = f"{free} slots left. Head to the bank."
-        rule.fire(now, body)
+        return rule.fire(now, body)
 
 
-def _eval_overflow(rule: Rule, now: float, occ: int, free: int) -> None:
+def _eval_overflow(rule: Rule, now: float, occ: int, free: int) -> Alert | None:
     """Fire only once the pack has *stayed* full, i.e. fishing has halted.
 
     Predictive alerting is the wrong tool for a short cycle. Measured here the
@@ -671,12 +685,12 @@ def _eval_overflow(rule: Rule, now: float, occ: int, free: int) -> None:
     stuck = now - rule._full_since
     if rule._armed and stuck >= rule.overflow_seconds and rule.ready(now):
         rule._armed = False
-        rule.fire(now, f"Pack full for {stuck:.0f}s - activity has stopped. "
-                       f"Check the game.")
+        return rule.fire(now, f"Pack full for {stuck:.0f}s - activity has stopped. "
+                         f"Check the game.")
 
 
 def _eval_activity(rule: Rule, wid: str, box, now: float,
-                   cycle: int = 0) -> None:
+                   cycle: int = 0) -> Alert | None:
     """Alert when a recurring chat line *stops* arriving.
 
     The inverse of an `ocr` rule: instead of firing on a message, this fires on
@@ -733,8 +747,8 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
     quiet = now - rule._last_activity
     if rule._armed and quiet >= rule.stop_seconds and rule.ready(now):
         rule._armed = False
-        rule.fire(now, f"No matching activity for {quiet:.0f}s. "
-                       f"Check the game.")
+        return rule.fire(now, f"No matching activity for {quiet:.0f}s. "
+                         f"Check the game.")
 
 
 def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
@@ -778,7 +792,7 @@ def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
 
 
 def _eval_item_count(rule: Rule, wid: str, region: "Region", box,
-                     now: float) -> None:
+                     now: float) -> Alert | None:
     """Warn when a carried item runs low, counted by icon colour.
 
     `supply` rules watch the *bank* coming up short across trips. This watches
@@ -835,14 +849,14 @@ def _eval_item_count(rule: Rule, wid: str, region: "Region", box,
     if level == "out":
         stuck = now - rule._level_since
         extra = f" (empty for {stuck/60:.0f} min)" if stuck >= 120 else ""
-        rule.fire(now, (rule.out_message or f"Out of {rule.item}.") + extra)
+        return rule.fire(now, (rule.out_message or f"Out of {rule.item}.") + extra)
     else:
         noun = rule.item.rstrip("s") if n == 1 else rule.item
-        rule.fire(now, f"{n} {noun} left. Restock on the next bank trip.")
+        return rule.fire(now, f"{n} {noun} left. Restock on the next bank trip.")
 
 
 def _eval_supply(rule: Rule, wid: str, box, now: float,
-                 cycle: int = 0) -> None:
+                 cycle: int = 0) -> Alert | None:
     """Track a consumable across bank restocks: running low, then exhausted.
 
     RS3 never states how much bait or how many urns remain, so a count is not
@@ -891,23 +905,23 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
 
     if saw_out and rule.ready(now):
         rule._streak = 0
-        rule.fire(now, rule.out_message or
-                  f"Out of {rule.item}. Restock before the next trip.")
-        return
+        return rule.fire(now, rule.out_message or
+                         f"Out of {rule.item}. Restock before the next trip.")
 
     if saw_trip:
         if saw_fail:
             rule._streak += 1
             if rule._streak >= rule.warn_streak and rule.ready(now):
-                rule.fire(now, f"{rule.item} low - the bank has come up short "
-                               f"{rule._streak} trips running. Restock soon.")
+                return rule.fire(
+                    now, f"{rule.item} low - the bank has come up short "
+                    f"{rule._streak} trips running. Restock soon.")
         else:
             # A clean load means the bank is stocked again.
             rule._streak = 0
 
 
 def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
-             cycle: int = 0) -> None:
+             cycle: int = 0) -> Alert | None:
     box = region.resolve(size)
     if rule.kind == "inventory":
         return _eval_inventory(rule, wid, region, box, now)
@@ -932,7 +946,7 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
                 # is already on screen without alerting, so the first poll
                 # cannot fire on an event from before the watcher existed.
                 if rule._primed and rule.ready(now):
-                    rule.fire(now, line[:120])
+                    return rule.fire(now, line[:120])
         rule._primed = True
         if len(rule._seen) > 400:
             # Dropping the whole set would let lines still on screen re-fire,
@@ -956,7 +970,7 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
 
     if rule.kind == "change":
         if moved and rule.ready(now):
-            rule.fire(now, f"changed (diff {d:.1f})")
+            return rule.fire(now, f"changed (diff {d:.1f})")
     elif rule.kind == "idle":
         if moved:
             rule._last_change = now
@@ -965,7 +979,7 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
         still = now - rule._last_change
         if rule._armed and still >= rule.idle_seconds and rule.ready(now):
             rule._armed = False
-            rule.fire(now, f"nothing for {still:.0f}s - probably needs you")
+            return rule.fire(now, f"nothing for {still:.0f}s - probably needs you")
 
 
 # --------------------------------------------------------------------------
@@ -975,10 +989,91 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
         sys.exit(f"no config at {CONFIG_PATH}")
-    cfg = json.loads(CONFIG_PATH.read_text())
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        sys.exit(f"invalid JSON in {CONFIG_PATH}: {exc}")
+    try:
+        validate_config(cfg)
+    except ValueError as exc:
+        sys.exit(f"invalid configuration: {exc}")
     cfg["_regions"] = {k: Region.parse(v) for k, v in cfg["regions"].items()
                        if not k.startswith("_")}
     return cfg
+
+
+def validate_config(cfg: object) -> None:
+    """Validate configuration before any window or capture side effects."""
+    if not isinstance(cfg, dict):
+        raise ValueError("root must be an object")
+    window = cfg.get("window")
+    if not isinstance(window, dict) or not isinstance(window.get("wm_class"), str):
+        raise ValueError("window.wm_class must be a string")
+    interval = cfg.get("interval", 1.0)
+    if not isinstance(interval, (int, float)) or isinstance(interval, bool) or interval <= 0:
+        raise ValueError("interval must be a positive number")
+
+    raw_regions = cfg.get("regions")
+    if not isinstance(raw_regions, dict) or not raw_regions:
+        raise ValueError("regions must be a non-empty object")
+    regions = {}
+    for name, spec in raw_regions.items():
+        if name.startswith("_"):
+            continue
+        if not isinstance(name, str):
+            raise ValueError("region names must be strings")
+        try:
+            region = Region.parse(spec)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"region {name!r}: {exc}") from exc
+        if region.w <= 0 or region.h <= 0:
+            raise ValueError(f"region {name!r} dimensions must be positive")
+        if region.grid:
+            x0, y0, cw, ch, cols, rows = region.grid
+            if x0 < 0 or y0 < 0 or min(cw, ch, cols, rows) <= 0:
+                raise ValueError(f"region {name!r} grid values must be positive")
+            if x0 + cw * cols > region.w or y0 + ch * rows > region.h:
+                raise ValueError(f"region {name!r} grid exceeds region bounds")
+        regions[name] = region
+
+    rules = cfg.get("rules")
+    if not isinstance(rules, list):
+        raise ValueError("rules must be an array")
+    names = set()
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            raise ValueError(f"rule {index} must be an object")
+        name = rule.get("name")
+        kind = rule.get("kind")
+        region = rule.get("region")
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"rule {index} needs a non-empty name")
+        if name in names:
+            raise ValueError(f"duplicate rule name {name!r}")
+        names.add(name)
+        if kind not in RULE_KINDS:
+            raise ValueError(f"rule {name!r} has unknown kind {kind!r}")
+        if region not in regions:
+            raise ValueError(f"rule {name!r} references unknown region {region!r}")
+        if kind in {"activity", "ocr", "supply"} and not rule.get("pattern"):
+            raise ValueError(f"rule {name!r} requires pattern")
+        if kind in {"inventory", "item_count"} and not regions[region].grid:
+            raise ValueError(f"rule {name!r} requires a region grid")
+        for key in ("pattern", "suppress_pattern", "trip_pattern", "out_pattern"):
+            pattern = rule.get(key)
+            if pattern is not None:
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(f"rule {name!r} has invalid {key}: {exc}") from exc
+        for key in ("cooldown", "idle_seconds", "threshold", "lead_seconds",
+                    "overflow_seconds", "stop_seconds", "confirm_seconds",
+                    "repeat_seconds"):
+            value = rule.get(key)
+            if value is not None and (
+                    not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or value < 0):
+                raise ValueError(f"rule {name!r}: {key} must be non-negative")
 
 
 def resolve_window(cfg: dict) -> tuple[str, tuple[int, int]]:
@@ -1267,7 +1362,10 @@ def cmd_watch(args) -> None:
         try:
             for rule in rules:
                 try:
-                    evaluate(rule, wid, regs[rule.region], size, now, cycle)
+                    alert = evaluate(rule, wid, regs[rule.region], size, now, cycle)
+                    if alert is not None:
+                        notify(alert.title, alert.body, alert.urgency,
+                               alert.sound, alert.timeout_ms, alert.rule_name)
                 except CaptureError:
                     raise            # handled below: miss counter / reacquire
                 except Exception as e:
