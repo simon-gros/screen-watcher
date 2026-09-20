@@ -9,11 +9,13 @@ something needs attention.
 > mouse, press keys, bank, fight, or otherwise send input to the game. It only
 > observes the screen and produces local output.
 
-The project currently ships calibrated Fishing and Thieving profiles. The core
-architecture supports reusable visual, OCR, activity, inventory, item-count,
-and supply detectors; additional skills, quests, bosses, minigames, and other
-activities should be added as versioned profiles and fixtures rather than
-hard-coded into the runtime.
+The project currently ships a calibrated Fishing profile and an experimental
+Thieving profile. The Thieving profile is intentionally conservative: rules
+whose OCR wording or timing has not yet been verified from live observations
+are disabled by default. The core architecture supports reusable visual, OCR,
+activity, inventory, item-count, and supply detectors; additional skills,
+quests, bosses, minigames, and other activities should be added as versioned
+profiles and fixtures rather than hard-coded into the runtime.
 
 ## Current architecture
 
