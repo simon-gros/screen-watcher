@@ -81,46 +81,40 @@ An earlier 4K-window measurement produced approximately:
 | cropped region -> PNG | 0.11 s |
 
 The experiment indicated that PNG encoding, rather than raw capture alone, was
-a major source of cost. `capture_array()` therefore uses a PPM scratch file
-before converting the image to a NumPy array.
+a major source of cost. `capture_array()` therefore uses a temporary PPM file
+before converting the image to a NumPy array. The temporary path is unique per
+capture and is removed automatically.
 
 These numbers are environment-specific benchmarks, not performance guarantees.
 
 ## Current architectural limitations
 
-### Shared scratch files
+### Region-level capture consistency
 
-`capture_array()` currently writes `state/_scratch.ppm`, and OCR uses
-`state/_ocr.png`.
+`capture_array()` caches an identical `(window, region, mask)` request for the
+current polling cycle. Rules that read the same region therefore reuse the same
+pixels.
 
-That keeps the implementation simple but means concurrent diagnostic capture
-commands can contend for the same files. A future capture backend should use
-unique temporary paths or stream image bytes directly through the subprocess.
-
-### Duplicate image captures within a cycle
-
-OCR is cached, but ordinary image captures are not yet shared across every rule.
-Two image-based rules watching the same region may capture it independently
-during one polling iteration.
-
-A per-cycle frame context/cache is a planned improvement.
+Different regions are still captured independently, however, so one polling
+cycle does not yet represent one immutable full-window frame. A future capture
+backend should capture once per cycle and crop all detector regions in memory.
 
 ### Poll scheduling
 
-The current loop performs all rule work and then calls `time.sleep(interval)`.
-Processing time therefore adds to the effective period.
+The watch loop already uses `time.monotonic()` and a deadline rather than
+sleeping for a fixed interval after processing. This prevents ordinary
+processing time from being blindly added to every cycle.
 
-For example, a configured 1.5-second interval plus 0.8 seconds of processing
-produces roughly a 2.3-second cycle.
+The current `main` implementation does not skip deadlines that have already
+been missed. A sufficiently slow capture/OCR cycle can therefore be followed by
+back-to-back polling iterations while the deadline catches up. The planned
+scheduler should advance directly to the next future deadline.
 
-A future scheduler should use a monotonic deadline so processing time is
-accounted for separately.
+### Timekeeping
 
-### Wall-clock timers
-
-Rule timestamps currently use `time.time()`. Monotonic time would be more
-appropriate for cooldowns, inactivity, overflow durations, and other elapsed
-intervals, while Unix wall-clock timestamps can remain appropriate for logs.
+Cooldowns, inactivity windows, overflow durations, and other elapsed detector
+state use monotonic time. Persisted alert and occupancy logs continue to use
+Unix wall-clock timestamps, which is appropriate for cross-process history.
 
 ### Monolithic module
 
