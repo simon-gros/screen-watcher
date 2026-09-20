@@ -258,3 +258,131 @@ Every new profile should establish its own evidence:
 
 The goal is explainable detection built from observed signals rather than
 assumptions about unrelated activities.
+
+## Thieving: Menaphos market guards
+
+Measured against a live session in the Menaphos Merchant district, 2026-09-20.
+Drop rates are from the RuneScape Wiki; everything else was observed directly.
+
+### Verified chat wording
+
+All four lines were read from live OCR, not assumed:
+
+```text
+You pick the target's pocket.
+455 coins have been added to your money pouch.
+Your camouflage outfit keeps you hidden and you steal additional loot.
+Your pickpocket target becomes aware of your presence.
+```
+
+The camouflage line matters: while the outfit is worn it replaces the plain
+success message on some pickpockets. A pattern matching only `You pick the
+target's pocket` therefore under-reports activity.
+
+The stun notice is rendered in yellow rather than the usual blue-grey.
+
+### Region sizing
+
+Both chat dimensions were wrong when carried over from fishing.
+
+| dimension | was | now | reason |
+|---|---|---|---|
+| `w` | 500 | 600 | text ends near x=560; 500 clipped lines mid-word (`you steal add...`), hiding item names and the stun notice entirely |
+| `h` | 375 | 650 | ~18 lines vs ~32 |
+
+Chat turnover is the binding constraint. Pickpocketing produces about two chat
+lines every two seconds, and at `h=375` a line's measured visible lifetime was:
+
+| statistic | value |
+|---|---|
+| median | 11.0s |
+| max | 23.8s |
+
+Rare drops and the stun notice were scrolling off between clean OCR passes.
+Doubling the visible line count roughly doubles the number of chances to read
+each line before it disappears.
+
+### OCR degrades under a busy scene
+
+The chat panel is semi-transparent, so OCR quality varies with what is rendered
+behind it. The same panel that reads perfectly in one frame can return noise in
+the next:
+
+```text
+ACE rrire aasws Bamrs ardddart S 3% 17 Metes Bes it .
+```
+
+A luminance mask does **not** help here — measured 8 clean matches at
+`thr=110` versus 9 with no mask at all, consistent with the fishing finding
+that masking hurts on opaque panels.
+
+Two mitigations are used instead:
+
+1. Match distinctive fragments (`aware of your presence`) rather than whole
+   sentences, since a short anchor survives mangling better.
+2. Give rules multiple independent lines to corroborate against.
+
+### `thieving_stopped` needed corroborating evidence
+
+With `pattern` limited to the success message, this rule fired **4 times in 3
+minutes** while pickpocketing was demonstrably continuing — the coin counter
+advanced throughout. The cause was garbled OCR passes that saw no success line
+and started the stop timer.
+
+The pattern now also accepts the money-pouch line and the stun notice. Any of
+the four proves activity, and the money-pouch line is the most reliably read:
+it is short, high-contrast, and appears on roughly 76% of successes.
+
+| setting | was | now |
+|---|---|---|
+| evidence lines | 1 | 4 |
+| `stop_seconds` | 20 | 45 |
+| false alerts / 3 min | 4 | **0** |
+
+`stop_seconds=45` allows for a stun pausing gains for ~3s plus several
+unreadable polls, while staying under the fishing profile's 60s idle rule.
+
+### Loot detection excludes currency
+
+Coins land in the money pouch on ~76% of successes, roughly every two seconds.
+Announcing them would bury the drops worth seeing, so `loot_drop` ignores the
+currency and success lines and matches only named items from the drop table:
+
+| item | rarity |
+|---|---|
+| Coins (455) | 758/1000 — *ignored* |
+| Extra fine sand | 100/1000 |
+| Acadia wood spirit | 50/1000 |
+| Waterskin (4) | 50/1000 |
+| Large bladed adamant salvage | 20/1000 |
+| Sealed clue scroll (hard) | 6/1000 |
+| Potato cactus | 5/1000 |
+| Menaphite gift offering (small) | 4/1000 |
+| Vital spark | 2/1000 |
+| Menaphite gift offering (medium) | 2/1000 |
+| Sealed clue scroll (elite) | ~495/100000 |
+| Sealed clue scroll (master) | 5/100000 |
+
+Pattern alternatives are ordered longest-first so `(elite)` and `(master)` win
+over the bare `sealed clue scroll`.
+
+### Coin milestones must accumulate, not react
+
+Coins go straight to the money pouch, which the backpack grid cannot observe —
+chat is the only evidence, so the total has to be summed from it.
+
+At 455 coins per success and a ~76% success rate, one million coins is roughly
+2,900 pickpockets. Per-gain alerting would fire every two seconds; a simulated
+2,900-pickpocket run produced exactly **one** milestone alert.
+
+The running total is persisted to `state/counters.jsonl` and restored at
+startup. A milestone of this size takes hours, so an in-memory total would be
+silently rewound by any restart or by the game window briefly disappearing —
+verified by restarting mid-grind and seeing `resuming from 96,460`.
+
+### Stun mechanics
+
+Per the wiki: a stun lasts 5 ticks (~3s) and deals 200 + 3% of base life
+points. Success is 100% only for the first ~43s (25 attempts) before decaying,
+so stuns are expected rather than exceptional. `cooldown=20` collapses a run of
+them into one alert.

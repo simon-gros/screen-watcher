@@ -280,6 +280,8 @@ Grid coordinates are relative to the region's top-left corner.
 | `idle` | a region remains visually unchanged | stalled XP/activity |
 | `change` | a region changes beyond a configured threshold | appearance/state changes |
 | `ocr` | a newly observed line matches a regular expression | level-ups, messages, events |
+| `loot` | a named item appears in chat, ignoring routine currency lines | rare drops worth seeing |
+| `counter` | a repeating numeric chat line accumulates past a milestone | coin/XP totals over hours |
 
 `cooldown` throttles repeat alerts per rule.
 
@@ -353,6 +355,7 @@ placeholder file.
 | `watch.log` | stdout/stderr when started with the background example |
 | `alerts.jsonl` | structured notification history |
 | `occupancy.jsonl` | inventory transitions used by `stats` |
+| `counters.jsonl` | running `counter` totals, restored at startup |
 | `watcher.pid` | singleton process marker |
 | temporary captures | local OCR/image-analysis scratch data |
 
