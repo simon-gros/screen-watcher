@@ -36,6 +36,9 @@ The RuneScape Wiki is the reference for current skill mechanics, item names,
 training methods, unlocks, and likely supplies. Start from the skill page, then
 follow its training, item, and activity links before adding OCR patterns.
 
+For implementation-oriented alert ideas and basic profile seeds for all 29
+skills, see [future-implementation-ideas.md](future-implementation-ideas.md).
+
 ## All 29 skills
 
 | Skill | Type | Profile focus | Likely signals and items to research | Wiki |
