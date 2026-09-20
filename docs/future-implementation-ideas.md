@@ -194,6 +194,794 @@ Possible future profile split:
 Shared detector behaviour should remain in the engine or a future reusable
 profile/base layer rather than being copied indefinitely.
 
+## Whole-game skill profile seeds (all 29 skills)
+
+RuneScape currently has 29 skills. The notes below are deliberately **profile
+seeds**, not commitments and not final detector configurations. They answer a
+narrower question: if Screen Watcher eventually supports a particular skill,
+what would be worth observing first?
+
+A skill should not automatically map to one giant profile. Prefer
+activity-specific profiles when the same skill has materially different loops,
+interfaces, timers, or failure states. For example, Necromancy combat and
+Necromancy rituals should almost certainly be separate profiles; the same is
+true of ordinary Construction, Construction Contracts, and Fort Forinthry.
+
+General source:
+- https://runescape.wiki/w/Skills
+- https://www.runescape.com/game-guide/skills
+
+### Attack
+
+Useful first profile: ordinary melee combat or a specific repeatable combat
+encounter rather than "all Attack training".
+
+Potential signals:
+- target-information panel present/absent;
+- hit chance / damage-potential readout where visible;
+- combat XP continuing versus stalling;
+- weapon state, hitpoints, prayer, adrenaline, and food supplies.
+
+Possible alerts:
+- combat stopped while a target should still be engaged;
+- very low hit chance against the current target;
+- low food / low hitpoints / low prayer;
+- weapon or combat buff expired.
+
+Implementation note: Attack itself is usually not the actionable state. A
+generic combat profile should probably own target, resource, and survivability
+signals, with Attack simply selecting melee-specific expectations.
+
+References:
+- https://runescape.wiki/w/Attack
+- https://runescape.wiki/w/Hit_chance
+
+### Strength
+
+Strength training shares most observability with Attack because both normally
+occur inside melee combat.
+
+Potential signals:
+- target state and combat continuity;
+- melee XP gain;
+- adrenaline and ability-state changes;
+- food, prayer, potion, and weapon/buff state.
+
+Possible alerts:
+- target/combat loop stalled;
+- consumable or boost expired;
+- survivability threshold crossed.
+
+Implementation note: avoid making an independent Strength detector if it would
+duplicate the same target and resource checks as an Attack profile. Prefer one
+melee-combat profile with configurable XP expectations.
+
+Reference:
+- https://runescape.wiki/w/Strength
+
+### Defence
+
+Defence can be trained through multiple combat styles, so its useful profile
+signals are primarily defensive rather than style-specific.
+
+Potential signals:
+- player hitpoints;
+- incoming-damage state;
+- prayer points and protection-prayer status;
+- defensive buff/debuff icons;
+- target state and Defence XP.
+
+Possible alerts:
+- low or rapidly falling hitpoints;
+- defensive prayer unexpectedly inactive;
+- important defensive buff expired;
+- combat ended or death/respawn interface appeared.
+
+Implementation note: this is a strong use case for the future generic
+resource-bar and buff/debuff detectors.
+
+References:
+- https://runescape.wiki/w/Defence
+- https://runescape.wiki/w/Constitution
+
+### Constitution
+
+Constitution is the clearest initial use case for a generic life-points
+detector because the action bar exposes current and maximum life points.
+
+Potential signals:
+- exact or approximate life-point value;
+- percentage of maximum life points;
+- rate of loss over a short window;
+- death status / respawn interface.
+
+Possible alerts:
+- warning and critical HP thresholds;
+- unusually fast HP loss;
+- healing has stopped while damage continues;
+- death detected.
+
+Implementation note: make this a reusable `resource` detector rather than a
+Constitution-only special case. The same primitive can later serve bosses,
+Slayer, Thieving, Dungeoneering, and Necromancy.
+
+Reference:
+- https://runescape.wiki/w/Constitution
+
+### Ranged
+
+Useful variants should distinguish ammunition-using setups from weapons or
+effects where ammunition monitoring is irrelevant.
+
+Potential signals:
+- target information and hit chance;
+- combat XP / target continuity;
+- ammunition or quiver quantity where visible;
+- hitpoints, prayer, adrenaline, food, and potion buffs.
+
+Possible alerts:
+- ammunition running low or exhausted;
+- combat stopped;
+- low hit chance;
+- key ranged buff expired.
+
+Implementation note: ammunition rules should be explicitly optional and tested
+against the actual weapon/quiver setup rather than assumed for every Ranged
+profile.
+
+Reference:
+- https://runescape.wiki/w/Ranged
+
+### Magic
+
+Magic has a particularly useful supply-monitoring opportunity because combat
+spells consume runes under many setups.
+
+Potential signals:
+- rune-pouch or inventory rune quantities;
+- "not enough runes" / spell failure messages;
+- current spell/buff status;
+- target information, hit chance, prayer, adrenaline, and HP.
+
+Possible alerts:
+- one required rune type approaching exhaustion;
+- spell can no longer be cast;
+- combat stopped because a rune supply failed;
+- temporary magic buff expired.
+
+Implementation note: a future multi-item supply rule should understand recipes
+such as "this action requires A + B + C" and warn on whichever ingredient will
+run out first.
+
+References:
+- https://runescape.wiki/w/Magic
+- https://runescape.wiki/w/Rune_pouch
+
+### Prayer
+
+Prayer points are already represented as a continuously changing UI resource,
+making Prayer a natural first target for generic resource monitoring.
+
+Potential signals:
+- prayer-point value / percentage;
+- drain rate;
+- quick-prayer or individual prayer icons;
+- restoration-potion inventory.
+
+Possible alerts:
+- prayer below warning / critical thresholds;
+- prayer unexpectedly deactivated;
+- restoration supplies low;
+- drain rate unexpectedly high for the current profile.
+
+Implementation note: rate-of-change can be more useful than a fixed threshold:
+"45 seconds of prayer remaining at the current drain rate" is often more
+actionable than "25% remaining".
+
+Reference:
+- https://runescape.wiki/w/Prayer_points
+
+### Summoning
+
+A summoned familiar already exposes a timed status effect, so this skill is a
+strong candidate for generic status-timer support.
+
+Potential signals:
+- Familiar Summoned buff timer;
+- familiar presence;
+- Summoning points;
+- familiar scroll / special-move points where relevant;
+- Beast of Burden inventory state for profiles that depend on it.
+
+Possible alerts:
+- familiar expires in 5 / 1 minutes;
+- familiar unexpectedly dismissed or killed;
+- Summoning points too low to perform a planned action;
+- Beast of Burden still contains items before banking or leaving.
+
+Implementation note: familiar duration varies by familiar and can be extended,
+so read the visible timer/status instead of assuming a duration from the item
+name.
+
+References:
+- https://runescape.wiki/w/Summoning
+- https://runescape.wiki/w/Summoning_familiars
+- https://runescape.wiki/w/Familiar_Summoned
+
+### Necromancy
+
+Necromancy should be split into at least **combat** and **ritual** profiles.
+
+Combat profile ideas:
+- conjure presence and remaining duration;
+- ectoplasm and necrotic-rune supply;
+- target, HP, prayer, adrenaline, and combat continuity;
+- important necromancy stack/buff states where visually reliable.
+
+Ritual profile ideas:
+- ritual progress;
+- ritual disturbances appearing;
+- disturbance type / opportunity window;
+- glyph/light-source repair state;
+- ritual completion and material depletion.
+
+Possible alerts:
+- conjure nearing expiry;
+- ectoplasm/runes low;
+- ritual disturbance appeared;
+- ritual ended with an unresolved disturbance;
+- glyph set approaching repair/replacement.
+
+Implementation note: ritual disturbances are an ideal test case for a generic
+temporary-opportunity detector because they appear during a timed process and
+reward prompt attention.
+
+References:
+- https://runescape.wiki/w/Necromancy
+- https://runescape.wiki/w/Necromancy_training
+- https://runescape.wiki/w/Rituals
+
+### Mining
+
+Mining exposes two unusually clear mechanics for Screen Watcher: stamina and
+rockertunities.
+
+Potential signals:
+- stamina bar;
+- mining/progress bar;
+- rockertunity highlight;
+- ore-box / inventory state;
+- current rock depleted or mining XP stopped.
+
+Possible alerts:
+- stamina reached zero or fell below an efficiency threshold;
+- rockertunity appeared and has not been taken;
+- current mining action stopped;
+- ore box / inventory nearing capacity.
+
+Implementation note: a visual opportunity detector should recognize
+rockertunities without trying to click them. The Wiki notes that rockertunities
+are player-specific and persist until consumed, the area is left, or a
+different rock type is mined.
+
+Reference:
+- https://runescape.wiki/w/Mining
+
+### Fishing
+
+The current Fishing profile remains the reference implementation for catch
+activity, inventory fill, urn state, and short-lived events.
+
+Additional profile seeds beyond the detailed Fishing section above:
+- separate Deep Sea Fishing profile;
+- Fishing Frenzy streak profile;
+- method-specific bait or resource rules;
+- optional buff/status monitoring;
+- method-specific spot-depletion timing rather than one universal timeout.
+
+Reference:
+- https://runescape.wiki/w/Fishing
+
+### Woodcutting
+
+Woodcutting has several events that are more actionable than merely watching XP.
+
+Potential signals:
+- chopping XP/activity continuity;
+- tree depletion;
+- bird's-nest chat messages;
+- wood-box / inventory capacity;
+- temporary Woodcutting buffs;
+- special method timers such as elder-tree availability.
+
+Possible alerts:
+- tree depleted / chopping stopped;
+- bird's nest found, especially special/enchanted nests;
+- wood box or backpack nearly full;
+- important temporary buff expiring.
+
+Implementation note: nest handling should distinguish "fell to the ground",
+"placed in backpack", and "sent to bank" messages so the alert can reflect
+whether intervention is actually required.
+
+References:
+- https://runescape.wiki/w/Woodcutting
+- https://runescape.wiki/w/Bird%27s_nest
+
+### Hunter
+
+Hunter now spans very different loops, especially after the 2026 Havenhythe
+update. Do not make a single generic Hunter profile.
+
+Potential profile families:
+- traditional trap hunting;
+- clockwork box traps;
+- clockwork birdhouses;
+- Big Game Hunter;
+- special creature-specific methods.
+
+Potential signals:
+- trap empty / sprung / failed / collected;
+- number of active traps;
+- birdhouse ready state;
+- Big Game Hunter encounter state and danger/failure cues;
+- inventory capacity and bait/supply levels.
+
+Possible alerts:
+- trap requires collection/reset;
+- one expected trap disappeared;
+- birdhouse ready;
+- BGH encounter changed phase or entered a dangerous state;
+- bait/trap supplies low.
+
+Reference:
+- https://runescape.wiki/w/Hunter
+- https://runescape.wiki/w/Hunter_update
+
+### Farming
+
+Farming profiles should distinguish ordinary patches from Player-Owned Farm /
+Dinosaur Farm management.
+
+Patch profile signals:
+- growth/ready state;
+- disease;
+- harvest completion;
+- seed, compost, treatment, or produce inventory.
+
+Player-Owned Farm ideas:
+- animal growth stage;
+- breeding/birth message;
+- health/happiness problems;
+- food trough state;
+- animals ready to gather/check.
+
+Possible alerts:
+- crop ready;
+- crop diseased;
+- patch left empty after harvest;
+- animal reached desired stage;
+- breeding event occurred;
+- farm food or treatment supplies low.
+
+Implementation note: many Farming states evolve while the watcher is not
+running. A future scheduled/checklist mode may be more appropriate than a
+continuous 1.5-second poll for some Farming profiles.
+
+References:
+- https://runescape.wiki/w/Farming
+- https://runescape.wiki/w/Farming_training
+- https://runescape.wiki/w/Player-owned_farm
+
+### Archaeology
+
+Archaeology is especially suitable for progress/opportunity monitoring.
+
+Potential signals:
+- excavation progress bar;
+- time-sprite location/active hotspot;
+- damaged artefact obtained;
+- soil/material inventory;
+- material-cache depletion;
+- porter / material-storage related state where visible.
+
+Possible alerts:
+- time sprite moved;
+- artefact completed;
+- material cache depleted;
+- inventory/soil box full;
+- porter or other excavation support expired.
+
+Implementation note: a time-sprite detector is conceptually similar to a
+rockertunity detector, suggesting one reusable "active opportunity moved"
+primitive for gathering skills.
+
+References:
+- https://runescape.wiki/w/Archaeology
+- https://runescape.wiki/w/Archaeology_training
+
+### Divination
+
+Divination contains several short-lived opportunities and state changes that
+fit Screen Watcher well.
+
+Potential signals:
+- chronicle fragment spawn;
+- enriched wisp / enriched spring;
+- Memory Overflow buff and remaining duration;
+- spring depletion;
+- memory inventory filling;
+- energy availability when using enhanced conversion.
+
+Possible alerts:
+- chronicle fragment appeared;
+- enriched wisp available;
+- Memory Overflow about to expire;
+- current spring depleted;
+- memory inventory full;
+- enhanced conversion fell back because energy ran out.
+
+Implementation note: chronicle fragments and enriched wisps are good candidates
+for the generic short-lived-event subsystem. The Wiki documents a 10-minute
+Memory Overflow buff after a rift is fully empowered.
+
+References:
+- https://runescape.wiki/w/Divination
+- https://runescape.wiki/w/Divination_training
+
+### Smithing
+
+Smithing has a highly visible heat/progress model.
+
+Potential signals:
+- heat percentage / heat band;
+- item progress percentage;
+- unfinished item completed;
+- auto-heater / coal supply;
+- bars/materials remaining.
+
+Possible alerts:
+- heat dropped below a configured efficiency band;
+- item completed;
+- auto-heater cannot reheat due to supply;
+- next item cannot start because materials are missing.
+
+Implementation note: this is a strong use case for a generic progress-bar
+detector plus a second resource bar. Heat directly changes progress speed, so a
+threshold alert can be tied to actual efficiency rather than arbitrary time.
+
+Reference:
+- https://runescape.wiki/w/Smithing
+
+### Crafting
+
+Crafting is less about rare events and more about batch state and material
+balance.
+
+Potential signals:
+- Make-X / crafting progress;
+- input stacks decreasing;
+- output stacks increasing;
+- portable crafter presence where relevant;
+- inventory/bank preset failures.
+
+Possible alerts:
+- batch finished;
+- one ingredient exhausted before the others;
+- inventory contains outputs but no usable input combination;
+- expected portable station disappeared.
+
+Implementation note: a generic `batch` detector should understand "production
+is expected to continue until input X is exhausted" and avoid alerting on every
+individual item.
+
+References:
+- https://runescape.wiki/w/Crafting
+- https://runescape.wiki/w/Pay-to-play_Crafting_training
+
+### Fletching
+
+Fletching shares the same Make-X/batch structure as Crafting but often has
+multiple component ratios.
+
+Potential signals:
+- production progress;
+- logs / shafts / feathers / bowstrings / unfinished items;
+- output stack change;
+- bank preset success/failure.
+
+Possible alerts:
+- batch finished;
+- one component is the limiting reagent;
+- required knife/tool/interface is no longer available;
+- output milestone reached.
+
+Implementation note: future supply rules should support ingredient ratios, e.g.
+warn that feathers will run out before shafts even when both stacks are still
+non-zero.
+
+Reference:
+- https://runescape.wiki/w/Fletching
+
+### Firemaking
+
+Firemaking profiles could cover ordinary log burning, bonfires, and incense
+effects separately.
+
+Potential signals:
+- log supply and production continuity;
+- bonfire/fire state;
+- incense buff timer and potency;
+- ashes/output inventory where relevant.
+
+Possible alerts:
+- incense effect about to expire;
+- incense potency reached its desired level;
+- log supply low;
+- fire/bonfire interaction stopped unexpectedly.
+
+Implementation note: incense is another reason to build a generic buff timer.
+The Wiki documents timed incense effects whose potency can rise over time and
+whose duration can be extended.
+
+Reference:
+- https://runescape.wiki/w/Firemaking
+
+### Cooking
+
+Cooking is an ideal Make-X profile with one extra useful metric: burn rate.
+
+Potential signals:
+- raw-food stack falling;
+- cooked/burnt output stacks rising;
+- Make-X progress;
+- cooking station still available.
+
+Possible alerts:
+- batch finished;
+- raw food exhausted;
+- unexpectedly high burn rate over the last N items;
+- inventory full or output routing failed.
+
+Implementation note: a rolling ratio detector could report "burn rate changed
+materially" without notifying on individual burnt items.
+
+Reference:
+- https://runescape.wiki/w/Cooking
+
+### Herblore
+
+Herblore profiles should be recipe-aware because several ingredients may be
+consumed at different ratios and high-level potion chains can be multi-stage.
+
+Potential signals:
+- Make-X progress;
+- herb / unfinished potion / secondary / flask quantities;
+- completed potion output;
+- portable station state;
+- combat/skilling potion buff timers when the same profile also uses potions.
+
+Possible alerts:
+- batch finished;
+- ingredient imbalance / limiting component;
+- wrong intermediate item left after a recipe step;
+- expected potion buff about to expire.
+
+Implementation note: combination potions can produce shorter, more
+attention-heavy inventories than ordinary two-component potions, so timeout
+defaults should be method-specific.
+
+References:
+- https://runescape.wiki/w/Herblore
+- https://runescape.wiki/w/Herblore_training
+
+### Runecrafting
+
+Runecrafting has strong supply/state opportunities beyond simple XP monitoring.
+
+Potential signals:
+- essence remaining;
+- rune output;
+- pouch fill state;
+- pouch degradation/repair messages;
+- altar or Runespan siphoning activity;
+- current Runespan node/creature depleted.
+
+Possible alerts:
+- pouch degraded and lost capacity;
+- essence source exhausted;
+- expected pouch not filled before a trip;
+- Runespan node depleted / siphoning stopped;
+- rune-production milestone reached.
+
+Implementation note: pouch state is persistent and method-specific, so a future
+profile may need a small state machine rather than one independent regex per
+message.
+
+References:
+- https://runescape.wiki/w/Runecrafting
+- https://runescape.wiki/w/Runecrafting_pouches
+- https://runescape.wiki/w/Runespan
+
+### Construction
+
+Construction should be split by training method: Player-Owned House, portable
+workbench, Construction Contracts, and Fort Forinthry.
+
+Potential signals:
+- Make-X production at workbenches;
+- contract objective/completion;
+- materials remaining;
+- Fort construction progress;
+- Fort optimal/shiny hotspot movement;
+- blueprint/build completion.
+
+Possible alerts:
+- contract completed / next contract needed;
+- required material low;
+- optimal Fort hotspot moved;
+- building completed;
+- production batch stopped.
+
+Implementation note: Fort Forinthry is particularly attractive for a visual
+opportunity detector because the optimal hotspot moves during construction and
+gives better progress.
+
+References:
+- https://runescape.wiki/w/Construction
+- https://runescape.wiki/w/Construction_Contracts
+- https://runescape.wiki/w/Fort_Forinthry
+
+### Agility
+
+Agility profiles should be course-specific because obstacle order and lap time
+vary.
+
+Potential signals:
+- obstacle completion XP;
+- lap completion bonus;
+- course position if a stable UI cue exists;
+- obstacle failure message;
+- run-energy state for methods where it matters.
+
+Possible alerts:
+- lap completed / lap milestone;
+- expected next obstacle was not completed within a measured interval;
+- obstacle failure;
+- player appears stuck mid-course.
+
+Implementation note: course profiles could learn a simple ordered event
+sequence and detect a missing or repeated step without attempting to navigate
+the course.
+
+References:
+- https://runescape.wiki/w/Agility
+- https://runescape.wiki/w/Agility_training
+
+### Thieving
+
+The current Thieving profile remains the second reference implementation.
+
+Additional profile seeds beyond the detailed Thieving section above:
+- target-specific profiles rather than one universal pickpocket profile;
+- earlier suspicion-state detection;
+- Crystal Mask and aura timers;
+- HP monitoring;
+- inventory item classification for rare drops;
+- method-specific state machines for stalls, chests, Heists, or other targets.
+
+Reference:
+- https://runescape.wiki/w/Thieving
+
+### Slayer
+
+Slayer has one of the best existing UI hooks for Screen Watcher: the desktop
+interface can display a Slayer Counter with kills remaining.
+
+Potential signals:
+- assignment name;
+- kills remaining;
+- task complete message;
+- target/combat continuity;
+- HP, prayer, food, potion, ammunition/rune supply;
+- task-specific required item or protection state.
+
+Possible alerts:
+- 10 / 5 / 1 kills remaining;
+- assignment complete;
+- required consumable/equipment missing;
+- combat stopped unexpectedly;
+- rare/high-value drop detected.
+
+Implementation note: Slayer profiles should have a generic task layer plus
+optional monster-specific overlays. Do not duplicate full combat logic into
+every Slayer task.
+
+References:
+- https://runescape.wiki/w/Slayer
+- https://runescape.wiki/w/Slayer_assignment
+- https://runescape.wiki/w/Slayer_training
+
+### Dungeoneering
+
+Dungeoneering benefits from state-machine monitoring more than ordinary
+resource alerts.
+
+Potential signals:
+- current floor;
+- room/floor completion;
+- boss state;
+- death counter;
+- party/interface state;
+- floor timer where present;
+- required key/resource or puzzle cues for specific profiles.
+
+Possible alerts:
+- death count increased;
+- boss/critical room reached;
+- floor completed;
+- repeated idle/stuck state;
+- completion milestone across a floor set.
+
+Implementation note: deaths reduce floor reward unless mitigated, so a death
+counter is meaningful evidence to log even if no immediate alert is needed.
+
+Reference:
+- https://runescape.wiki/w/Dungeoneering
+
+### Invention
+
+Invention is a cross-cutting skill and should probably supply reusable status
+rules to many other profiles.
+
+Potential signals:
+- charge-pack level;
+- augmented item level;
+- item ready for siphoning/disassembly;
+- invention material or device production;
+- perk/buff state where visible.
+
+Possible alerts:
+- charge pack low / critically low;
+- augmented item reached a configured level such as a siphon target;
+- equipment siphon supply low;
+- augmented gear stopped gaining item XP when it should be active.
+
+Implementation note: item level is especially useful because siphoning and
+disassembly have intentional level breakpoints. Prefer configurable target
+levels rather than hard-coding one "correct" level.
+
+References:
+- https://runescape.wiki/w/Invention
+- https://runescape.wiki/w/Equipment_level
+- https://runescape.wiki/w/Divine_charge
+
+### First-pass priority by reusable detector
+
+When implementation resumes, it may be more efficient to build a reusable
+detector and then unlock several skills at once instead of finishing skills one
+by one.
+
+High-leverage detector families:
+
+1. **Resource bars / numeric resources** — Constitution, Prayer, Summoning,
+   combat profiles, Thieving, Slayer, Dungeoneering.
+2. **Buff/debuff icons and timers** — Summoning, Necromancy, Firemaking,
+   Fishing, Thieving, combat, Invention.
+3. **Progress bars** — Smithing, Archaeology, Necromancy rituals, Construction,
+   selected gathering/minigame activities.
+4. **Temporary opportunity detection** — Mining rockertunities, Archaeology time
+   sprites, Necromancy disturbances, Divination chronicles/enriched wisps,
+   Fort Forinthry optimal hotspots.
+5. **Make-X / production batches** — Crafting, Fletching, Cooking, Herblore,
+   Construction workbenches and selected Smithing workflows.
+6. **Task / remaining-count OCR** — Slayer, Dungeoneering, production goals,
+   selected minigames.
+7. **Target/combat state** — Attack, Strength, Defence, Constitution, Ranged,
+   Magic, Necromancy and Slayer.
+8. **Inventory classification and multi-ingredient supply** — Magic,
+   Runecrafting, Herblore, Fletching, Crafting, Cooking and rare-drop profiles.
+
 ## Cross-profile engine ideas
 
 ### Generic buff/debuff detector
