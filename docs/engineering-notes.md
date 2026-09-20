@@ -185,8 +185,9 @@ replayable sequences.
 ## CI
 
 `.github/workflows/ci.yml` currently runs on pushes and pull requests using
-Python 3.12. It installs `requirements-dev.txt`, runs pytest, and checks
-`watcher.py` and `tests/` with Flake8.
+Python 3.12. It installs `requirements-dev.txt`, compiles `watcher.py` and
+`tests/` with `compileall`, runs pytest, and checks `watcher.py` and
+`tests/` with Flake8.
 
 Live screen capture is intentionally absent from CI because the hosted runner
 does not provide the required RuneScape client, X/XWayland session, or desktop
