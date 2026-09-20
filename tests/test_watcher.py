@@ -87,6 +87,39 @@ def test_rule_fire_falls_back_to_detector_body_without_configuration():
     assert alert.source_text == "Matched OCR line"
 
 
+def test_rule_fire_bad_template_falls_back_instead_of_dropping_alert(capsys):
+    rule = Rule(name="test", kind="ocr", region="panel",
+                alert_body="Missing value: {does_not_exist}")
+
+    alert = rule.fire(100.0, "Detector fallback")
+
+    assert alert.body == "Detector fallback"
+    assert "invalid alert body template" in capsys.readouterr().err
+
+
+def test_item_count_out_state_uses_separate_template(monkeypatch):
+    rule = Rule(
+        name="urns", kind="item_count", region="backpack", item="urns",
+        warn_below=1, out_below=0, confirm_seconds=0, cooldown=0,
+        alert_body="{n} {noun} left.",
+        out_alert_body="No urns remain. Restock.",
+    )
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(
+        watcher, "capture_array",
+        lambda *args, **kwargs: np.zeros((10, 10, 3), dtype=np.int16),
+    )
+    monkeypatch.setattr(watcher, "count_by_colour", lambda *args, **kwargs: 0)
+
+    assert watcher._eval_item_count(
+        rule, "w", region, (0, 0, 10, 10), 100.0, 1) is None
+    alert = watcher._eval_item_count(
+        rule, "w", region, (0, 0, 10, 10), 101.0, 2)
+
+    assert alert is not None
+    assert alert.body == "No urns remain. Restock."
+
+
 def test_profile_identity_is_written_to_alert_log(tmp_path, monkeypatch):
     import watcher
 
@@ -232,6 +265,14 @@ def test_validate_config_rejects_non_string_alert_body():
         validate_config(config)
 
 
+def test_validate_config_rejects_non_string_out_alert_body():
+    config = valid_config()
+    config["rules"][0]["out_alert_body"] = 123
+
+    with pytest.raises(ValueError, match="out_alert_body"):
+        validate_config(config)
+
+
 def test_profiles_have_configured_copy_for_representative_rules():
     fishing = load_config(Path("profiles/fishing.json"))
     thieving = load_config(Path("profiles/thieving.json"))
@@ -240,6 +281,8 @@ def test_profiles_have_configured_copy_for_representative_rules():
 
     assert "slots left" in fishing_rules["pack_nearly_full"]["alert_body"]
     assert "{n}" in fishing_rules["urns_carried"]["alert_body"]
+    assert "No urns remain" in fishing_rules["urns_carried"]["out_alert_body"]
+    assert "nearing the end" in fishing_rules["urn_full"]["alert_body"]
     assert "{item}" in thieving_rules["loot_drop"]["alert_body"]
     assert "{total}" in thieving_rules["coin_milestone"]["alert_body"]
     assert "{gone:.0f}" in thieving_rules["activity_icon_gone"]["alert_body"]
