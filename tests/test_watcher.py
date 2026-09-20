@@ -244,3 +244,55 @@ def test_stun_pattern_matches_real_contraction():
                  "455 coins have been added to your money pouch."):
         assert re.search(activity, line, re.I), line
         assert not re.search(stun, line, re.I), line
+
+
+def test_stack_signature_detects_growth_not_shrink():
+    """Digit-pixel count must separate a real gain from noise and from use.
+
+    Measured drift on an unchanging stack is +/-2 pixels; a real quantity
+    change moves it 7-24. Reading the digit *value* was abandoned because
+    tesseract resolved only 5 of 9 slots correctly.
+    """
+    grid = (17, 86, 61, 55, 5, 6)
+    frame = np.zeros((560, 330, 3), dtype=np.int16)
+    assert watcher.stack_signature(frame, grid, 0) == 0
+
+    # paint yellow-green digit pixels into slot 0's top-left corner
+    frame[88:100, 19:40] = [200, 200, 40]
+    grown = watcher.stack_signature(frame, grid, 0)
+    assert grown > 100
+
+    # a different slot is unaffected
+    assert watcher.stack_signature(frame, grid, 1) == 0
+
+
+def test_stack_rule_ignores_transient_overlay():
+    """Hovering the backpack draws a tooltip that must not read as a drop."""
+    rule = _rule(kind="stack", stack_tolerance=3, confirm_seconds=4)
+    rule._primed = True
+    base = [104, 356, 294, 85]
+    fired = []
+    now = 0.0
+    # tooltip: slot 3 jumps, then reverts before confirm_seconds elapses
+    frames = [base, base, [104, 356, 294, 60], base, base, base]
+    for cur in frames:
+        prev = rule._stacks
+        rule._stacks = list(cur)
+        if prev and len(prev) == len(cur):
+            changed = [i for i, (a, b) in enumerate(zip(prev, cur))
+                       if abs(b - a) > rule.stack_tolerance]
+            if changed:
+                if set(changed) != rule._pending_slots:
+                    rule._pending_slots = set(changed)
+                    rule._pending_since = now
+                    rule._pending_base = prev
+            elif rule._pending_slots:
+                b0 = rule._pending_base or prev
+                slots = sorted(rule._pending_slots)
+                if now - rule._pending_since >= rule.confirm_seconds:
+                    rule._pending_slots = set()
+                    if [i for i in slots
+                            if cur[i] - b0[i] > rule.stack_tolerance]:
+                        fired.append(now)
+        now += 1.5
+    assert fired == []

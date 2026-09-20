@@ -161,9 +161,10 @@
       "message": "Loot",
       "sound": "message-highlight",
       "_note": "Announces a named item drop and ignores the currency line. Item list taken from the RuneScape Wiki drop table for Menaphos market guards: coins 758/1000, extra fine sand 100/1000, acadia wood spirit 50/1000, waterskin 50/1000, large bladed adamant salvage 20/1000, sealed clue (hard) 6/1000, menaphite gift offering small 4/1000, potato cactus 5/1000, vital spark 2/1000, gift offering medium 2/1000, sealed clue (elite) ~495/100000, master 5/100000. Coins are excluded because they land in the money pouch roughly every two seconds and would bury the rare drops. cooldown=0 because every drop is worth seeing; the alternatives in the pattern are ordered longest-first so '(elite)' wins over the bare 'sealed clue scroll'.",
-      "enabled": true,
+      "enabled": false,
       "urgency": "normal",
-      "timeout_ms": 6000
+      "timeout_ms": 6000,
+      "_disabled_note": "Superseded by item_gained, which watches the backpack instead of chat. The inventory is the stronger signal: a dropped item is simply present, whereas chat lines survive a measured median of only 11s before scrolling off and the chat font OCRs poorly over a busy 3D scene. Re-enable if the exact item NAME matters more than reliable detection - this rule can name the item, while item_gained can only say which slot grew."
     },
     {
       "name": "coin_milestone",
@@ -192,6 +193,23 @@
       "enabled": true,
       "urgency": "normal",
       "timeout_ms": 12000
+    },
+    {
+      "name": "item_gained",
+      "kind": "stack",
+      "region": "backpack",
+      "capacity": 28,
+      "stack_tolerance": 3,
+      "cell_threshold": 8.0,
+      "confirm_seconds": 4,
+      "cooldown": 120,
+      "message": "Item gained",
+      "sound": "message-highlight",
+      "_note": "Detects a drop by watching stack-count digits in the backpack rather than chat. Reading the digit VALUE was tried and abandoned - tesseract got only 5 of 9 slots right even after tuning the crop, bleeding adjacent cells together into values like 1271. Counting yellow digit PIXELS instead is far steadier: measured drift on an unchanging stack is +/-2, while a real quantity change moves it 7-24, so stack_tolerance=3 sits clear of the noise. confirm_seconds=4 rejects tooltips: hovering the backpack draws one over neighbouring cells and was observed making occupancy oscillate 9/10/11 with signatures that jumped and reverted within seconds, whereas a real drop holds. Frames reading above capacity are dropped as interface overlays, same as the inventory rules. TUNED AFTER LIVE MEASUREMENT: at ~2s per pickpocket and a 10% extra-fine-sand rate, an existing stack grows roughly every 20s - measured median gap was 24s, which is genuine but far too frequent to be useful. new_slot_only=true reports only an item landing in a previously EMPTY slot, which is what a first-of-its-kind drop looks like; routine top-ups of a stack you already carry are counted silently. cooldown=120 bounds the rest.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 6000,
+      "new_slot_only": true
     }
   ],
   "_notification_note": "Rules use urgency 'normal' with an explicit timeout_ms so KDE auto-dismisses them. Setting urgency to 'critical' makes KDE keep the popup until it is closed by hand and ignore timeout_ms - only do that for an alert you must not miss."
