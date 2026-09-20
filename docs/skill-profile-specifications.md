@@ -11,8 +11,19 @@ already implements every skill. The broader application outline in
 architecture for skills, quests, bosses, minigames, and other activities.
 
 Profiles should describe the activity being monitored, not attempt to automate
-gameplay. The watcher remains read-only: it observes regions, OCR text,
-inventory state, XP changes, and notifications.
+gameplay. The watcher remains read-only: it observes game state and reports
+information; it must not click, type, move the mouse, perform actions, or choose
+gameplay for the player.
+
+The current observation source is screen capture, OCR, colour/pixel analysis,
+and local state. Profiles should not depend on that implementation detail. A
+future sanctioned RuneScape API/plugin source should be able to produce the same
+normalized events without rewriting profile logic. Jagex's September 2026 API
+preview explicitly identifies unreliable screen reading as a limitation that
+the official client API can avoid.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
 
 Questing and bossing are separate activity families, not additional skills.
 They require their own profiles and cues because generic skill XP or inventory
@@ -22,15 +33,27 @@ skill` for the 29 skill profiles.
 
 ## Profile design
 
-Each skill profile should define:
+Each skill/activity profile should define:
 
-- the skill name and activity variant;
-- the regions required (chat, XP/metrics, inventory, action bar, bank, or
-  activity-specific interface);
+- the skill name and concrete activity or training method;
+- reusable global/base capabilities it composes rather than duplicates;
+- the observations required (chat, XP/metrics, inventory, action bar, bank,
+  activity-specific interface, or future non-screen backend);
+- normalized events expected from those observations;
 - recurring progress signals and stop/failure signals;
 - supplies, tools, resources, and output items worth monitoring;
 - overlay/interface states that must suppress false positives;
-- thresholds measured from captures rather than copied blindly between skills.
+- confidence/corroboration rules where several signals can describe the same
+  event;
+- thresholds measured from captures or authoritative data rather than copied
+  blindly between skills;
+- alert lifecycle policy: one-shot, repeat-until-resolved, escalation, and clear
+  conditions.
+
+Global events such as level-up, inventory capacity, AFK/lobby warning, HP,
+Prayer, familiar expiry, porter depletion, and generic session milestones
+should live in reusable capability profiles rather than being copied into every
+skill.
 
 The RuneScape Wiki is the reference for current skill mechanics, item names,
 training methods, unlocks, and likely supplies. Start from the skill page, then
@@ -75,22 +98,35 @@ skills, see [future-implementation-ideas.md](future-implementation-ideas.md).
 
 ## Research and implementation order
 
-Create a separate JSON file under `profiles/` for each skill, for example
-`profiles/mining.json` or `profiles/herblore.json`. Create separate profiles
-for concrete quest and boss activities as well. Do not assume that a rule from
-one skill or activity transfers unchanged to another:
+Coverage should eventually span all 29 skills, but do **not** force each skill
+into one giant JSON file. Prefer activity/method profiles such as
+`profiles/necromancy-rituals.json`, `profiles/mining-core.json`, or
+`profiles/agility-<course>.json` when the activity has distinct signals,
+timers, or failure states.
 
-1. Read the skill page and its current training/activity pages.
-2. Identify one concrete activity and its expected cycle.
-3. Capture representative chat, metrics, inventory, and interface regions.
-4. Measure idle noise, progress intervals, and overlay behavior.
-5. Add the profile with conservative rules and explicit suppressions.
-6. Validate the JSON, replay captures where available, and observe alert logs
-   before enabling unattended use.
+Before expanding profile count, favour reusable detector/event primitives that
+unlock several skills at once:
 
-The current `profiles/fishing.json` and `profiles/thieving.json` are the
-reference examples for this process. The root configuration files remain
-compatibility copies for existing commands.
+1. Define the normalized event(s) the activity needs.
+2. Reuse or build a generic observation/extractor for those events.
+3. Read the skill page and its current training/activity pages.
+4. Identify one concrete activity and its expected cycle/state machine.
+5. Capture representative chat, metrics, inventory, interface, and overlay
+   states, or collect equivalent data through a sanctioned backend.
+6. Record sanitized fixtures for normal progress, edge cases, and false-positive
+   conditions.
+7. Measure idle noise, progress intervals, layout/scaling behaviour, and
+   corroborating signals.
+8. Add the activity profile with conservative rules, explicit suppressions,
+   confidence expectations, and alert lifecycle policy.
+9. Validate the resolved profile, replay fixtures, and inspect alert/event logs
+   before relying on it live.
+
+The current `profiles/fishing.json` and `profiles/thieving.json` remain the
+reference examples for live measurement and evidence-driven tuning, but future
+profiles should progressively use shared global/base capabilities rather than
+copying those files wholesale. The root configuration files remain compatibility
+copies for existing commands.
 
 ## Non-skilling activity profiles
 
@@ -114,3 +150,14 @@ current activity is still the same.
   skill types, and high-level descriptions.
 - Individual skill links in the table above — activity-specific mechanics,
   training methods, items, and unlocks.
+- [RuneScape: API & Plugins September Preview](https://secure.runescape.com/m=news/api--plugins-september-preview)
+  — official examples of Quest Helper, Clue Trainer, Drop Log, Ground Items,
+  Job Gauges, and Rituals Helper, and evidence for keeping observation backends
+  replaceable.
+- [Jagex: Rules of RuneScape](https://legal.jagex.com/docs/rules/rules-of-runescape)
+  and [Macro/client features not permitted](https://legal.jagex.com/docs/rules/macro-and-client-features-not-permitted)
+  — read-only boundary and restrictions on generated input, direct game-world
+  communication, client modification, and excessive automated website requests.
+- [RuneScape Wiki: Interface](https://runescape.wiki/w/Interface) — customizable
+  windows, layouts, and activity-specific interface areas that affect
+  calibration.
