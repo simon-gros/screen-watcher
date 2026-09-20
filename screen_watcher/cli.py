@@ -8,6 +8,7 @@ import signal
 import time
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 from .capture import CaptureError, capture, capture_array
@@ -69,7 +70,8 @@ def cmd_shot(args) -> None:
         else:
             raise ConfigError("--box must be anchor,dx,dy,w,h or x,y,w,h")
         try:
-            region = Region(anchor, *(int(value) for value in values))
+            parsed = tuple(int(value) for value in values)
+            region = Region(anchor, parsed[0], parsed[1], parsed[2], parsed[3])
         except ValueError as exc:
             raise ConfigError(f"invalid --box values: {exc}") from exc
         label = "custom"
@@ -107,7 +109,7 @@ def cmd_probe(args) -> None:
     wid, size = resolve_window(cfg)
     regions = cfg["_regions"]
     masks = {rule["region"]: rule.get("mask") for rule in cfg["rules"]}
-    previous = {name: None for name in regions}
+    previous: dict[str, np.ndarray | None] = {name: None for name in regions}
     print(f"window {wid} {size[0]}x{size[1]} - {args.count} samples @ {args.interval}s")
     print("frame-to-frame mean absolute difference\n")
     print(f"{'t':>6}  " + "  ".join(f"{name:>14}" for name in regions))
