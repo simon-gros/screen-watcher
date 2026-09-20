@@ -39,6 +39,7 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
 REGION_DIR = ROOT / "regions"
 STATE_DIR = ROOT / "state"
+ACTIVE_SKILL = ""
 
 ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
@@ -473,8 +474,13 @@ def log_alert(rule_name: str, title: str, body: str) -> None:
     try:
         STATE_DIR.mkdir(exist_ok=True)
         with ALERT_LOG.open("a") as f:
-            f.write(json.dumps({"t": round(time.time(), 1), "rule": rule_name,
-                                "title": title, "body": body[:200]}) + "\n")
+            f.write(json.dumps({
+                "t": round(time.time(), 1),
+                "skill": ACTIVE_SKILL or "unknown",
+                "rule": rule_name,
+                "title": title,
+                "body": body[:200],
+            }) + "\n")
     except OSError:
         pass
 
@@ -1336,8 +1342,10 @@ def _release_singleton() -> None:
 
 
 def cmd_watch(args) -> None:
+    global ACTIVE_SKILL
     claim_singleton()
     cfg = load_config(args.config)
+    ACTIVE_SKILL = cfg.get("skill", "unnamed")
     wid, size = resolve_window(cfg)
     regs = cfg["_regions"]
     rules = [Rule(**{k: v for k, v in r.items() if not k.startswith("_")})
@@ -1347,7 +1355,8 @@ def cmd_watch(args) -> None:
 
     interval = cfg.get("interval", 1.0)
     wm_class = cfg["window"]["wm_class"]
-    print(f"watching {wid} ({wm_class}) {size[0]}x{size[1]} every {interval}s")
+    print(f"watching skill={ACTIVE_SKILL!r} profile={args.config} "
+          f"{wid} ({wm_class}) {size[0]}x{size[1]} every {interval}s")
     for r in rules:
         print(f"  {r.name:<18} {r.kind:<7} -> {r.region}")
     print("ctrl-c to stop", flush=True)

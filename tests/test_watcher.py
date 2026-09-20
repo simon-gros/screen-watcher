@@ -44,6 +44,19 @@ def test_rule_fire_returns_alert_without_notifying(monkeypatch):
     assert alert.rule_name == "test"
 
 
+def test_profile_identity_is_written_to_alert_log(tmp_path, monkeypatch):
+    import watcher
+
+    watcher.ACTIVE_SKILL = "fishing"
+    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(watcher, "ALERT_LOG", tmp_path / "alerts.jsonl")
+
+    watcher.log_alert("spot_stopped", "Fishing stopped", "Check the spot")
+
+    record = (tmp_path / "alerts.jsonl").read_text().strip()
+    assert '"skill": "fishing"' in record
+
+
 def valid_config():
     return {
         "window": {"wm_class": "example"},
