@@ -6,8 +6,10 @@ Watches regions of a game window and notifies you when something needs attention
 clicks, nothing that touches the game. That is deliberate and is what keeps it
 on the right side of Jagex's rules — the same line Alt1 sits on.
 
-Currently configured for the RS3 NXT client (`WM_CLASS=steam_app_1343400`), but
-nothing is tied to one skill. Fishing and thieving (including pickpocketing)
+The watcher identifies the configured game window through its X11/XWayland
+`window.wm_class` setting. This value is profile-specific and can be changed
+for a different client or installation; nothing is tied to one skill. Fishing
+and thieving (including pickpocketing)
 are just two examples among RuneScape's 29 skills; the same region, OCR,
 activity, inventory, and idle detectors can be adapted to other skills and
 activities by changing the profile rules.
