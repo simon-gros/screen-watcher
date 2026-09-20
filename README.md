@@ -7,7 +7,10 @@ clicks, nothing that touches the game. That is deliberate and is what keeps it
 on the right side of Jagex's rules — the same line Alt1 sits on.
 
 Currently configured for the RS3 NXT client (`WM_CLASS=steam_app_1343400`), but
-nothing is RS-specific except `config.json`.
+nothing is tied to one skill. Fishing and thieving (including pickpocketing)
+are just two examples among RuneScape's 29 skills; the same region, OCR,
+activity, inventory, and idle detectors can be adapted to other skills and
+activities by changing the profile rules.
 
 ## Requirements
 
@@ -33,8 +36,10 @@ automation process.
 
 The watcher always loads `config.json` from the directory containing
 `watcher.py`; it does not accept a configuration path as a command-line
-option. `config.json` is the active thieving configuration in this repository.
-`config.fishing.json` is the fishing profile kept as a reference/backup.
+option. `config.json` is the active thieving/pickpocketing configuration in
+this repository. `config.fishing.json` is the fishing profile kept as a
+reference/backup. These are two example profiles, not a limitation to those
+two skills.
 
 To switch profiles, stop the watcher, preserve the current file, and copy the
 desired profile into place:
@@ -303,7 +308,12 @@ Every rule has a distinct sound, so alerts are identifiable without looking at
 the screen. That is the point of `sound`: KDE's own notification blip fires for
 every `notify-send` and tells you nothing about *which* rule tripped.
 
-### The `activity` rule — detecting a depleted fishing spot
+### The `activity` rule — detecting a stopped activity
+
+The examples below describe a depleted fishing spot, but the detector is
+skill-agnostic: a thieving/pickpocketing profile can use the same rule to
+detect that pickpocket messages have stopped, and other skill profiles can
+monitor their own recurring chat or screen signals.
 
 RS3 does not announce that a fishing spot has moved. There is no "the spot
 disappears" message to match; the shoal simply stops producing and the only
