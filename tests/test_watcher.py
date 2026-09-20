@@ -659,3 +659,147 @@ def test_validate_config_requires_complete_corroboration_pair():
 
     with pytest.raises(ValueError, match="requires corroborate_region"):
         validate_config(config)
+
+
+# --------------------------------------------------------------------------
+# Priority 0, step 1: capture backend abstraction
+# --------------------------------------------------------------------------
+
+class RecordingBackend(watcher.CaptureBackend):
+    """A backend with no X11, no ImageMagick, and no game.
+
+    Its existence is the point of the abstraction: if capture can only be
+    exercised through a live desktop session, none of it is testable in CI.
+    """
+
+    name = "recording"
+
+    def __init__(self, size=(800, 600)):
+        self.grabs = []
+        self._size = size
+
+    def available(self):
+        return True, "ok"
+
+    def find(self, wm_class):
+        return f"handle-for-{wm_class}"
+
+    def size(self, handle):
+        return self._size
+
+    def grab_array(self, handle, box):
+        self.grabs.append(tuple(box))
+        _x, _y, w, h = box
+        return np.full((h, w, 3), 100, dtype=np.int16)
+
+
+def test_game_instance_acquires_through_backend():
+    backend = RecordingBackend()
+    game = watcher.GameInstance("steam_app_1343400", backend=backend)
+
+    assert game.acquire() is True
+    assert game.handle == "handle-for-steam_app_1343400"
+    assert game.size == (800, 600)
+
+
+def test_game_instance_reports_missing_window():
+    class NoWindow(RecordingBackend):
+        def find(self, wm_class):
+            return None
+
+    game = watcher.GameInstance("absent", backend=NoWindow())
+    assert game.acquire() is False
+
+    with pytest.raises(watcher.CaptureError, match="no game window"):
+        game.frame((0, 0, 10, 10))
+
+
+def test_shared_frame_serves_many_readers_with_one_capture():
+    """The Priority 0 acceptance criterion, as a test.
+
+    Several detectors reading the same region in one cycle must not each
+    spawn a capture.
+    """
+    backend = RecordingBackend()
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    box = (0, 0, 40, 30)
+
+    game.begin_cycle(1)
+    first = game.frame(box)
+    second = game.frame(box)
+    third = game.frame(box)
+
+    assert len(backend.grabs) == 1
+    assert first is second is third
+
+    # a new cycle invalidates the cache
+    game.begin_cycle(2)
+    game.frame(box)
+    assert len(backend.grabs) == 2
+
+
+def test_masked_and_plain_views_share_one_capture():
+    """A mask is derived from the raw pixels, not a second screenshot."""
+    backend = RecordingBackend()
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    box = (0, 0, 40, 30)
+
+    game.begin_cycle(1)
+    plain = game.frame(box)
+    masked = game.frame(box, mask="bright")
+
+    assert len(backend.grabs) == 1
+    assert plain.max() == 100          # raw frame untouched
+    assert not np.array_equal(plain, masked)
+
+
+def test_distinct_regions_are_captured_separately():
+    backend = RecordingBackend()
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+
+    game.begin_cycle(1)
+    game.frame((0, 0, 10, 10))
+    game.frame((5, 5, 10, 10))
+
+    assert backend.grabs == [(0, 0, 10, 10), (5, 5, 10, 10)]
+
+
+def test_resize_is_detected_and_drops_stale_frames():
+    """Recovering from a RuneScape resize without restarting is required."""
+    backend = RecordingBackend()
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+
+    game.begin_cycle(1)
+    game.frame((0, 0, 10, 10))
+    assert len(backend.grabs) == 1
+
+    backend._size = (1024, 768)
+    assert game.refresh_size() == (1024, 768)
+    assert game.size == (1024, 768)
+
+    # cached frames from the old geometry must not survive
+    game.frame((0, 0, 10, 10))
+    assert len(backend.grabs) == 2
+
+
+def test_default_backend_is_registered():
+    assert watcher.DEFAULT_BACKEND in watcher.BACKENDS
+    assert issubclass(watcher.BACKENDS[watcher.DEFAULT_BACKEND],
+                      watcher.CaptureBackend)
+
+
+def test_backend_reports_why_it_is_unavailable():
+    """`doctor` will depend on this reason string being actionable."""
+    class Broken(watcher.CaptureBackend):
+        name = "broken"
+
+        def available(self):
+            return False, "missing tool(s): import"
+
+    ok, reason = Broken().available()
+    assert ok is False
+    assert "import" in reason

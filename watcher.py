@@ -24,6 +24,7 @@ import argparse
 import atexit
 import json
 import os
+import shutil
 import re
 import signal
 import subprocess
@@ -119,6 +120,167 @@ def window_size(wid: str) -> tuple[int, int] | None:
 
 
 # --------------------------------------------------------------------------
+# capture backends
+#
+# Priority 0, step 1: separate "which window and how do we get pixels" from
+# "what do those pixels mean". Detectors and profiles must not name
+# ImageMagick, xdotool, or any other platform tool; they ask a GameInstance
+# for a frame and get a numpy array back.
+#
+# This is the seam the documented Wayland/PipeWire and replay backends plug
+# into later. It is deliberately introduced before those backends exist,
+# because retrofitting an interface underneath a dozen call sites is what
+# makes that work expensive.
+# --------------------------------------------------------------------------
+
+class CaptureBackend:
+    """How to find the game window and read pixels out of it.
+
+    Subclasses own every platform detail. The rest of the application sees
+    only `find`, `size`, `grab_file`, and `grab_array`.
+    """
+
+    name = "abstract"
+
+    def available(self) -> tuple[bool, str]:
+        """Whether this backend can run here, and why not when it cannot."""
+        return False, "not implemented"
+
+    def find(self, wm_class: str) -> str | None:
+        raise NotImplementedError
+
+    def size(self, handle: str) -> tuple[int, int] | None:
+        raise NotImplementedError
+
+    def grab_file(self, handle: str, box, out: Path,
+                  resize: str | None = None) -> Path:
+        raise NotImplementedError
+
+    def grab_array(self, handle: str, box) -> np.ndarray:
+        raise NotImplementedError
+
+
+class X11ImageMagickBackend(CaptureBackend):
+    """Current capture path: xdotool for discovery, ImageMagick for pixels.
+
+    This is the behaviour Screen Watcher has been measured against, so it
+    stays the default until a native XCB/XShm backend is benchmarked against
+    it (Priority 0, step 3). Wrapping it unchanged keeps that comparison
+    honest - the new backend has to beat a known quantity.
+    """
+
+    name = "x11-imagemagick"
+
+    def available(self) -> tuple[bool, str]:
+        ensure_x_env()
+        if not os.environ.get("DISPLAY"):
+            return False, "no DISPLAY (X11/XWayland session not reachable)"
+        missing = [t for t in ("xdotool", "import") if not shutil.which(t)]
+        if missing:
+            return False, f"missing tool(s): {', '.join(missing)}"
+        return True, "ok"
+
+    def find(self, wm_class: str) -> str | None:
+        return find_window(wm_class)
+
+    def size(self, handle: str) -> tuple[int, int] | None:
+        return window_size(handle)
+
+    def grab_file(self, handle: str, box, out: Path,
+                  resize: str | None = None) -> Path:
+        return capture(handle, box, out, resize)
+
+    def grab_array(self, handle: str, box) -> np.ndarray:
+        return _capture_array_uncached(handle, box)
+
+
+BACKENDS: dict[str, type[CaptureBackend]] = {
+    X11ImageMagickBackend.name: X11ImageMagickBackend,
+}
+DEFAULT_BACKEND = X11ImageMagickBackend.name
+
+
+class GameInstance:
+    """One game window observed through one backend.
+
+    Holds the window handle and current size so callers stop threading `wid`
+    and `size` through every function, and owns the per-cycle frame cache so
+    several readers looking at the same region in the same cycle cause one
+    capture rather than one each.
+    """
+
+    def __init__(self, wm_class: str, backend: CaptureBackend | None = None):
+        self.wm_class = wm_class
+        self.backend = backend or X11ImageMagickBackend()
+        self.handle: str | None = None
+        self.size: tuple[int, int] | None = None
+        self._frames: dict = {}
+        self._cycle: int | None = None
+
+    # -- discovery ---------------------------------------------------------
+
+    def acquire(self) -> bool:
+        """Locate the window. False when the game is not running."""
+        handle = self.backend.find(self.wm_class)
+        if not handle:
+            return False
+        size = self.backend.size(handle)
+        if not size:
+            return False
+        self.handle, self.size = handle, size
+        self._frames.clear()
+        return True
+
+    def refresh_size(self) -> tuple[int, int] | None:
+        """Re-read geometry; callers use this to notice a resize."""
+        if not self.handle:
+            return None
+        size = self.backend.size(self.handle)
+        if size and size != self.size:
+            self.size = size
+            self._frames.clear()
+        return size
+
+    # -- frames ------------------------------------------------------------
+
+    def begin_cycle(self, cycle: int) -> None:
+        """Start a new sampling cycle, dropping the previous cycle's frames.
+
+        Keying the cache on an explicit cycle rather than a timestamp means
+        every reader in one pass sees the same pixels, so two detectors
+        cannot disagree about a frame that changed between them.
+        """
+        if cycle != self._cycle:
+            self._cycle = cycle
+            self._frames.clear()
+
+    def frame(self, box, mask: str | None = None) -> np.ndarray:
+        """RGB array for `box`, captured at most once per cycle."""
+        if not self.handle:
+            raise CaptureError("no game window acquired")
+        key = (tuple(box), mask)
+        hit = self._frames.get(key)
+        if hit is not None:
+            return hit
+        # Masks are derived from the raw pixels, so cache the unmasked frame
+        # too: asking for a plain and a masked view of one region in the same
+        # cycle must still cost a single capture.
+        raw_key = (tuple(box), None)
+        raw = self._frames.get(raw_key)
+        if raw is None:
+            raw = self.backend.grab_array(self.handle, box)
+            self._frames[raw_key] = raw
+        arr = _apply_bright_mask(raw) if mask == "bright" else raw
+        self._frames[key] = arr
+        return arr
+
+    def save(self, box, out: Path, resize: str | None = None) -> Path:
+        if not self.handle:
+            raise CaptureError("no game window acquired")
+        return self.backend.grab_file(self.handle, box, out, resize)
+
+
+# --------------------------------------------------------------------------
 # anchored regions
 # --------------------------------------------------------------------------
 
@@ -197,29 +359,45 @@ def capture(wid: str, box: tuple[int, int, int, int] | None, out: Path,
     return out
 
 
+def _apply_bright_mask(arr: np.ndarray) -> np.ndarray:
+    """Isolate bright text from a semi-transparent panel.
+
+    Game panels let the moving 3D world bleed through, which creates a
+    constant frame-to-frame diff floor. Text is much brighter than the
+    bleed-through, so a luminance threshold drops that floor to ~0.
+    """
+    lum = arr.mean(axis=2)
+    return (lum > 140).astype(np.int16) * 255
+
+
+def _capture_array_uncached(wid: str, box) -> np.ndarray:
+    """One region capture, no caching and no masking."""
+    with tempfile.NamedTemporaryFile(suffix=".ppm") as tmp:
+        capture(wid, box, Path(tmp.name))
+        try:
+            with Image.open(tmp.name) as im:
+                return np.asarray(im.convert("RGB"), dtype=np.int16)
+        except (OSError, ValueError) as e:
+            # `import` can leave a short file while the window is repainting.
+            raise CaptureError(f"unreadable capture: {e}") from e
+
+
 def capture_array(wid: str, box, mask: str | None = None,
                   cycle: int | None = None) -> np.ndarray:
-    """Capture a region once per cycle and return its RGB array."""
+    """Capture a region once per cycle and return its RGB array.
+
+    Retained for call sites that still pass a raw window id. New code should
+    go through `GameInstance.frame`, which owns the same cache keyed on an
+    explicit cycle.
+    """
     key = (wid, tuple(box), mask)
     if cycle is not None:
         hit = _FRAME_CACHE.get(key)
         if hit is not None and hit[0] == cycle:
             return hit[1]
-    with tempfile.NamedTemporaryFile(suffix=".ppm") as tmp:
-        capture(wid, box, Path(tmp.name))
-        try:
-            with Image.open(tmp.name) as im:
-                arr = np.asarray(im.convert("RGB"), dtype=np.int16)
-        except (OSError, ValueError) as e:
-            # `import` can leave a short file while the window is repainting.
-            raise CaptureError(f"unreadable capture: {e}") from e
+    arr = _capture_array_uncached(wid, box)
     if mask == "bright":
-        # Game panels are semi-transparent, so the moving 3D world bleeds
-        # through and creates a constant diff floor. Text is much brighter
-        # than the bleed-through, so a luminance threshold isolates it and
-        # drops the noise floor to ~0.
-        lum = arr.mean(axis=2)
-        arr = (lum > 140).astype(np.int16) * 255
+        arr = _apply_bright_mask(arr)
     if cycle is not None:
         _FRAME_CACHE[key] = (cycle, arr)
     return arr

@@ -438,7 +438,10 @@ architectural limitations are documented in
 - Quest and boss profile types are accepted by validation, but the repository
   does not yet include complete quest or boss profiles.
 - `watcher.py` is still monolithic and is planned to be split into capture,
-  profiles, signals, rules, events, notifications, and CLI modules.
+  profiles, signals, rules, events, notifications, and CLI modules. The
+  `CaptureBackend`/`GameInstance` seam (Priority 0, step 1) has landed, but
+  the existing rule evaluators still call `capture_array`/`ocr_cached`
+  directly rather than going through a `GameInstance`.
 - Identical region/mask requests are reused within a polling cycle, but
   different regions are still captured independently rather than cropped from
   one immutable full-window frame. Detectors can therefore observe slightly
