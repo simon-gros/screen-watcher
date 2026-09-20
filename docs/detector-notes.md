@@ -510,6 +510,25 @@ scene — and `thieving_stopped` needed four corroborating message patterns to
 stop false-firing (it fired 4 times in 3 minutes before that fix). Reading a
 visual state needs none of that.
 
+**The icon alone is not sufficient — corrected after false positives.**
+
+The separation below is real, but it answers the wrong question. Measured over
+a live session the icon was absent for **19% of samples**, including one
+unbroken **60s** stretch, while pickpocketing continued throughout — **33
+pickpocket chat lines** arrived during those absences.
+
+The icon tracks XP-gain popups. It lapses while moving between targets or when
+the camera changes, so absence means *"no XP right now"*, not *"the activity
+ended"*.
+
+`corroborate_region` now requires chat to agree before a stop is reported, and
+`absent_seconds` was raised 12 → 75 to clear the observed blackout with margin.
+Result: **0 false stops** across 200s of live play.
+
+This is a useful general lesson: a signal with perfect class separation can
+still be the wrong signal. Separation was never the problem here — *what the
+indicator actually means* was.
+
 **Separation is absolute:**
 
 | state | ring pixels |

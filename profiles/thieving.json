@@ -258,14 +258,16 @@
         90
       ],
       "present_above": 200,
-      "absent_seconds": 12,
+      "absent_seconds": 75,
       "cooldown": 120,
       "message": "Thieving stopped",
       "sound": "dialog-warning",
-      "_note": "Fires when the top-centre activity icon disappears, which means XP has stopped accruing. Measured separation is absolute: the orange ring counted 328 pixels constantly across 64 samples while active, and 0-113 on four surrounding scenery offsets - the ring colour simply does not occur in the environment here. present_above=200 sits clear of both. absent_seconds=12 covers the icon's fade animation and a dropped frame or two; a real stop keeps it gone.",
+      "_note": "Fires when the top-centre activity icon disappears AND chat shows no pickpocketing. The icon alone is not sufficient - MEASURED over a live session it was absent for 19% of samples, including one unbroken 60s stretch, while pickpocketing continued throughout: 33 pickpocket chat lines were observed during absences. The icon tracks XP-gain popups, which lapse while moving between targets or when the camera changes, so absence means 'no XP right now', not 'the activity ended'. corroborate_region therefore requires chat to agree before a stop is reported. absent_seconds=75 clears the observed 60s blackout with margin. Ring separation itself is still absolute: 328-331 present vs 0-113 scenery, so present_above=200 needs no tuning.",
       "enabled": true,
       "urgency": "normal",
-      "timeout_ms": 20000
+      "timeout_ms": 20000,
+      "corroborate_region": "chat_tail",
+      "corroborate_pattern": "you pick the target'?s pocket|coins have been added to your money pouch|camouflage outfit keeps you hidden"
     }
   ],
   "_notification_note": "Rules use urgency 'normal' with an explicit timeout_ms so KDE auto-dismisses them. Setting urgency to 'critical' makes KDE keep the popup until it is closed by hand and ignore timeout_ms - only do that for an alert you must not miss."

@@ -606,6 +606,8 @@ class Rule:
     colour_hi: tuple = (255, 200, 90)
     present_above: int = 200
     absent_seconds: float = 12.0
+    corroborate_region: str | None = None
+    corroborate_pattern: str | None = None
     # stack
     stack_tolerance: int = 3
     new_slot_only: bool = False
@@ -639,6 +641,7 @@ class Rule:
     _pending_base: list = field(default_factory=list, repr=False)
     _elapsed: int = field(default=0, repr=False)
     _absent_since: float = field(default=0.0, repr=False)
+    _corroborate_box: tuple | None = field(default=None, repr=False)
     _total: int = field(default=0, repr=False)
     _milestone: int = field(default=0, repr=False)
     _level_since: float = field(default=0.0, repr=False)
@@ -1050,6 +1053,17 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
 
     `absent_seconds` guards against the icon's own fade animation and against a
     single dropped frame; the indicator must stay gone before a stop is called.
+
+    The icon alone is NOT sufficient. Measured over a live session it was absent
+    for 19% of samples - including one unbroken 60s stretch - while
+    pickpocketing continued throughout: 33 pickpocket chat lines were observed
+    during absences. The icon tracks XP-gain popups, which lapse while moving
+    between targets or when the camera changes, so absence means "no XP right
+    now", not "the activity ended".
+
+    `corroborate_region` therefore requires a second, independent signal to
+    agree before a stop is reported: if the corroborating region is still
+    producing matching text, the activity is alive regardless of the icon.
     """
     frame = capture_array(wid, box, None, cycle)
     n = colour_pixels(frame, tuple(rule.colour_lo), tuple(rule.colour_hi))
@@ -1057,6 +1071,7 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
 
     if present:
         rule._absent_since = 0.0
+        rule._last_activity = now
         rule._armed = True
         return None
     if rule._absent_since == 0.0:
@@ -1065,6 +1080,22 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
     gone = now - rule._absent_since
     if not rule._armed or gone < rule.absent_seconds or not rule.ready(now):
         return None
+
+    if rule._corroborate_box and rule.corroborate_pattern:
+        text = ocr_cached(wid, rule._corroborate_box, cycle)
+        for line in text.splitlines():
+            key = norm_line(line.strip())
+            if len(key) < 8 or key in rule._seen:
+                continue
+            rule._seen.add(key)
+            if re.search(rule.corroborate_pattern, line, re.I):
+                # Independent evidence the activity is still running.
+                rule._last_activity = now
+        if len(rule._seen) > 400:
+            rule._seen.clear()
+        if now - rule._last_activity < rule.absent_seconds:
+            return None
+
     rule._armed = False
     return rule.fire(now, f"No activity icon for {gone:.0f}s - "
                           f"{rule.item} has stopped.")
@@ -1774,6 +1805,11 @@ def cmd_watch(args) -> None:
         try:
             for rule in rules:
                 try:
+                    if rule.corroborate_region:
+                        # Resolved here because only the loop knows the current
+                        # window size and the full region table.
+                        rule._corroborate_box = regs[
+                            rule.corroborate_region].resolve(size)
                     alert = evaluate(rule, wid, regs[rule.region], size, now, cycle)
                     if alert is not None:
                         notify(alert.title, alert.body, alert.urgency,
