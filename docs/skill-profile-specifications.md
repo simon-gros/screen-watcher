@@ -31,6 +31,39 @@ changes may be indistinguishable during a transition. Use `profile_type:
 quest` or `profile_type: boss` for those profiles; reserve `profile_type:
 skill` for the 29 skill profiles.
 
+## Implementation gate before broad profile expansion
+
+The next development phase is **not** to create many more skill JSON files.
+Before broadening coverage, implement the Priority 0 Linux foundation defined in
+[`future-implementation-ideas.md`](future-implementation-ideas.md) and
+[`application-outline.md`](application-outline.md).
+
+Profiles created during Priority 0 should serve as **validation fixtures** for
+generic infrastructure. Examples:
+- Fishing validates inventory/activity/chat readers;
+- Thieving validates chat/activity/counter/corroboration;
+- Mining can validate resource/progress/opportunity readers;
+- Archaeology can validate progress/opportunity/status composition;
+- combat can validate action-bar resources and buff/debuff readers.
+
+Do not add a profile-specific screenshot loop when a shared reader should own the
+signal. Do not add an ImageMagick dependency to a new detector. New profiles
+should consume normalized events from the new backend/reader architecture as it
+comes online.
+
+The minimum technical foundation expected before mass profile growth is:
+- `GameInstance` / capture backend abstraction;
+- shared-frame scheduler/cache;
+- native X11 capture benchmark/implementation;
+- detector/backend health and `doctor`;
+- reusable `ChatReader` plus reader registry;
+- replay backend;
+- layered OCR;
+- Wayland portal/PipeWire proof of concept on KDE/CachyOS.
+
+Overlay support is also high priority, but lack of a polished overlay should not
+block non-overlay normalized detector work once capture/readers are sound.
+
 ## Profile design
 
 Each skill/activity profile should define:
@@ -400,30 +433,33 @@ into one giant JSON file. Prefer activity/method profiles such as
 `profiles/agility-<course>.json` when the activity has distinct signals,
 timers, or failure states.
 
-Before expanding profile count, favour reusable detector/event primitives that
-unlock several skills at once:
+Before expanding profile count, first verify that the Priority 0 Linux
+foundation is sufficiently complete for the observation(s) required. Then favour
+reusable detector/event primitives that unlock several skills at once:
 
-1. Define the normalized event(s) the activity needs.
-2. Reuse or build a generic observation/extractor for those events.
-3. Read the skill page and its current training/activity pages.
-4. Identify one concrete activity and its expected cycle/state machine.
-5. Capture representative chat, metrics, inventory, interface, and overlay
+1. Confirm the required signal belongs to an existing reusable interface reader,
+   or extend that reader instead of creating a profile-local capture loop.
+3. Define the normalized event(s) the activity needs.
+3. Reuse or build a generic observation/extractor for those events.
+4. Read the skill page and its current training/activity pages.
+5. Identify one concrete activity and its expected cycle/state machine.
+6. Capture representative chat, metrics, inventory, interface, and overlay
    states, or collect equivalent data through a sanctioned backend.
-6. Record sanitized fixtures for normal progress, edge cases, and false-positive
+7. Record sanitized fixtures for normal progress, edge cases, and false-positive
    conditions.
-7. Measure idle noise, progress intervals, layout/scaling behaviour, and
+8. Measure idle noise, progress intervals, layout/scaling behaviour, and
    corroborating signals.
-8. Add the activity profile with conservative rules, explicit suppressions,
+9. Add the activity profile with conservative rules, explicit suppressions,
    confidence expectations, and alert lifecycle policy.
-9. Run `doctor`/diagnostics against the live environment and record the
+10. Run `doctor`/diagnostics against the live environment and record the
    compatibility fingerprint plus detector-health baseline.
-10. Validate the resolved profile, replay fixtures, and inspect alert/event logs
+11. Validate the resolved profile, replay fixtures, and inspect alert/event logs
     before relying on it live.
-11. During live use, record false positives, missed events, and degraded-input
+12. During live use, record false positives, missed events, and degraded-input
     incidents so the profile has measurable quality history.
-12. Record which interface reader owns each observation and confirm that no
+13. Record which interface reader owns each observation and confirm that no
     duplicate capture/parser loop was introduced by the profile.
-13. If numeric Wiki-derived triggers are used, record their provenance in the
+14. If numeric Wiki-derived triggers are used, record their provenance in the
     local trigger-reference data and reverify them before enabling alerts.
 
 The current `profiles/fishing.json` and `profiles/thieving.json` remain the
@@ -487,3 +523,18 @@ current activity is still the same.
   — visible status-bar limits, categories, and icon-size considerations.
 - [RuneScape Wiki: Infobox Buff](https://runescape.wiki/w/Template:Infobox_Buff/doc)
   — structured status-effect metadata suitable for a local generated catalog.
+- [KWin scripting API](https://develop.kde.org/docs/plasma/kwin/api/) —
+  read-only window lifecycle/focus/screen signals useful on KDE Wayland.
+- [XDG ScreenCast portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html)
+  — standard native Wayland capture-session flow and PipeWire stream metadata.
+- [Arena Tracker](https://github.com/supertriodo/Arena-Tracker) — Linux/Wayland
+  game companion using a Qt capture helper and shared-memory latest-frame path.
+- [poe2-overlay](https://github.com/andre-lund/poe2-overlay) and
+  [PathofTrading](https://github.com/brendancohan/PathofTrading) — KDE/Wayland
+  game overlays demonstrating layer-shell approaches, including CachyOS-focused
+  testing.
+- [GPU Screen Recorder manual](https://man.archlinux.org/man/gpu-screen-recorder.1.en)
+  — mature X11/Wayland/portal capture behaviour and portal-session restoration.
+- [MangoHud](https://github.com/flightlessmango/MangoHud) — compact HUD,
+  per-application configuration, presets, runtime reload, and logging patterns;
+  graphics injection is explicitly not a Screen Watcher implementation path.
