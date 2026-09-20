@@ -561,3 +561,10 @@ Run the smoke tests and the same lint policy used by CI:
 The tests exercise configuration-independent logic only. Commands that capture
 the screen still require the external tools and active XWayland environment
 listed above.
+
+Configuration is validated before the watcher searches for a game window.
+Validation checks required sections, region anchors and grids, rule kinds and
+references, numeric thresholds, and regular-expression syntax. Rule evaluation
+returns an `Alert` value; desktop notification, sound playback, and alert-log
+writing happen afterward in the watch loop. This keeps detector decisions
+testable without a live desktop notification service.

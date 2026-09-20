@@ -1,6 +1,8 @@
 import numpy as np
 
-from watcher import Region, mean_abs_diff, norm_line
+import pytest
+
+from watcher import Region, Rule, mean_abs_diff, norm_line, validate_config
 
 
 def test_region_resolves_bottom_right_anchor():
@@ -26,3 +28,52 @@ def test_mean_abs_diff_handles_identical_and_changed_frames():
 
     assert mean_abs_diff(frame, frame) == 0.0
     assert mean_abs_diff(frame, changed) == 4.0
+
+
+def test_rule_fire_returns_alert_without_notifying(monkeypatch):
+    def fail_notify(*args, **kwargs):
+        raise AssertionError("rule evaluation must not notify")
+
+    monkeypatch.setattr("watcher.notify", fail_notify)
+    alert = Rule(name="test", kind="change", region="panel").fire(
+        100.0, "changed")
+
+    assert alert.title == "test"
+    assert alert.body == "changed"
+    assert alert.rule_name == "test"
+
+
+def valid_config():
+    return {
+        "window": {"wm_class": "example"},
+        "interval": 1.5,
+        "regions": {
+            "panel": {"anchor": "top-left", "dx": 0, "dy": 0, "w": 100, "h": 100}
+        },
+        "rules": [
+            {"name": "panel_changed", "kind": "change", "region": "panel"}
+        ],
+    }
+
+
+def test_validate_config_accepts_valid_configuration():
+    validate_config(valid_config())
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"rules": [{"name": "bad", "kind": "change", "region": "missing"}]},
+         "unknown region"),
+        ({"rules": [{"name": "bad", "kind": "unknown", "region": "panel"}]},
+         "unknown kind"),
+        ({"rules": [{"name": "bad", "kind": "ocr", "region": "panel",
+                     "pattern": "["}]}, "invalid pattern"),
+    ],
+)
+def test_validate_config_rejects_invalid_rules(change, message):
+    config = valid_config()
+    config.update(change)
+
+    with pytest.raises(ValueError, match=message):
+        validate_config(config)
