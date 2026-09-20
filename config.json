@@ -20,9 +20,9 @@
       "anchor": "bottom-left",
       "dx": 5,
       "dy": -57,
-      "w": 500,
-      "h": 375,
-      "_note": "most recent ~15 lines of All Chat; w trimmed to end of text so the 3D world does not bleed into OCR"
+      "w": 600,
+      "h": 650,
+      "_note": "most recent ~32 lines of All Chat. h=650 measured, not guessed: pickpocketing produces ~2 chat lines every 2s, and at h=375 a line's median visible lifetime was only 11s (max 23.8s). Rare drops and the yellow stun notice were scrolling off between clean OCR passes, so the taller region roughly doubles the number of chances to read each line. w=600 because text ends near x=560; the earlier 500 clipped lines mid-word and hid item names entirely."
     },
     "backpack": {
       "anchor": "bottom-right",
@@ -47,6 +47,22 @@
       "w": 825,
       "h": 60,
       "_note": "hp / prayer / summoning / adrenaline readouts"
+    },
+    "session_timer": {
+      "anchor": "top-left",
+      "dx": 150,
+      "dy": 620,
+      "w": 210,
+      "h": 50,
+      "_note": "Elapsed-time readout at the bottom of the Metrics panel, between the settings/reset buttons on the left and pause on the right. Measured against a 3840x2058 window; re-check with `shot session_timer` if the Metrics panel is moved or resized. Verified 10/10 clean OCR parses over 30s, ticking monotonically."
+    },
+    "activity_icon": {
+      "anchor": "top-center",
+      "dx": 0,
+      "dy": 4,
+      "w": 110,
+      "h": 92,
+      "_note": "Skill icon shown at top-centre while XP is being gained - a dark disc with an orange progress ring. Measured on a 3840x2058 window; the ring pixel count was flat at 328 across dx -20..+10, so the framing has ~30px of tolerance. Re-check with `shot activity_icon` at a different resolution."
     }
   },
   "rules": [
@@ -127,13 +143,57 @@
       "name": "thieving_stopped",
       "kind": "activity",
       "region": "chat_tail",
-      "pattern": "you pick the|you steal|you attempt to pick|you successfully pick",
+      "pattern": "you pick the target'?s pocket|camouflage outfit keeps you hidden|coins have been added to your money pouch",
       "suppress_pattern": "can'?t carry any more|do not have any space in your inventory|not have any space",
-      "stop_seconds": 30,
-      "cooldown": 90,
+      "stop_seconds": 45,
+      "cooldown": 120,
       "message": "Thieving stopped",
       "sound": "dialog-warning",
-      "_note": "Fires when pickpocket messages stop arriving. UNVERIFIED WORDING: the pattern is a best guess and must be checked against live chat before it is trusted - every other pattern in this file was confirmed by reading real OCR output first. stop_seconds=30 is carried over from fishing and should be re-measured against the real pickpocket cadence, which is faster than a catch cycle. suppress_pattern is kept because a full pack halts thieving the same way it halts fishing.",
+      "_note": "Fires when ALL evidence of pickpocketing stops. VERIFIED wording from live chat. The pattern deliberately includes the money-pouch line and the stun notice, not just the success message: OCR of this font degrades badly when a busy 3D scene shows through the semi-transparent chat panel (observed 'ACE rrire aasws Bamrs'), and with only the success line this rule fired 4 times in 3 minutes while pickpocketing was demonstrably continuing - the coin counter advanced throughout. Any of the four lines proves activity. stop_seconds=45 (up from 20) because a stun alone pauses gains for ~3s and a garbled OCR run can hide several polls; 45s is still well under the fishing profile's 60s idle rule while leaving room for transient unreadability. The stun notice was removed from this pattern: being stunned is not evidence of activity, it is evidence of the opposite, and counting it kept the stop timer alive through a genuine halt.",
+      "enabled": false,
+      "urgency": "normal",
+      "timeout_ms": 20000,
+      "_disabled_note": "Superseded by activity_icon_gone, which reads the top-centre skill icon instead of inferring a stop from missing chat lines. The visual state is the stronger signal: it does not depend on OCR, which degrades badly over a busy 3D scene, and it cannot be fooled by chat scrolling. This rule also needed four corroborating message patterns to avoid false positives; the icon needs none. Re-enable for a skill with no activity icon."
+    },
+    {
+      "name": "target_alerted",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "aware of your presence|becomes? aware",
+      "cooldown": 30,
+      "message": "Target alerted",
+      "sound": "dialog-warning-auth",
+      "_note": "VERIFIED from live chat: 'Your pickpocket target becomes aware of your presence.', rendered in yellow. This is a WARNING, not a stop - pickpocketing continues through it. Kept separate from the stun rule because the two have different consequences and deserve different sounds. Per the wiki, success is 100% only for the first ~43s (25 attempts) before decaying, so this is expected rather than exceptional; cooldown=30 collapses a run into one alert.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 10000
+    },
+    {
+      "name": "loot_drop",
+      "kind": "loot",
+      "region": "chat_tail",
+      "item_pattern": "extra fine sand|acadia wood spirit|waterskin|potato cactus|vital spark|large bladed adamant salvage|menaphite gift offering \\(small\\)|menaphite gift offering \\(medium\\)|menaphite gift offering|sealed clue scroll \\(master\\)|sealed clue scroll \\(elite\\)|sealed clue scroll \\(hard\\)|sealed clue scroll",
+      "ignore_pattern": "coins have been added|you pick the target|camouflage outfit keeps",
+      "cooldown": 0,
+      "message": "Loot",
+      "sound": "message-highlight",
+      "_note": "Announces a named item drop and ignores the currency line. Item list taken from the RuneScape Wiki drop table for Menaphos market guards: coins 758/1000, extra fine sand 100/1000, acadia wood spirit 50/1000, waterskin 50/1000, large bladed adamant salvage 20/1000, sealed clue (hard) 6/1000, menaphite gift offering small 4/1000, potato cactus 5/1000, vital spark 2/1000, gift offering medium 2/1000, sealed clue (elite) ~495/100000, master 5/100000. Coins are excluded because they land in the money pouch roughly every two seconds and would bury the rare drops. cooldown=0 because every drop is worth seeing; the alternatives in the pattern are ordered longest-first so '(elite)' wins over the bare 'sealed clue scroll'.",
+      "enabled": false,
+      "urgency": "normal",
+      "timeout_ms": 6000,
+      "_disabled_note": "Superseded by item_gained, which watches the backpack instead of chat. The inventory is the stronger signal: a dropped item is simply present, whereas chat lines survive a measured median of only 11s before scrolling off and the chat font OCRs poorly over a busy 3D scene. Re-enable if the exact item NAME matters more than reliable detection - this rule can name the item, while item_gained can only say which slot grew."
+    },
+    {
+      "name": "coin_milestone",
+      "kind": "counter",
+      "region": "chat_tail",
+      "pattern": "(\\d[\\d,]*)\\s*coins have been added to your money pouch",
+      "step": 1000000,
+      "milestone_message": "{total} coins pickpocketed - {n}M milestone reached.",
+      "cooldown": 0,
+      "message": "Milestone",
+      "sound": "complete-media-burn",
+      "_note": "Sums the money-pouch line and alerts once per million. Coins go straight to the pouch, which the backpack grid cannot see, so chat is the only evidence. At 455 coins per success and ~76% success rate that is roughly 2,900 pickpockets per million, so milestone-based alerting is essential - per-gain would fire every two seconds. The running total is persisted to state/counters.jsonl and restored on startup, so a restart mid-grind does not rewind progress.",
       "enabled": true,
       "urgency": "normal",
       "timeout_ms": 20000
@@ -142,14 +202,72 @@
       "name": "stunned",
       "kind": "ocr",
       "region": "chat_tail",
-      "pattern": "you (have been |are )?stunned|fail to pick|you are caught|catches you",
-      "cooldown": 60,
+      "pattern": "you'?ve been stunned|you have been stunned|you are stunned|you fail to steal from the target",
+      "cooldown": 25,
       "message": "Stunned",
       "sound": "dialog-error-serious",
-      "_note": "Being caught stuns and damages you, and repeated stuns mean thieving has effectively stalled. UNVERIFIED WORDING - confirm against live chat. High cooldown because occasional failure is normal and expected; this should only speak up if it is worth noticing, not on every miss.",
-      "enabled": false,
+      "_note": "VERIFIED from live chat - the real failure path is TWO lines, one second apart:\n  [21:03:25] You fail to steal from the target.\n  [21:03:26] You've been stunned.\nBoth are matched because OCR often catches only one of them. The earlier guessed pattern used 'you (have been |are )?stunned' and 'you fail to pick', and missed BOTH real lines: the game uses the contraction \"You've\" and says 'fail to steal from the target', not 'fail to pick'. Per the wiki a stun lasts 5 ticks (~3s) and deals 200 + 3% of base life points, and it halts pickpocketing - which is why this is a separate, louder alert than target_alerted. cooldown=25 keeps a bad streak to one alert while still reporting a later independent stun.",
+      "enabled": true,
       "urgency": "normal",
-      "timeout_ms": 10000
+      "timeout_ms": 12000
+    },
+    {
+      "name": "item_gained",
+      "kind": "stack",
+      "region": "backpack",
+      "capacity": 28,
+      "stack_tolerance": 3,
+      "cell_threshold": 8.0,
+      "confirm_seconds": 4,
+      "cooldown": 120,
+      "message": "Item gained",
+      "sound": "message-highlight",
+      "_note": "Detects a drop by watching stack-count digits in the backpack rather than chat. Reading the digit VALUE was tried and abandoned - tesseract got only 5 of 9 slots right even after tuning the crop, bleeding adjacent cells together into values like 1271. Counting yellow digit PIXELS instead is far steadier: measured drift on an unchanging stack is +/-2, while a real quantity change moves it 7-24, so stack_tolerance=3 sits clear of the noise. confirm_seconds=4 rejects tooltips: hovering the backpack draws one over neighbouring cells and was observed making occupancy oscillate 9/10/11 with signatures that jumped and reverted within seconds, whereas a real drop holds. Frames reading above capacity are dropped as interface overlays, same as the inventory rules. TUNED AFTER LIVE MEASUREMENT: at ~2s per pickpocket and a 10% extra-fine-sand rate, an existing stack grows roughly every 20s - measured median gap was 24s, which is genuine but far too frequent to be useful. new_slot_only=true reports only an item landing in a previously EMPTY slot, which is what a first-of-its-kind drop looks like; routine top-ups of a stack you already carry are counted silently. cooldown=120 bounds the rest.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 6000,
+      "new_slot_only": true
+    },
+    {
+      "name": "session_hour",
+      "kind": "timer",
+      "region": "session_timer",
+      "step": 3600,
+      "cooldown": 60,
+      "milestone_message": "You've been thieving for {label} ({elapsed}).",
+      "message": "Session milestone",
+      "sound": "complete-media-burn",
+      "_note": "Reads the Metrics panel's own elapsed timer rather than tracking wall-clock time in the watcher. That is the better source: it is the number the player is already reading, it pauses when they pause it, and it survives a watcher restart because the game owns it. step=3600 fires once per hour. The parser anchors on [0-5] for the minute and second fields so a garbled frame like '00:82:09' is rejected rather than becoming a bogus elapsed time, and a timer reset rewinds the milestone counter so a fresh session starts clean.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000
+    },
+    {
+      "name": "activity_icon_gone",
+      "kind": "presence",
+      "region": "activity_icon",
+      "item": "thieving",
+      "colour_lo": [
+        150,
+        80,
+        0
+      ],
+      "colour_hi": [
+        255,
+        200,
+        90
+      ],
+      "present_above": 200,
+      "absent_seconds": 75,
+      "cooldown": 120,
+      "message": "Thieving stopped",
+      "sound": "dialog-warning",
+      "_note": "Fires when the top-centre activity icon disappears AND chat shows no pickpocketing. The icon alone is not sufficient - MEASURED over a live session it was absent for 19% of samples, including one unbroken 60s stretch, while pickpocketing continued throughout: 33 pickpocket chat lines were observed during absences. The icon tracks XP-gain popups, which lapse while moving between targets or when the camera changes, so absence means 'no XP right now', not 'the activity ended'. corroborate_region therefore requires chat to agree before a stop is reported. absent_seconds=75 clears the observed 60s blackout with margin. Ring separation itself is still absolute: 328-331 present vs 0-113 scenery, so present_above=200 needs no tuning.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000,
+      "corroborate_region": "chat_tail",
+      "corroborate_pattern": "you pick the target'?s pocket|coins have been added to your money pouch|camouflage outfit keeps you hidden"
     }
   ],
   "_notification_note": "Rules use urgency 'normal' with an explicit timeout_ms so KDE auto-dismisses them. Setting urgency to 'critical' makes KDE keep the popup until it is closed by hand and ignore timeout_ms - only do that for an alert you must not miss."
