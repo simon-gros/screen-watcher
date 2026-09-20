@@ -397,12 +397,15 @@ architectural limitations are documented in
   does not yet include complete quest or boss profiles.
 - `watcher.py` is still monolithic and is planned to be split into capture,
   profiles, signals, rules, events, notifications, and CLI modules.
-- Multiple rules can still perform separate image captures of the same region
-  during one polling cycle; per-cycle frame sharing is planned.
-- Image/OCR capture still uses shared scratch paths, so concurrent diagnostic
-  capture commands should be avoided while the watcher is active.
-- The loop currently sleeps after processing each cycle, so expensive OCR or
-  capture work increases the effective poll period beyond `interval`.
+- Identical region/mask requests are reused within a polling cycle, but
+  different regions are still captured independently rather than cropped from
+  one immutable full-window frame. Detectors can therefore observe slightly
+  different moments in the same cycle.
+- Capture and OCR scratch files use unique temporary paths, so the earlier
+  shared-scratch-file contention issue has been removed.
+- Polling uses a monotonic deadline, but `main` does not yet skip missed
+  deadlines. If a cycle runs substantially late, subsequent cycles can run
+  back-to-back until the schedule catches up.
 
 See [docs/application-outline.md](docs/application-outline.md) for the planned
 architecture and delivery stages.
