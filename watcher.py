@@ -1034,36 +1034,14 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
                    cycle: int = 0) -> Alert | None:
     """Alert when a distinctive on-screen indicator disappears.
 
-    RS3 shows an activity icon at the top-centre of the screen while XP is
-    being gained - a dark disc with an orange progress ring. Its presence means
-    the skill is actively ticking, and it vanishes when the activity stops.
+    The icon is useful but not authoritative: live measurements showed a
+    continuous 60s icon blackout while pickpocketing continued. When a
+    corroborating chat region is configured, track it throughout the blackout
+    instead of waiting until the stop threshold has already expired.
 
-    That is a stronger stop signal than chat. A chat rule has to infer a stop
-    from the *absence* of messages, which fails when OCR degrades over a busy
-    3D scene; this reads a visual state directly and does not depend on text at
-    all.
-
-    Detection counts pixels matching the ring's orange. Measured against the
-    surrounding scenery:
-
-        icon present      328 (constant across 64 samples)
-        scenery only      0-113
-
-    so `present_above` at 200 sits clear of both populations.
-
-    `absent_seconds` guards against the icon's own fade animation and against a
-    single dropped frame; the indicator must stay gone before a stop is called.
-
-    The icon alone is NOT sufficient. Measured over a live session it was absent
-    for 19% of samples - including one unbroken 60s stretch - while
-    pickpocketing continued throughout: 33 pickpocket chat lines were observed
-    during absences. The icon tracks XP-gain popups, which lapse while moving
-    between targets or when the camera changes, so absence means "no XP right
-    now", not "the activity ended".
-
-    `corroborate_region` therefore requires a second, independent signal to
-    agree before a stop is reported: if the corroborating region is still
-    producing matching text, the activity is alive regardless of the icon.
+    Existing scrollback is primed when the icon first disappears, so an old
+    success line cannot be mistaken for fresh evidence 75s later. Only lines
+    that appear after the blackout begins extend `_last_activity`.
     """
     frame = capture_array(wid, box, None, cycle)
     n = colour_pixels(frame, tuple(rule.colour_lo), tuple(rule.colour_hi))
@@ -1073,28 +1051,46 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
         rule._absent_since = 0.0
         rule._last_activity = now
         rule._armed = True
-        return None
-    if rule._absent_since == 0.0:
-        rule._absent_since = now
-        return None
-    gone = now - rule._absent_since
-    if not rule._armed or gone < rule.absent_seconds or not rule.ready(now):
+        rule._seen.clear()
         return None
 
-    if rule._corroborate_box and rule.corroborate_pattern:
+    corroborates = bool(rule._corroborate_box and rule.corroborate_pattern)
+    if rule._absent_since == 0.0:
+        rule._absent_since = now
+        rule._last_activity = now
+        if corroborates:
+            # Prime the visible scrollback without treating it as new activity.
+            text = ocr_cached(wid, rule._corroborate_box, cycle)
+            rule._seen = {
+                key for line in text.splitlines()
+                if len(key := norm_line(line.strip())) >= 8
+            }
+        return None
+
+    if corroborates:
         text = ocr_cached(wid, rule._corroborate_box, cycle)
+        visible = set()
         for line in text.splitlines():
             key = norm_line(line.strip())
-            if len(key) < 8 or key in rule._seen:
+            if len(key) < 8:
+                continue
+            visible.add(key)
+            if key in rule._seen:
                 continue
             rule._seen.add(key)
             if re.search(rule.corroborate_pattern, line, re.I):
-                # Independent evidence the activity is still running.
+                # Fresh independent evidence that the activity is still alive.
                 rule._last_activity = now
         if len(rule._seen) > 400:
-            rule._seen.clear()
-        if now - rule._last_activity < rule.absent_seconds:
-            return None
+            # Retain the current viewport as the new baseline. Clearing the set
+            # outright would make old scrollback look fresh on the next poll.
+            rule._seen = visible
+
+    gone = now - rule._absent_since
+    if not rule._armed or gone < rule.absent_seconds or not rule.ready(now):
+        return None
+    if corroborates and now - rule._last_activity < rule.absent_seconds:
+        return None
 
     rule._armed = False
     return rule.fire(now, f"No activity icon for {gone:.0f}s - "
@@ -1481,7 +1477,22 @@ def validate_config(cfg: object) -> None:
             raise ValueError(f"rule {name!r} requires pattern")
         if kind in {"inventory", "item_count"} and not regions[region].grid:
             raise ValueError(f"rule {name!r} requires a region grid")
-        for key in ("pattern", "suppress_pattern", "trip_pattern", "out_pattern"):
+        corroborate_region = rule.get("corroborate_region")
+        corroborate_pattern = rule.get("corroborate_pattern")
+        if (corroborate_region is None) != (corroborate_pattern is None):
+            raise ValueError(
+                f"rule {name!r} requires corroborate_region and "
+                "corroborate_pattern together")
+        if corroborate_region is not None:
+            if kind != "presence":
+                raise ValueError(
+                    f"rule {name!r}: corroboration is only valid for presence rules")
+            if corroborate_region not in regions:
+                raise ValueError(
+                    f"rule {name!r} references unknown corroborate_region "
+                    f"{corroborate_region!r}")
+        for key in ("pattern", "suppress_pattern", "trip_pattern", "out_pattern",
+                    "item_pattern", "ignore_pattern", "corroborate_pattern"):
             pattern = rule.get(key)
             if pattern is not None:
                 try:
@@ -1490,7 +1501,8 @@ def validate_config(cfg: object) -> None:
                     raise ValueError(f"rule {name!r} has invalid {key}: {exc}") from exc
         for key in ("cooldown", "idle_seconds", "threshold", "lead_seconds",
                     "overflow_seconds", "stop_seconds", "confirm_seconds",
-                    "repeat_seconds"):
+                    "repeat_seconds", "absent_seconds", "present_above",
+                    "stack_tolerance", "cell_threshold", "step"):
             value = rule.get(key)
             if value is not None and (
                     not isinstance(value, (int, float)) or isinstance(value, bool)
