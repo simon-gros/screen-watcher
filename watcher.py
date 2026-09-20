@@ -28,6 +28,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -196,21 +197,22 @@ def capture(wid: str, box: tuple[int, int, int, int] | None, out: Path,
     return out
 
 
-def capture_array(wid: str, box, mask: str | None = None) -> np.ndarray:
-    """Region -> numpy array, via PPM to skip PNG encoding (14x faster)."""
-    tmp = STATE_DIR / "_scratch.ppm"
-    capture(wid, box, tmp)
-    try:
-        with Image.open(tmp) as im:
-            arr = np.asarray(im.convert("RGB"), dtype=np.int16)
-    except (OSError, ValueError) as e:
-        # `import` can leave a short file when the window is repainting or the
-        # panel is mid-redraw, and PIL raises "not enough image data". That is
-        # an ordinary transient, but it escapes as ValueError - which the watch
-        # loop does not catch, so it killed the whole watcher mid-session.
-        # Re-raise as CaptureError so the existing miss/reacquire path handles
-        # it like any other failed grab.
-        raise CaptureError(f"unreadable capture: {e}") from e
+def capture_array(wid: str, box, mask: str | None = None,
+                  cycle: int | None = None) -> np.ndarray:
+    """Capture a region once per cycle and return its RGB array."""
+    key = (wid, tuple(box), mask)
+    if cycle is not None:
+        hit = _FRAME_CACHE.get(key)
+        if hit is not None and hit[0] == cycle:
+            return hit[1]
+    with tempfile.NamedTemporaryFile(suffix=".ppm") as tmp:
+        capture(wid, box, Path(tmp.name))
+        try:
+            with Image.open(tmp.name) as im:
+                arr = np.asarray(im.convert("RGB"), dtype=np.int16)
+        except (OSError, ValueError) as e:
+            # `import` can leave a short file while the window is repainting.
+            raise CaptureError(f"unreadable capture: {e}") from e
     if mask == "bright":
         # Game panels are semi-transparent, so the moving 3D world bleeds
         # through and creates a constant diff floor. Text is much brighter
@@ -218,6 +220,8 @@ def capture_array(wid: str, box, mask: str | None = None) -> np.ndarray:
         # drops the noise floor to ~0.
         lum = arr.mean(axis=2)
         arr = (lum > 140).astype(np.int16) * 255
+    if cycle is not None:
+        _FRAME_CACHE[key] = (cycle, arr)
     return arr
 
 
@@ -402,6 +406,7 @@ def norm_line(s: str) -> str:
 
 
 _OCR_CACHE: dict = {}
+_FRAME_CACHE: dict = {}
 
 
 def ocr_cached(wid: str, box, cycle: int, psm: int = 6) -> str:
@@ -426,11 +431,11 @@ def ocr_cached(wid: str, box, cycle: int, psm: int = 6) -> str:
 
 
 def ocr(wid: str, box, psm: int = 6) -> str:
-    tmp = STATE_DIR / "_ocr.png"
-    capture(wid, box, tmp)
-    r = subprocess.run(["tesseract", str(tmp), "stdout", "--psm", str(psm)],
-                       capture_output=True, text=True, timeout=30)
-    return r.stdout.strip()
+    with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+        capture(wid, box, Path(tmp.name))
+        r = subprocess.run(["tesseract", tmp.name, "stdout", "--psm", str(psm)],
+                           capture_output=True, text=True, timeout=30)
+        return r.stdout.strip()
 
 
 # --------------------------------------------------------------------------
@@ -605,7 +610,8 @@ class Rule:
         self._level_since = 0.0
 
 
-def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float) -> Alert | None:
+def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float,
+                    cycle: int = 0) -> Alert | None:
     """Warn *before* the pack fills, with enough lead time to reach a bank.
 
     A 'pack is full' alert is useless: by then the grind has already stopped.
@@ -614,7 +620,7 @@ def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float) -> 
     """
     if not region.grid:
         return
-    frame = capture_array(wid, box)
+    frame = capture_array(wid, box, cycle=cycle)
     occ, cells = count_occupied(frame, region.grid, threshold=rule.cell_threshold)
 
     # A bank, loot or level-up interface drawn over the backpack makes every
@@ -799,7 +805,7 @@ def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
 
 
 def _eval_item_count(rule: Rule, wid: str, region: "Region", box,
-                     now: float) -> Alert | None:
+                     now: float, cycle: int = 0) -> Alert | None:
     """Warn when a carried item runs low, counted by icon colour.
 
     `supply` rules watch the *bank* coming up short across trips. This watches
@@ -822,7 +828,7 @@ def _eval_item_count(rule: Rule, wid: str, region: "Region", box,
     """
     if not region.grid:
         return
-    frame = capture_array(wid, box)
+    frame = capture_array(wid, box, cycle=cycle)
     n = count_by_colour(frame, region.grid, rule.min_blue)
 
     # Track how long the count has been at or under each threshold.
@@ -931,13 +937,13 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
              cycle: int = 0) -> Alert | None:
     box = region.resolve(size)
     if rule.kind == "inventory":
-        return _eval_inventory(rule, wid, region, box, now)
+        return _eval_inventory(rule, wid, region, box, now, cycle)
     if rule.kind == "activity":
         return _eval_activity(rule, wid, box, now, cycle)
     if rule.kind == "supply":
         return _eval_supply(rule, wid, box, now, cycle)
     if rule.kind == "item_count":
-        return _eval_item_count(rule, wid, region, box, now)
+        return _eval_item_count(rule, wid, region, box, now, cycle)
     if rule.kind == "ocr":
         text = ocr_cached(wid, box, cycle)
         if not rule.pattern:
@@ -962,7 +968,7 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
             rule._primed = False
         return
 
-    frame = capture_array(wid, box, rule.mask)
+    frame = capture_array(wid, box, rule.mask, cycle)
     if rule._last is None:
         rule._last, rule._last_change = frame, now
         return
@@ -1095,7 +1101,10 @@ def resolve_window(cfg: dict) -> tuple[str, tuple[int, int]]:
     wid = find_window(cfg["window"]["wm_class"])
     if not wid:
         sys.exit(f"window not found (class={cfg['window']['wm_class']!r}) - is the game running?")
-    return wid, window_size(wid)
+    size = window_size(wid)
+    if not size:
+        sys.exit(f"could not determine geometry for window {wid}")
+    return wid, size
 
 
 # --------------------------------------------------------------------------
@@ -1120,11 +1129,23 @@ def cmd_shot(args) -> None:
     if args.box:
         parts = args.box.split(",")
         if len(parts) == 5:
-            reg = Region(parts[0], *(int(v) for v in parts[1:]))
+            anchor, values = parts[0], parts[1:]
+            if anchor not in ANCHORS:
+                sys.exit(f"invalid --box anchor {anchor!r}")
+        elif len(parts) == 4:
+            anchor, values = "top-left", parts
         else:
-            reg = Region("top-left", *(int(v) for v in parts))
+            sys.exit("--box must be anchor,dx,dy,w,h or x,y,w,h")
+        try:
+            reg = Region(anchor, *(int(v) for v in values))
+        except ValueError as exc:
+            sys.exit(f"invalid --box values: {exc}")
         label = "custom"
     else:
+        if not args.region:
+            sys.exit("shot requires a region name or --box")
+        if args.region not in cfg["_regions"]:
+            sys.exit(f"unknown region {args.region!r}")
         reg, label = cfg["_regions"][args.region], args.region
     box = reg.resolve(size)
     out = Path(args.out) if args.out else ROOT / f"shot_{label}.png"
@@ -1186,8 +1207,8 @@ def cmd_inv(args) -> None:
     change_count: dict[int, int] = {}
     warmup = 8
     print(f"watching {args.region} every {args.interval}s - ctrl-c to stop")
-    t0 = time.time()
-    while time.time() - t0 < args.duration:
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < args.duration:
         frame = capture_array(wid, reg.resolve(size))
         cur = slot_signatures(frame, reg.grid)
         occ = sum(1 for s in cur if s["occ"])
@@ -1364,9 +1385,10 @@ def cmd_watch(args) -> None:
 
     misses = 0
     cycle = 0
+    next_poll = time.monotonic()
     while True:
         cycle += 1
-        now = time.time()
+        now = time.monotonic()
         cur = window_size(wid)
         if cur and cur != size:
             print(f"window resized {size} -> {cur}, regions re-anchored", flush=True)
@@ -1404,7 +1426,8 @@ def cmd_watch(args) -> None:
                     sys.exit("window gone")
             else:
                 print(f"capture miss: {e}", flush=True)
-        time.sleep(interval)
+        next_poll += interval
+        time.sleep(max(0.0, next_poll - time.monotonic()))
 
 
 def main() -> None:

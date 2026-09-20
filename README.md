@@ -649,6 +649,13 @@ returns an `Alert` value; desktop notification, sound playback, and alert-log
 writing happen afterward in the watch loop. This keeps detector decisions
 testable without a live desktop notification service.
 
+The watch loop uses a monotonic deadline, so processing time does not silently
+extend the configured poll interval and wall-clock adjustments cannot alter
+cooldowns or inactivity timers. Image regions are cached per polling cycle, so
+multiple rules reuse one capture. Temporary PNG/PPM inputs for OCR and image
+analysis use unique temporary files and are removed automatically; concurrent
+diagnostic commands cannot overwrite the watcher's capture.
+
 ## Release archives
 
 Build release archives from Git-tracked files, not from the working directory:

@@ -2,8 +2,8 @@ import numpy as np
 
 import pytest
 
-from watcher import (Region, Rule, load_config, mean_abs_diff, norm_line,
-                     validate_config)
+from watcher import (Region, Rule, _FRAME_CACHE, capture_array, load_config,
+                     mean_abs_diff, norm_line, validate_config)
 
 
 def test_region_resolves_bottom_right_anchor():
@@ -29,6 +29,27 @@ def test_mean_abs_diff_handles_identical_and_changed_frames():
 
     assert mean_abs_diff(frame, frame) == 0.0
     assert mean_abs_diff(frame, changed) == 4.0
+
+
+def test_capture_array_is_reused_within_a_cycle(monkeypatch, tmp_path):
+    import watcher
+    from PIL import Image
+
+    calls = []
+
+    def fake_capture(wid, box, out, resize=None):
+        calls.append(out)
+        Image.new("RGB", (2, 2), (1, 2, 3)).save(out, format="PPM")
+        return out
+
+    monkeypatch.setattr(watcher, "capture", fake_capture)
+    _FRAME_CACHE.clear()
+
+    first = capture_array("window", (0, 0, 2, 2), cycle=7)
+    second = capture_array("window", (0, 0, 2, 2), cycle=7)
+
+    assert len(calls) == 1
+    assert first is second
 
 
 def test_rule_fire_returns_alert_without_notifying(monkeypatch):
