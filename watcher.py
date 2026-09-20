@@ -45,7 +45,7 @@ ACTIVE_SKILL = ""
 ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
 RULE_KINDS = {"inventory", "activity", "supply", "item_count",
-              "ocr", "change", "idle", "loot", "counter", "stack", "timer"}
+              "ocr", "change", "idle", "loot", "counter", "stack", "timer", "presence"}
 PROFILE_TYPES = {"skill", "quest", "boss"}
 
 
@@ -601,6 +601,11 @@ class Rule:
     warn_streak: int = 3
     # loot
     item_pattern: str | None = None
+    # presence
+    colour_lo: tuple = (150, 80, 0)
+    colour_hi: tuple = (255, 200, 90)
+    present_above: int = 200
+    absent_seconds: float = 12.0
     # stack
     stack_tolerance: int = 3
     new_slot_only: bool = False
@@ -633,6 +638,7 @@ class Rule:
     _pending_since: float = field(default=0.0, repr=False)
     _pending_base: list = field(default_factory=list, repr=False)
     _elapsed: int = field(default=0, repr=False)
+    _absent_since: float = field(default=0.0, repr=False)
     _total: int = field(default=0, repr=False)
     _milestone: int = field(default=0, repr=False)
     _level_since: float = field(default=0.0, repr=False)
@@ -661,6 +667,9 @@ class Rule:
         self._primed = False
         self._level = ""
         self._level_since = 0.0
+        self._absent_since = 0.0
+        self._stacks.clear()
+        self._pending_slots = set()
 
 
 def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float,
@@ -1010,6 +1019,57 @@ def stack_signature(frame: np.ndarray, grid: tuple, i: int) -> int:
     return int(((red > 120) & (green > 120) & (blue < 120)).sum())
 
 
+def colour_pixels(frame: np.ndarray, lo: tuple, hi: tuple) -> int:
+    """Count pixels inside an inclusive RGB box."""
+    red, green, blue = frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]
+    return int(((red >= lo[0]) & (red <= hi[0])
+                & (green >= lo[1]) & (green <= hi[1])
+                & (blue >= lo[2]) & (blue <= hi[2])).sum())
+
+
+def _eval_presence(rule: Rule, wid: str, box, now: float,
+                   cycle: int = 0) -> Alert | None:
+    """Alert when a distinctive on-screen indicator disappears.
+
+    RS3 shows an activity icon at the top-centre of the screen while XP is
+    being gained - a dark disc with an orange progress ring. Its presence means
+    the skill is actively ticking, and it vanishes when the activity stops.
+
+    That is a stronger stop signal than chat. A chat rule has to infer a stop
+    from the *absence* of messages, which fails when OCR degrades over a busy
+    3D scene; this reads a visual state directly and does not depend on text at
+    all.
+
+    Detection counts pixels matching the ring's orange. Measured against the
+    surrounding scenery:
+
+        icon present      328 (constant across 64 samples)
+        scenery only      0-113
+
+    so `present_above` at 200 sits clear of both populations.
+
+    `absent_seconds` guards against the icon's own fade animation and against a
+    single dropped frame; the indicator must stay gone before a stop is called.
+    """
+    frame = capture_array(wid, box, None, cycle)
+    n = colour_pixels(frame, tuple(rule.colour_lo), tuple(rule.colour_hi))
+    present = n >= rule.present_above
+
+    if present:
+        rule._absent_since = 0.0
+        rule._armed = True
+        return None
+    if rule._absent_since == 0.0:
+        rule._absent_since = now
+        return None
+    gone = now - rule._absent_since
+    if not rule._armed or gone < rule.absent_seconds or not rule.ready(now):
+        return None
+    rule._armed = False
+    return rule.fire(now, f"No activity icon for {gone:.0f}s - "
+                          f"{rule.item} has stopped.")
+
+
 TIMER_RE = re.compile(r"(\d{1,2}):([0-5]\d):([0-5]\d)")
 
 
@@ -1236,6 +1296,8 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
 def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
              cycle: int = 0) -> Alert | None:
     box = region.resolve(size)
+    if rule.kind == "presence":
+        return _eval_presence(rule, wid, box, now, cycle)
     if rule.kind == "timer":
         return _eval_timer(rule, wid, box, now, cycle)
     if rule.kind == "stack":

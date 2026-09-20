@@ -497,3 +497,33 @@ The same panel shows `Gain`, `Drops` and `GP/h`. During testing it read
 527,345 — the panel is authoritative and counts from the session start, whereas
 the chat counter only sees lines while the watcher is running. A future
 milestone rule could read `Gain` directly instead of summing chat.
+
+### Activity icon presence — the strongest stop signal
+
+`activity_icon_gone` (`kind: presence`) watches the skill icon RS3 shows at the
+top-centre of the screen while XP is accruing: a dark disc with an orange
+progress ring. Its presence *is* the activity; it vanishes when the skill stops.
+
+**This is a better stop detector than chat.** A chat rule must infer a stop from
+the *absence* of messages, which fails exactly when OCR degrades over a busy 3D
+scene — and `thieving_stopped` needed four corroborating message patterns to
+stop false-firing (it fired 4 times in 3 minutes before that fix). Reading a
+visual state needs none of that.
+
+**Separation is absolute:**
+
+| state | ring pixels |
+|---|---|
+| icon present | **328–331**, constant across 64 samples |
+| surrounding scenery | 0–113 |
+
+The ring's orange simply does not occur in the environment here, so
+`present_above: 200` sits clear of both populations with no tuning required.
+The count was also flat across `dx` −20…+10, giving the region ~30px of framing
+tolerance.
+
+`absent_seconds: 12` debounces the icon's own fade animation and the occasional
+dropped frame. Threshold selection was trivial; debouncing is the real work.
+
+The chat-based `thieving_stopped` rule is retained but disabled. Re-enable it
+for a skill that has no activity icon.
