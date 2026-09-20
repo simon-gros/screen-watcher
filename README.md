@@ -1,5 +1,11 @@
 # Screen Watcher
 
+<p align="center">
+  <img src="assets/screen-watcher-banner.webp" alt="Screen Watcher development banner" width="900">
+</p>
+
+> **Development artwork:** this banner was created during the initial v0.0.1 development session. Numerical status text embedded in the image is a historical snapshot; the repository itself is the authoritative source for the current test/CI state.
+
 Screen Watcher is a read-only RuneScape companion for Linux that watches
 configured regions of the game client and notifies you when something needs
 attention. It can combine OCR, visual change detection, inventory state,
