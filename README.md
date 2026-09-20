@@ -58,7 +58,7 @@ Detailed detector behaviour, measurements, and tuning notes live in
 
 Screen Watcher currently expects:
 
-- Python 3
+- Python 3.10+
 - `numpy`
 - Pillow
 - `xdotool`
@@ -343,7 +343,7 @@ tr '\0' '\n' < /proc/$(pgrep -u "$USER" plasmashell | head -1)/environ \
 If window discovery fails, first verify:
 
 ```bash
-xdotool search --onlyvisible --class steam_app_1343400
+xdotool search --onlyvisible --class <wm_class-from-profile>
 ```
 
 The exact `wm_class` is profile-specific and can be changed.
@@ -380,7 +380,7 @@ Run the lint policy used by CI:
   --ignore=E226,E501,E702,W503,W504
 ```
 
-The GitHub Actions workflow runs pytest and Flake8 on pushes and pull requests.
+The GitHub Actions workflow compiles the Python sources, runs pytest, and runs Flake8 on pushes and pull requests.
 It does not run live capture tests because CI has no RuneScape window,
 X session, or desktop notification service.
 

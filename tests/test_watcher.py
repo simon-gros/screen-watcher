@@ -201,6 +201,43 @@ def _rule(**kw):
     return watcher.Rule(**base)
 
 
+def test_activity_started_idle_never_reports_stopped(monkeypatch):
+    """Starting while idle must not invent an activity timestamp."""
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *args, **kwargs: "")
+    rule = _rule(kind="activity", pattern=r"you catch a", stop_seconds=5,
+                 cooldown=0)
+
+    assert watcher._eval_activity(rule, "w", (0, 0, 1, 1), 100.0, 1) is None
+    assert rule._primed is True
+    assert rule._last_activity == 0.0
+
+    assert watcher._eval_activity(rule, "w", (0, 0, 1, 1), 110.0, 2) is None
+    assert rule._last_activity == 0.0
+
+
+def test_activity_reports_stop_only_after_matching_activity(monkeypatch):
+    """A stop clock starts only after a matching activity line is observed."""
+    text_by_cycle = {
+        1: "",
+        2: "[12:00:01] You catch a trout.",
+        3: "[12:00:01] You catch a trout.",
+    }
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda wid, box, cycle, psm=6: text_by_cycle.get(cycle, ""),
+    )
+    rule = _rule(kind="activity", pattern=r"you catch a", stop_seconds=5,
+                 cooldown=0)
+
+    assert watcher._eval_activity(rule, "w", (0, 0, 1, 1), 100.0, 1) is None
+    assert watcher._eval_activity(rule, "w", (0, 0, 1, 1), 101.0, 2) is None
+    assert rule._last_activity == 101.0
+
+    alert = watcher._eval_activity(rule, "w", (0, 0, 1, 1), 106.0, 3)
+    assert alert is not None
+    assert "No matching activity" in alert.body
+
+
 def test_loot_ignores_currency_and_reports_item():
     """Coins arrive ~76% of successes; only named drops should alert."""
     rule = _rule(
