@@ -612,9 +612,10 @@ interactive crosshair mode and hangs waiting for a click.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pushes and pull requests. It installs
-Flake8 on Python 3.12 and checks `watcher.py`, while excluding the existing
-project formatting conventions (`E226`, `E501`, `E702`, `W503`, and `W504`).
+`.github/workflows/ci.yml` runs on pushes and pull requests. It installs the
+development dependencies on Python 3.12, runs the pytest suite, and checks
+`watcher.py` with Flake8 while excluding the existing project formatting
+conventions (`E226`, `E501`, `E702`, `W503`, and `W504`).
 The workflow does not launch the watcher because CI has no game window, X
 session, or desktop notification service.
 
@@ -645,3 +646,15 @@ references, numeric thresholds, and regular-expression syntax. Rule evaluation
 returns an `Alert` value; desktop notification, sound playback, and alert-log
 writing happen afterward in the watch loop. This keeps detector decisions
 testable without a live desktop notification service.
+
+## Release archives
+
+Build release archives from Git-tracked files, not from the working directory:
+
+```bash
+git archive --format=tar.gz --prefix=screen-watcher/ \
+  -o screen-watcher.tar.gz HEAD
+```
+
+This excludes virtual environments, runtime state, calibration screenshots,
+Python caches, and other ignored or untracked local artifacts.
