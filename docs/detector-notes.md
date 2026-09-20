@@ -412,3 +412,53 @@ These are now two rules, because the consequences differ:
 The stun lines were also **removed from `thieving_stopped`'s activity
 pattern**. Being stunned is not evidence of activity but of the opposite, and
 counting it kept the stop timer alive through a genuine halt.
+
+### Detecting drops from the backpack instead of chat
+
+`item_gained` (`kind: stack`) watches stack-count digits in the inventory. The
+inventory is the stronger signal: a dropped item is simply *there*, while chat
+lines survive a measured median of 11s and OCR poorly over a busy 3D scene.
+
+**Reading the digit value does not work.** Tesseract resolved only **5 of 9**
+slots correctly even after tuning the crop, and bled adjacent cells together
+into values like `1271` (slot showing `10` next to a slot showing `22`).
+
+**Counting digit pixels does.** The detector counts yellow-green pixels
+(`R>120, G>120, B<120`) in each slot's top-left corner. It never learns the
+quantity — only that it moved — which is all a drop alert needs.
+
+| condition | signature movement |
+|---|---|
+| unchanging stack | ±2 (anti-aliasing) |
+| real quantity change | 7–24 |
+
+`stack_tolerance: 3` sits clear of the noise floor.
+
+#### Tooltips are the false-positive case
+
+Hovering the backpack draws a tooltip over neighbouring cells. Observed effects:
+occupancy oscillating 9/10/11, and stack signatures jumping and reverting within
+a few seconds.
+
+`confirm_seconds: 4` measures how long the **new value has persisted** after the
+slots stop moving, and the final check compares the settled value against the
+pre-change baseline. A real drop holds; a tooltip reverts and is rejected.
+
+An earlier version measured how long the values were *still changing*, which
+inverted the logic and suppressed every real drop.
+
+#### `new_slot_only` — why routine drops are silent
+
+The first live run fired **5 alerts in 2 minutes, median gap 24s**. Those were
+not false positives. At ~2s per pickpocket and a 10% extra-fine-sand rate, an
+existing stack genuinely grows about every 20s — the measured 24s matches almost
+exactly.
+
+Correct but useless: common drops bury rare ones. With `new_slot_only: true`
+only an item landing in a previously **empty** slot is announced, which is what
+a first-of-its-kind drop looks like. Top-ups of a stack already carried are
+tracked silently.
+
+The chat-based `loot_drop` rule is retained but disabled. It can name the exact
+item, which `item_gained` cannot — re-enable it if the item name matters more
+than reliable detection.

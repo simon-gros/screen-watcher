@@ -45,7 +45,7 @@ ACTIVE_SKILL = ""
 ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
 RULE_KINDS = {"inventory", "activity", "supply", "item_count",
-              "ocr", "change", "idle", "loot", "counter"}
+              "ocr", "change", "idle", "loot", "counter", "stack"}
 PROFILE_TYPES = {"skill", "quest", "boss"}
 
 
@@ -601,6 +601,9 @@ class Rule:
     warn_streak: int = 3
     # loot
     item_pattern: str | None = None
+    # stack
+    stack_tolerance: int = 3
+    new_slot_only: bool = False
     ignore_pattern: str | None = None
     # counter
     step: float = 1_000_000
@@ -625,6 +628,10 @@ class Rule:
     _streak: int = field(default=0, repr=False)
     _level: str = field(default="", repr=False)
     _counts: dict = field(default_factory=dict, repr=False)
+    _stacks: list = field(default_factory=list, repr=False)
+    _pending_slots: set = field(default_factory=set, repr=False)
+    _pending_since: float = field(default=0.0, repr=False)
+    _pending_base: list = field(default_factory=list, repr=False)
     _total: int = field(default=0, repr=False)
     _milestone: int = field(default=0, repr=False)
     _level_since: float = field(default=0.0, repr=False)
@@ -978,6 +985,102 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
             rule._streak = 0
 
 
+def stack_signature(frame: np.ndarray, grid: tuple, i: int) -> int:
+    """Count stack-digit pixels in one slot.
+
+    RS3 draws stack counts as yellow-green text in the slot's top-left. Reading
+    the *number* was tried and abandoned: the digits are small, anti-aliased and
+    drawn over the icon, and tesseract managed only 5 of 9 slots correctly even
+    after tuning the crop, returning values like 1271 where two adjacent slots
+    bled together.
+
+    The pixel count is far steadier, because it does not need to resolve glyph
+    shapes - only how much digit ink is present. Measured drift on an unchanging
+    stack is +/-2 pixels, while a quantity change moves it by 7-24. That is a
+    wide enough margin to detect 'this stack grew' without ever knowing by how
+    much, which is all a drop alert needs.
+    """
+    x0, y0, cw, ch, cols, _rows = grid
+    x, y = int(x0 + (i % cols) * cw), int(y0 + (i // cols) * ch)
+    patch = frame[y + 1:y + int(ch * 0.38), x + 1:x + int(cw * 0.70)]
+    if patch.size == 0:
+        return 0
+    red, green, blue = patch[:, :, 0], patch[:, :, 1], patch[:, :, 2]
+    return int(((red > 120) & (green > 120) & (blue < 120)).sum())
+
+
+def _eval_stack(rule: Rule, wid: str, region: "Region", box, now: float,
+                cycle: int = 0) -> Alert | None:
+    """Alert when a carried stack grows, i.e. an item dropped.
+
+    Chat is the obvious place to look for a drop, but it is the weaker signal
+    here: lines survive a measured median of 11s before scrolling off, and OCR
+    of the chat font degrades badly when a busy 3D scene shows through the
+    panel. The inventory is authoritative and persistent - the item is simply
+    there.
+
+    Transient overlays are the failure mode to guard against. Hovering the
+    backpack draws a tooltip over neighbouring cells, which was observed making
+    occupancy oscillate 9/10/11 and stack signatures jump and revert within a
+    few seconds. So a change is only reported once it has *held* for
+    `confirm_seconds`; a real drop stays, a tooltip does not.
+    """
+    if not region.grid:
+        return None
+    frame = capture_array(wid, box, None, cycle)
+    cols, rows = region.grid[4], region.grid[5]
+    cur = [stack_signature(frame, region.grid, i) for i in range(cols * rows)]
+    occ, _cells = count_occupied(frame, region.grid, threshold=rule.cell_threshold)
+
+    # An interface drawn over the backpack makes covered cells read as
+    # occupied; above capacity is the reliable tell, so drop the frame.
+    if occ > rule.capacity:
+        return None
+
+    prev = rule._stacks
+    rule._stacks = cur
+    if not prev or len(prev) != len(cur):
+        return None
+
+    changed = [i for i, (a, b) in enumerate(zip(prev, cur))
+               if abs(b - a) > rule.stack_tolerance]
+    if changed:
+        # Restart confirmation whenever the set of moving slots changes, so a
+        # tooltip sweeping across cells cannot accumulate toward a report.
+        if set(changed) != rule._pending_slots:
+            rule._pending_slots = set(changed)
+            rule._pending_since = now
+            rule._pending_base = prev
+        return None
+
+    if not rule._pending_slots:
+        return None
+
+    # The slots stopped moving. Confirmation measures how long the NEW value
+    # has persisted since then, not how long it was still changing - a tooltip
+    # reverts within a frame or two, while a real drop stays put.
+    base = rule._pending_base or prev
+    slots = sorted(rule._pending_slots)
+    if now - rule._pending_since < rule.confirm_seconds:
+        return None
+    rule._pending_slots = set()
+    if not rule._primed:
+        rule._primed = True
+        return None
+    grew = [i for i in slots
+            if i < len(cur) and cur[i] - base[i] > rule.stack_tolerance]
+    if rule.new_slot_only:
+        # A stack that was already present growing is a routine top-up - at a
+        # 10% drop rate that happens every ~20s. An item appearing in a slot
+        # that held nothing is the first of its kind, which is the event worth
+        # interrupting for.
+        grew = [i for i in grew if base[i] == 0]
+    if not grew or not rule.ready(now):
+        return None
+    where = ", ".join(f"slot {i + 1}" for i in grew[:4])
+    return rule.fire(now, f"Item gained in {where}. Check the backpack.")
+
+
 def _eval_loot(rule: Rule, wid: str, box, now: float,
                cycle: int = 0) -> Alert | None:
     """Announce a named item drop, ignoring the routine currency line.
@@ -1075,6 +1178,8 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
 def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
              cycle: int = 0) -> Alert | None:
     box = region.resolve(size)
+    if rule.kind == "stack":
+        return _eval_stack(rule, wid, region, box, now, cycle)
     if rule.kind == "loot":
         return _eval_loot(rule, wid, box, now, cycle)
     if rule.kind == "counter":
