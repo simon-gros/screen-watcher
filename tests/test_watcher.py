@@ -168,3 +168,19 @@ def test_bundled_profiles_validate_and_are_versioned():
     assert thieving["schema_version"] == 1
     assert fishing["profile_version"] >= 1
     assert thieving["profile_version"] >= 1
+
+
+def test_bundled_profiles_do_not_enable_explicitly_unverified_rules():
+    for profile_path in (Path("profiles/fishing.json"), Path("profiles/thieving.json")):
+        profile = load_config(profile_path)
+        for rule in profile["rules"]:
+            note = " ".join(
+                str(value)
+                for key, value in rule.items()
+                if key.startswith("_") and isinstance(value, str)
+            ).upper()
+            if "UNVERIFIED" in note:
+                assert rule.get("enabled", True) is False, (
+                    f"{profile_path}: rule {rule.get('name')!r} is explicitly "
+                    "unverified but enabled"
+                )
