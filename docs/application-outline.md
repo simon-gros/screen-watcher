@@ -32,6 +32,85 @@ every activity file.
 Fishing, thieving/pickpocketing, urns, and bait are initial examples only. They
 are not the product boundary.
 
+## Immediate implementation priority — Priority 0 Linux foundation
+
+When development resumes, **implement the Linux technical foundation before
+expanding broadly into additional skills**. The detailed research and package
+choices are recorded at the top of
+[`future-implementation-ideas.md`](future-implementation-ideas.md).
+
+The immediate sequence is:
+
+1. `GameInstance` / `CaptureBackend` abstraction.
+2. Shared-frame scheduler/cache.
+3. Native X11/XComposite/XShm backend and benchmark.
+4. Backend/frame health integrated with `doctor`.
+5. Reusable interface-reader registry beginning with `ChatReader`.
+6. Layered OCR abstraction and specialized RuneScape numeric/sprite path.
+7. Read-only KWin window-state integration.
+8. XDG ScreenCast portal + PipeWire Wayland capture proof of concept.
+9. PySide6/Qt + layer-shell read-only overlay proof of concept.
+10. Migration of existing Fishing/Thieving rules to normalized reader/events.
+
+This work is an implementation **gate**, not another equal-priority wishlist.
+Skill-specific development during this stage should be limited to small cases
+that validate a new reader/event primitive.
+
+### Preferred Linux/CachyOS foundation
+
+Use distro-supported components where possible:
+
+- X11: XCB/xcffib + XComposite + XShm;
+- Wayland capture: XDG Desktop Portal ScreenCast + PipeWire, KDE backend through
+  `xdg-desktop-portal-kde`/KPipeWire;
+- KDE window metadata: read-only KWin scripting/D-Bus integration;
+- UI: PySide6/Qt 6;
+- Wayland overlay: `layer-shell-qt` / `wl-layer-shell`;
+- frame representation: NumPy;
+- vision: OpenCV, with scikit-image only where it adds value;
+- OCR: RuneScape-specialized readers plus Tesseract fallback;
+- live persistence: SQLite;
+- later analytics: DuckDB/Parquet over exported data;
+- local APIs: authenticated WebSocket/HTTP/Unix-socket interfaces;
+- tests: pytest, Hypothesis, replay fixtures, optional Xvfb/Gamescope harnesses.
+
+Reference implementations worth consulting:
+- RuneKit Reforged for Linux `GameInstance`, X11 capture, frame caching, and
+  platform isolation;
+- Arena Tracker for Wayland helper-process + shared-memory frame transfer;
+- poe2-overlay and PathofTrading for native KDE/Wayland layer-shell overlays;
+- GPU Screen Recorder for mature X11/Wayland/portal capture behaviour;
+- MangoHud for compact configurable HUD/preset/config-reload ideas only, **not**
+  its injection mechanism.
+
+### Wayland technical rules
+
+Native Wayland capture must respect compositor permission boundaries:
+- create a ScreenCast portal session;
+- select a monitor/window source;
+- let the user grant access;
+- consume the returned PipeWire stream;
+- persist/restore portal selection only through supported restore tokens;
+- prefer PipeWire serial/target-object semantics over assuming node IDs remain
+  stable;
+- begin with CPU-mappable buffers and treat DMA-BUF as an optimization requiring
+  correct graphics-API synchronization/import.
+
+Screen Watcher must never add RemoteDesktop/input-control permissions merely to
+avoid capture limitations.
+
+### Technical acceptance gate
+
+Broader profile expansion should resume only after:
+- existing reference profiles work through the backend abstraction;
+- multiple detectors can consume one shared frame;
+- X11 direct capture is stable and measured;
+- diagnostics identify broken capture/session/geometry/OCR states;
+- live and replay backends feed the same reader/event interfaces;
+- a KDE Wayland portal/PipeWire capture proof of concept exists;
+- a click-through layer-shell overlay proof of concept exists;
+- no profile directly depends on an ImageMagick subprocess capture path.
+
 ## User experience
 
 The player should be able to:
@@ -464,6 +543,13 @@ multi-client support possible without cross-contaminating alerts.
 - The read-only boundary must remain compatible with Jagex rules: no generated
   gameplay input, no direct unapproved game-world communication, and no client
   modification.
+- Native Wayland support must use the ScreenCast capture path, not request
+  RemoteDesktop keyboard/pointer permissions.
+- Linux overlay implementation must remain compositor/desktop-level; do not
+  inject Vulkan/OpenGL layers into RuneScape or preload libraries into the game.
+- Third-party reference code must be checked for license compatibility before
+  any implementation is copied; architectural ideas may be reimplemented
+  independently.
 
 ## Delivery stages
 
@@ -476,34 +562,52 @@ multi-client support possible without cross-contaminating alerts.
 - Profile validation and skill-aware alert logs
 - Quest/boss profile type support and development tests
 
-### Next engineering stage
+### Priority 0 engineering stage — implement before broad profile expansion
+
+This is the next coding stage and should be read before the broader coverage
+section.
 
 - Split the monolithic script into observation backends, profiles, calibration/
   health, extractors, normalized events, activity/session state, rules, alerts,
   outputs, storage, and CLI modules.
-- Implement `screen-watcher doctor` with PASS/WARN/FAIL diagnostics.
-- Define a `GameInstance` backend interface and a shared-frame capture
-  scheduler before adding many more high-frequency detectors.
-- Prototype native X11/XComposite/XShm capture and benchmark it against the
-  current ImageMagick subprocess path.
+- Define a `GameInstance` / `CaptureBackend` interface first.
+- Add the shared-frame scheduler/cache so readers do not independently recapture
+  the game window.
+- Prototype native X11/XComposite/XShm capture using the Arch/CachyOS-friendly
+  XCB/xcffib stack and benchmark it against ImageMagick.
+- Implement `screen-watcher doctor` with PASS/WARN/FAIL diagnostics for session
+  type, capture backend, window identity/geometry/focus, frame health, OCR,
+  notifications, portal/PipeWire readiness, and profile assumptions.
+- Add backend health sentinels for black, zero-variance, stale/frozen, invalid,
+  or lost frames.
+- Add an interface-reader registry with `ChatReader` as the first complex
+  reader, then inventory/action-bar/buff readers.
 - Define stable internal event names and provenance fields before adding many
   more detector kinds.
-- Add an interface-reader registry with ChatReader as the first complex reader.
+- Add a layered OCR abstraction with a path for RuneScape sprite/numeric OCR and
+  Tesseract fallback.
+- Add replay and fake backends that satisfy the same interface as live capture.
 - Add a profile registry and `list-profiles` command.
 - Add compatibility fingerprints and detector-health baselines to profiles.
-- Add profile composition/inheritance for global, combat, gathering, and
-  production bases.
 - Add reusable stability gates: confirm frames/time, confidence, majority, and
   hysteresis.
+- Add read-only KWin window metadata integration for native Plasma Wayland.
+- Prototype Wayland ScreenCast portal + PipeWire capture, including restoration
+  tokens and robust stream identity.
+- Prototype PySide6/QML + `layer-shell-qt` click-through overlay output.
+- Add profile composition/inheritance for global, combat, gathering, and
+  production bases.
 - Add dry-run and replay commands with sanitized fixture directories.
-- Introduce fake capture, OCR, clock, event-source, and notification interfaces.
+- Introduce fake OCR, clock, event-source, and notification interfaces.
 - Add evidence/confidence to alert and event records.
-- Add a layered OCR abstraction with a path for RuneScape sprite/numeric OCR.
 - Add an alert lifecycle abstraction beyond simple cooldowns.
 - Add local false-positive/correction feedback records and a basic quality
   report.
 - Add a versioned local trigger-reference dataset and a Wiki-data update tool
   that records provenance.
+- Keep SQLite as the live store; defer DuckDB/Parquet to analytical/export work.
+- Keep optional OpenVINO/ML work deferred until classical OpenCV/template/sprite
+  approaches are demonstrably insufficient.
 
 ### Broader coverage stage
 
