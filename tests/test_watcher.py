@@ -1,4 +1,5 @@
 import builtins
+import json
 import os
 import re
 from pathlib import Path
@@ -1135,7 +1136,7 @@ def test_acquire_game_honors_requested_backend(monkeypatch):
     game = watcher.acquire_game(cfg, "requested")
 
     assert game.backend.name == "requested"
-    assert game.handle == "42"
+    assert game.handle == "handle-for-game"
     assert game.size == (800, 600)
 
 
