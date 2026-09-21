@@ -1173,7 +1173,7 @@ def test_xcb_backend_decodes_successful_getimage(monkeypatch):
     backend = watcher.X11XcbBackend()
     backend._conn = Conn()
 
-    frame = backend.grab_array("0x10", (0, 0, 2, 1))
+    frame = backend.grab_array("16", (0, 0, 2, 1))
 
     assert frame.dtype == np.int16
     assert frame.shape == (1, 2, 3)
