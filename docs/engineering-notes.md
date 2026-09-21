@@ -390,3 +390,69 @@ can report precisely why it will not work.
 python3 watcher.py backends                        # what works here
 python3 watcher.py --backend x11-imagemagick watch # force the old path
 ```
+
+
+## Priority 0, step 4 — `doctor` diagnostics
+
+`screen-watcher doctor` reports PASS/WARN/FAIL across the whole stack, with a
+remediation line on anything that is not passing.
+
+```bash
+python3 watcher.py --config profiles/thieving.json doctor
+```
+
+It exits non-zero when any check fails, so it can gate a script.
+
+### Why this command exists
+
+Silent capture failure is indistinguishable from "nothing happened in game".
+The watcher keeps polling, reports no alerts, and looks healthy. Every check
+below corresponds to a confusion that has already cost time during
+development: a rotated X cookie, a region calibrated at a different window
+size, OCR reading noise, a frozen frame.
+
+### What it checks
+
+| area | catches |
+|---|---|
+| session | no `DISPLAY`, stale `XAUTHORITY` |
+| tools | missing xdotool/tesseract/notify-send (FAIL), import/paplay (WARN) |
+| backends | which capture paths work, and which is selected |
+| profile | identity, enabled-rule count, unused regions, duplicate sounds |
+| window | discovery failure, implausibly small geometry |
+| regions | degenerate boxes, regions clamped by a smaller window |
+| grids | an inventory grid larger than its own region |
+| capture | per-region timing, and flat frames that indicate a blank capture |
+| OCR | tesseract present, and whether a text region reads as tokens |
+| outputs | notification binary, sound theme, `state/` writability |
+
+### Two checks worth explaining
+
+**Clamped regions.** `Region.resolve` clamps to the window rather than
+returning an out-of-bounds box, so a region can never *report* itself as
+outside the window. The only visible sign of drift is that the resolved size
+differs from the configured size. An earlier version of this check tested
+`x + w > W`, which was unreachable dead code.
+
+**Numeric OCR.** Judging OCR health by word count alone reported a healthy
+session timer (`00:32:19`) as noise, because it legitimately contains no
+words. Digit groups count as readable tokens too.
+
+### Findings from the first live run
+
+Running it against the thieving profile immediately surfaced two real issues:
+
+- `metrics_xp` and `orbs` are captured but used by no enabled rule;
+- `coin_milestone` and `session_hour` shared `complete-media-burn`, so a coin
+  milestone and an hour milestone were indistinguishable by ear - which
+  defeats the purpose of per-rule sounds. `session_hour` now uses
+  `completion-rotation`, and a regression test asserts the shipped profiles
+  never reuse a tone.
+
+### Not yet implemented from the specification
+
+The full spec in `future-implementation-ideas.md` also asks for template/icon
+anchor confidence, profile schema versioning, locale and UI-scale assumptions,
+drift against a saved calibration, and `--profile` readiness requirements.
+Those depend on calibration baselines and profile metadata that do not exist
+yet.

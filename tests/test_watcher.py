@@ -998,3 +998,151 @@ def test_xcb_backend_reports_missing_binding(monkeypatch):
     ok, reason = backend.available()
     assert ok is False
     assert "xcffib" in reason
+
+
+# --------------------------------------------------------------------------
+# Priority 0, step 4: doctor diagnostics
+# --------------------------------------------------------------------------
+
+def _thieving():
+    return load_config(Path("profiles/thieving.json"))
+
+
+def test_doctor_reports_missing_game_window():
+    cfg = _thieving()
+    game = watcher.GameInstance("no-such-class", backend=RecordingBackend())
+    game.backend.find = lambda wm_class: None
+
+    checks = watcher._check_window(cfg, game)
+
+    assert [c.verdict for c in checks] == ["FAIL"]
+    assert "no window" in checks[0].detail
+    assert checks[0].remedy
+
+
+def test_doctor_flags_grid_larger_than_its_region():
+    cfg = _thieving()
+    cfg = dict(cfg)
+    cfg["_regions"] = {
+        "bad": watcher.Region("top-left", 0, 0, 100, 100,
+                              (0, 0, 50, 50, 10, 10)),
+    }
+    game = watcher.GameInstance("game", backend=RecordingBackend())
+    game.acquire()
+
+    checks = watcher._check_grids(cfg, game)
+
+    assert checks[0].verdict == "FAIL"
+    assert "spans 500x500" in checks[0].detail
+
+
+def test_doctor_flags_region_clamped_by_a_small_window():
+    """`resolve` clamps, so a size mismatch is the only sign of drift."""
+    cfg = dict(_thieving())
+    cfg["_regions"] = {"huge": watcher.Region("top-left", 0, 0, 9999, 9999)}
+    game = watcher.GameInstance("game", backend=RecordingBackend())
+    game.acquire()
+
+    checks = watcher._check_regions(cfg, game)
+
+    assert checks[0].verdict == "WARN"
+    assert "clamped" in checks[0].detail
+
+
+def test_doctor_fails_a_profile_with_no_enabled_rules():
+    cfg = dict(_thieving())
+    cfg["rules"] = [dict(r, enabled=False) for r in cfg["rules"]]
+
+    verdicts = {c.area: c for c in watcher._check_profile(cfg, Path("p.json"))}
+
+    assert verdicts["rules"].verdict == "FAIL"
+    assert "no enabled rules" in verdicts["rules"].detail
+
+
+def test_doctor_warns_when_two_rules_share_a_sound():
+    """Per-rule sounds exist so alerts differ without looking at the screen."""
+    cfg = dict(_thieving())
+    cfg["rules"] = [
+        {"name": "a", "kind": "ocr", "region": "chat_tail", "sound": "bell"},
+        {"name": "b", "kind": "ocr", "region": "chat_tail", "sound": "bell"},
+    ]
+
+    areas = {c.area: c for c in watcher._check_profile(cfg, Path("p.json"))}
+
+    assert areas["sounds distinct"].verdict == "WARN"
+    assert "bell" in areas["sounds distinct"].detail
+
+
+def test_shipped_profiles_use_distinct_sounds():
+    """Regression: session_hour and coin_milestone once shared a tone."""
+    for name in ("profiles/thieving.json", "profiles/fishing.json"):
+        cfg = load_config(Path(name))
+        sounds = [r.get("sound") for r in cfg["rules"]
+                  if r.get("enabled", True) and r.get("sound")]
+        assert len(sounds) == len(set(sounds)), f"{name} reuses a sound"
+
+
+def test_doctor_detects_a_flat_capture():
+    """A blank frame is a capture fault, not quiet gameplay."""
+    class Blank(RecordingBackend):
+        def grab_array(self, handle, box):
+            self.grabs.append(tuple(box))
+            _x, _y, w, h = box
+            return np.zeros((h, w, 3), dtype=np.int16)
+
+    cfg = dict(_thieving())
+    cfg["_regions"] = {"panel": watcher.Region("top-left", 0, 0, 40, 40)}
+    game = watcher.GameInstance("game", backend=Blank())
+    game.acquire()
+
+    checks = watcher._check_capture(cfg, game)
+
+    assert checks[0].verdict == "WARN"
+    assert "flat" in checks[0].detail
+
+
+def test_doctor_counts_numeric_tokens_as_readable(monkeypatch):
+    """A timer region reads digits, not words, and is still healthy."""
+    cfg = dict(_thieving())
+    cfg["_regions"] = {"timer": watcher.Region("top-left", 0, 0, 40, 20)}
+    cfg["rules"] = [{"name": "t", "kind": "timer", "region": "timer"}]
+    game = watcher.GameInstance("game", backend=RecordingBackend())
+    game.acquire()
+
+    monkeypatch.setattr(watcher.shutil, "which", lambda t: "/usr/bin/" + t)
+    monkeypatch.setattr(watcher, "ocr", lambda *a, **k: "00:32:19")
+
+    checks = watcher._check_ocr(cfg, game)
+
+    assert checks[0].verdict == "PASS"
+    assert "3 numbers" in checks[0].detail
+
+
+def test_doctor_warns_on_unreadable_ocr(monkeypatch):
+    cfg = dict(_thieving())
+    cfg["_regions"] = {"chat": watcher.Region("top-left", 0, 0, 40, 20)}
+    cfg["rules"] = [{"name": "c", "kind": "ocr", "region": "chat"}]
+    game = watcher.GameInstance("game", backend=RecordingBackend())
+    game.acquire()
+
+    monkeypatch.setattr(watcher.shutil, "which", lambda t: "/usr/bin/" + t)
+    monkeypatch.setattr(watcher, "ocr", lambda *a, **k: "|~ #")
+
+    checks = watcher._check_ocr(cfg, game)
+
+    assert checks[0].verdict == "WARN"
+
+
+def test_doctor_reports_missing_required_tool(monkeypatch):
+    monkeypatch.setattr(watcher.shutil, "which",
+                        lambda t: None if t == "tesseract" else "/usr/bin/" + t)
+
+    areas = {c.area: c for c in watcher._check_tools()}
+
+    assert areas["tesseract"].verdict == "FAIL"
+    assert areas["xdotool"].verdict == "PASS"
+    # optional tools warn rather than fail
+    monkeypatch.setattr(watcher.shutil, "which",
+                        lambda t: None if t == "paplay" else "/usr/bin/" + t)
+    areas = {c.area: c for c in watcher._check_tools()}
+    assert areas["paplay"].verdict == "WARN"
