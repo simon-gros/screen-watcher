@@ -136,7 +136,7 @@
       "name": "level_up",
       "kind": "ocr",
       "region": "chat_tail",
-      "pattern": "advanced\\s+(an?|\\d+)\\s+\\w+\\s+levels?|you'?(ve|r)?\\s*(have\\s+)?reached level \\d+|\\w+ level is now \\d+",
+      "pattern": "advanced\\s+(an?|\\d+)\\s+\\w+\\s+levels?|you'?(ve|r)?\\s*(have\\s+)?reached level \\d+|(\\w+ )?level is now \\d+|now a?\\s*combat level \\d+",
       "cooldown": 60,
       "message": "Level up",
       "alert_body": "{line}",
@@ -144,7 +144,7 @@
       "enabled": true,
       "urgency": "normal",
       "timeout_ms": 15000,
-      "_note": "Fires on a skill level-up. The pattern is deliberately broader than the exact phrasing: it does NOT require the leading 'Congratulations', because RS3 splits some notices across lines and the level line alone must still match - the same two-line shape that made the stun rule match the wrong line. Accepts 'advanced a/an/N <Skill> level(s)', 'reached level N', and '<Skill> level is now N'. Verified against plural, article, and OCR-garbled forms, and against near misses that must stay silent: 'Total level: 1544' and 'You need level 75 Thieving to do that'. The alert echoes the matched line so the new level is visible without switching to the game. UNVERIFIED against this account's live chat - confirm the wording on the next level-up and tighten if it differs."
+      "_note": "Fires on any skill level-up, combat skills included - Attack, Strength, Defence and Constitution all produce the same 'advanced a <Skill> level' line, so no separate combat rule is needed. The last alternative additionally catches the overall combat level changing ('You are now a combat level 138'), which is a distinct and rarer event: per the wiki, combat level derives from Attack, Strength/Ranged/Magic/Necromancy, Defence and Constitution, so a single Attack level may or may not raise it. Deliberately does NOT require the leading 'Congratulations', because RS3 splits some notices across lines and the level line alone must still match - the same two-line shape that made the stun rule match the wrong line. Checked against 10 phrasings plus OCR-garbled forms, and against near misses that must stay silent: 'You need level 75 Attack to wield this', 'Total level: 1544', and 'Your combat level is high enough'. UNVERIFIED against this account's live chat - confirm the wording on the next level-up and tighten if it differs."
     },
     {
       "name": "thieving_stopped",

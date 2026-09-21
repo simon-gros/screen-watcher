@@ -1867,6 +1867,7 @@ class Rule:
     _armed: bool = field(default=True, repr=False)
     _seen: set = field(default_factory=set, repr=False)
     _low_streak: int = field(default=0, repr=False)
+    _last_reading: int | None = field(default=None, repr=False)
     _primed: bool = field(default=False, repr=False)
     _history: list = field(default_factory=list, repr=False)
     _full_since: float = field(default=0.0, repr=False)
@@ -2500,6 +2501,24 @@ def _eval_gauge(rule: Rule, wid: str, box, now: float,
         # genuine decline does not restart the confirmation count.
         return None
     current, maximum = reading
+
+    # Reject a reading that is a *fraction* of the previous one, which is
+    # what losing a leading digit looks like: a hitsplat drawn over the
+    # readout turned 8,000 into 8, and that parses as a perfectly valid
+    # number - which is how "Life 4/10,597 (0%)" was reported while health
+    # was almost full. The observed misreads were ~99% collapses, so the
+    # test is deliberately narrow: only a drop to under a tenth of the
+    # previous value is rejected, and only on a four-figure gauge where a
+    # lost digit changes the magnitude. A genuine heavy hit, even one
+    # halving the pool, still alerts, and a small gauge such as prayer -
+    # which really can go from full to nearly empty when a restore wears
+    # off - is left alone. The frame is discarded; the next one decides.
+    previous = rule._last_reading
+    if (previous is not None and maximum >= 1000
+            and previous >= maximum * 0.2
+            and current < previous * 0.1):
+        return None
+    rule._last_reading = current
 
     # `warn_below` is always a percentage, and `warn_at` is an absolute
     # value. Inferring one from the other by magnitude was a trap: a rule

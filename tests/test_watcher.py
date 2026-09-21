@@ -2863,3 +2863,94 @@ def test_boss_profile_reuses_the_metrics_timer_region():
     a = boss["_regions"]["session_timer"]
     b = thieving["_regions"]["session_timer"]
     assert (a.anchor, a.dx, a.dy, a.w, a.h) == (b.anchor, b.dx, b.dy, b.w, b.h)
+
+
+def test_level_up_covers_combat_skills():
+    """Attack, Strength, Defence and Constitution use the same line.
+
+    No separate combat rule is needed - a combat skill level-up is
+    announced exactly like any other skill.
+    """
+    for profile in ("profiles/boss-arch-glacor.json",
+                    "profiles/thieving.json", "profiles/fishing.json"):
+        cfg = load_config(Path(profile))
+        pat = {r["name"]: r for r in cfg["rules"]}["level_up"]["pattern"]
+        for skill in ("Attack", "Strength", "Defence", "Constitution",
+                      "Ranged", "Magic", "Necromancy"):
+            line = f"Congratulations, you've just advanced an {skill} level!"
+            assert re.search(pat, line, re.I), (profile, skill)
+
+
+def test_level_up_catches_the_overall_combat_level():
+    """A distinct, rarer event: the derived combat level changing.
+
+    Per the wiki it comes from Attack, Strength/Ranged/Magic/Necromancy,
+    Defence and Constitution, so a single Attack level may or may not
+    raise it.
+    """
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    pat = {r["name"]: r for r in cfg["rules"]}["level_up"]["pattern"]
+    for line in ("You are now a combat level 138.",
+                 "You are now combat level 138.",
+                 "Your combat level is now 138."):
+        assert re.search(pat, line, re.I), line
+
+
+def test_level_up_ignores_requirement_and_total_lines():
+    """Lines that mention levels but are not a level-up must stay silent."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    pat = {r["name"]: r for r in cfg["rules"]}["level_up"]["pattern"]
+    for line in ("You need level 75 Attack to wield this.",
+                 "Total level: 1544",
+                 "Your combat level is high enough.",
+                 "You have killed 626 Arch-Glacor in normal mode.",
+                 "A golden beam shines over one of your items, You receive: 12 x"):
+        assert not re.search(pat, line, re.I), line
+
+
+def test_gauge_rejects_an_implausible_collapse(monkeypatch):
+    """A digit lost to a hitsplat turns 8,000 into 8 and parses cleanly.
+
+    That is how "Life 4/10,597 (0%)" was reported while health was almost
+    full. A pool cannot fall by most of its maximum between polls a second
+    apart, so such a drop is a misread, not damage.
+    """
+    rule = _gauge_rule(maximum=10597, warn_below=30, confirm_readings=2)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["8,000/10,597", "4/10,597", "8,050/10,597"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    for now in (1.0, 2.0, 3.0):
+        assert watcher.evaluate(rule, "0x1", region, (100, 100), now) is None
+
+
+def test_gauge_still_alerts_on_a_genuine_decline(monkeypatch):
+    """The plausibility check must not suppress real danger."""
+    rule = _gauge_rule(maximum=10597, warn_below=30, confirm_readings=2)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["8,000/10,597", "6,000/10,597", "4,000/10,597",
+                     "3,000/10,597", "2,500/10,597"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(5)]
+    assert sum(1 for a in fired if a is not None) == 1
+
+
+def test_gauge_recovers_after_a_misread_mid_decline(monkeypatch):
+    """One bad frame inside a real decline must not lose the alert."""
+    rule = _gauge_rule(maximum=10597, warn_below=30, confirm_readings=2)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["4,000/10,597", "8/10,597", "3,000/10,597",
+                     "2,800/10,597"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(4)]
+    assert sum(1 for a in fired if a is not None) == 1
