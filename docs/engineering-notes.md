@@ -323,3 +323,70 @@ in step 4.
 `cmd_watch` still runs its own cycle counter and calls `capture_array`
 directly. Moving the live loop onto the scheduler belongs with step 10, when
 rules stop owning their own capture/OCR calls.
+
+
+## Priority 0, step 3 — native XCB capture backend
+
+`X11XcbBackend` captures through XCB `GetImage` over a persistent X
+connection, replacing a per-region ImageMagick subprocess.
+
+### Measured against ImageMagick
+
+Same 3840x2058 RuneScape window, same four live regions, 15 iterations each:
+
+| region | ImageMagick | XCB | speedup |
+|---|---|---|---|
+| `chat_tail` | 308.9 ms | 11.3 ms | 27x |
+| `backpack` | 178.5 ms | 3.5 ms | 51x |
+| `session_timer` | 80.1 ms | 0.2 ms | 387x |
+| `activity_icon` | 81.2 ms | 0.3 ms | 242x |
+| **full cycle** | **648.6 ms** | **15.3 ms** | **42x** |
+
+Through the real `FrameScheduler` the end-to-end figure is **639.2 ms ->
+17.2 ms per cycle (37x)**.
+
+The gap is dominated by fixed cost, not pixels: ImageMagick pays process
+spawn, PPM encode, and PPM decode *per region*, which is why the smallest
+regions show the largest speedup. This is the same effect measured in step 2
+from the other direction - there, moving 11x more pixels cost 11x more time;
+here, removing per-region fixed cost is worth far more than any pixel saving.
+
+A 649 ms capture cycle against a 1.5 s poll interval left very little
+headroom. 17 ms leaves the interval essentially free for detection work.
+
+### Correctness
+
+XCB output is **byte-identical** to the ImageMagick path on the same window:
+mean absolute difference 0.000, maximum 0. X11 ZPixmap at depth 24 is BGRX on
+little-endian hosts, so the channel reorder is `[2, 1, 0]`.
+
+Byte-identical output is what makes the swap safe. Every threshold in every
+profile - ring pixel counts, stack-digit counts, occupancy standard
+deviations - was tuned against ImageMagick pixels and keeps its meaning.
+
+### Robustness
+
+- The X connection is opened lazily and reused; a per-capture connection
+  would reintroduce the fixed cost this backend exists to remove.
+- A protocol error (resize or unmap between geometry lookup and capture)
+  drops the connection so the next attempt reconnects rather than reusing a
+  poisoned one. Verified: a grab after an induced failure succeeds.
+- Degenerate and out-of-bounds boxes raise `CaptureError` rather than
+  crashing.
+- Window discovery still uses xdotool. It runs once per acquire rather than
+  per region, so it is not on the hot path, and reimplementing WM_CLASS
+  matching over raw XCB would add risk for no measurable gain.
+- `grab_file` delegates to ImageMagick when a `resize` is requested, because
+  that is a one-off calibration path.
+
+### Selection and fallback
+
+`make_backend()` picks the default and falls back to ImageMagick when
+python-xcffib is unavailable, so a host without it still runs - just slower.
+An explicitly requested backend is returned even when unusable, so `doctor`
+can report precisely why it will not work.
+
+```bash
+python3 watcher.py backends                        # what works here
+python3 watcher.py --backend x11-imagemagick watch # force the old path
+```
