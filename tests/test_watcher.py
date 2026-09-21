@@ -920,6 +920,21 @@ def test_health_reports_never_captured_region():
     assert sched.health("chat_tail") == ("WARN", "never captured")
 
 
+def test_health_fails_when_every_capture_attempt_failed():
+    """Attempted-and-failed is not the same state as never sampled."""
+    class Broken(RecordingBackend):
+        def grab_array(self, handle, box):
+            raise watcher.CaptureError("simulated backend failure")
+
+    sched, _ = _scheduler(backend=Broken(size=(3840, 2058)))
+    sched.begin()
+    assert sched.prefetch(["chat_tail"]) == ["chat_tail"]
+
+    verdict, reason = sched.health("chat_tail")
+    assert verdict == "FAIL"
+    assert "simulated backend failure" in reason
+
+
 def test_report_covers_every_touched_region():
     sched, _ = _scheduler()
     sched.begin()
@@ -967,6 +982,18 @@ def test_make_backend_falls_back_when_default_unavailable(monkeypatch):
     monkeypatch.setattr(watcher, "X11ImageMagickBackend", Usable)
 
     assert watcher.make_backend().name == "x11-imagemagick"
+
+
+def test_runtime_backend_rejects_explicit_unavailable_backend(monkeypatch):
+    """Explicit --backend must fail before the watch loop starts."""
+    class Unavailable(watcher.X11XcbBackend):
+        def available(self):
+            return False, "python-xcffib unavailable"
+
+    monkeypatch.setitem(watcher.BACKENDS, "x11-xcb", Unavailable)
+
+    with pytest.raises(watcher.CaptureError, match="requested backend.*unavailable"):
+        watcher.make_runtime_backend("x11-xcb")
 
 
 def test_xcb_backend_rejects_degenerate_boxes():
@@ -1108,14 +1135,23 @@ def test_doctor_counts_numeric_tokens_as_readable(monkeypatch):
     cfg["rules"] = [{"name": "t", "kind": "timer", "region": "timer"}]
     game = watcher.GameInstance("game", backend=RecordingBackend())
     game.acquire()
+    seen = {}
 
     monkeypatch.setattr(watcher.shutil, "which", lambda t: "/usr/bin/" + t)
-    monkeypatch.setattr(watcher, "ocr", lambda *a, **k: "00:32:19")
+
+    def fake_ocr(*args, **kwargs):
+        seen["game"] = kwargs.get("game")
+        seen["cycle"] = kwargs.get("cycle")
+        return "00:32:19"
+
+    monkeypatch.setattr(watcher, "ocr", fake_ocr)
 
     checks = watcher._check_ocr(cfg, game)
 
     assert checks[0].verdict == "PASS"
     assert "3 numbers" in checks[0].detail
+    assert seen["game"] is game
+    assert seen["cycle"] == 1
 
 
 def test_doctor_warns_on_unreadable_ocr(monkeypatch):
@@ -1204,6 +1240,20 @@ def test_chat_reader_emits_each_line_once(monkeypatch):
     assert second == []
 
 
+def test_chat_reader_replays_same_event_list_to_every_rule_in_cycle(monkeypatch):
+    """The first consumer must not steal shared events from later rules."""
+    page = "[16:10:26] You catch a desert sole.\n[16:10:30] You catch a catfish."
+    sched = _chat_env([page, "this second OCR result must be ignored"], monkeypatch)
+    reader = watcher.ChatReader("chat_tail")
+
+    sched.begin()
+    first = reader.read(sched)
+    second = reader.read(sched)
+
+    assert second == first
+    assert reader.events_emitted == 2
+
+
 def test_chat_reader_skips_short_keys(monkeypatch):
     sched = _chat_env(["ok\n[16:10:26] You catch a desert sole."], monkeypatch)
     reader = watcher.ChatReader("chat_tail")
@@ -1267,19 +1317,21 @@ def test_similarity_of_one_disables_fuzzy_matching():
         norm_line("[16:10:26] You catch a desert soIe.")) is False
 
 
-def test_seen_set_is_capped_and_unprimes(monkeypatch):
-    """Clearing the set would let on-screen lines re-fire, so re-prime."""
+def test_seen_set_cap_keeps_current_viewport_as_baseline(monkeypatch):
+    """History compaction must not make visible scrollback look new again."""
     page = "\n".join(f"[16:10:{s}] You catch a desert sole."
                      for s in ("26", "31", "36"))
-    sched = _chat_env([page], monkeypatch)
+    sched = _chat_env([page, page], monkeypatch)
     reader = watcher.ChatReader("chat_tail", max_seen=2)
-    reader.primed = True
 
     sched.begin()
-    reader.read(sched)
+    first = reader.read(sched)
+    sched.begin()
+    second = reader.read(sched)
 
-    assert reader._seen == set()
-    assert reader.primed is False
+    assert len(first) == 3
+    assert second == []
+    assert len(reader._seen) == 3
 
 
 def test_registry_reports_reader_statistics(monkeypatch):
@@ -1291,6 +1343,37 @@ def test_registry_reports_reader_statistics(monkeypatch):
     reader.read(sched)
 
     assert registry.stats() == [("chat", "chat_tail", 1, 1)]
+
+
+def test_live_ocr_rules_share_reader_events(monkeypatch):
+    """Two production OCR rules must see the same fresh lines in one cycle."""
+    region = watcher.Region("top-left", 0, 0, 100, 40)
+    first_page = "[10:00:00] Existing scrollback."
+    second_page = (
+        "[10:00:01] LEVEL EVENT detected.\n"
+        "[10:00:02] TARGET EVENT detected."
+    )
+    pages = {1: first_page, 2: second_page}
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda wid, box, cycle, psm=6: pages[cycle],
+    )
+    watcher.set_active_readers()
+
+    level = watcher.Rule(
+        name="level", kind="ocr", region="chat", pattern=r"LEVEL EVENT")
+    target = watcher.Rule(
+        name="target", kind="ocr", region="chat", pattern=r"TARGET EVENT")
+
+    # Cycle one primes both rules from the exact same reader event list.
+    assert watcher.evaluate(level, "w", region, (100, 40), 10.0, 1) is None
+    assert watcher.evaluate(target, "w", region, (100, 40), 10.0, 1) is None
+
+    a = watcher.evaluate(level, "w", region, (100, 40), 11.0, 2)
+    b = watcher.evaluate(target, "w", region, (100, 40), 11.0, 2)
+
+    assert a is not None and "LEVEL EVENT" in a.body
+    assert b is not None and "TARGET EVENT" in b.body
 
 
 # --------------------------------------------------------------------------
@@ -1388,10 +1471,12 @@ def test_parsed_sprite_timer_matches_parse_timer():
 
 @pytest.fixture(autouse=True)
 def _clear_active_game():
-    """No test may leak a bound GameInstance into another."""
+    """No test may leak process-wide capture or reader state into another."""
     watcher.set_active_game(None)
+    watcher.set_active_readers()
     yield
     watcher.set_active_game(None)
+    watcher.set_active_readers()
 
 
 def test_capture_array_uses_bound_game_instance():
@@ -1416,6 +1501,26 @@ def test_capture_array_shares_frames_across_rules():
         watcher.capture_array(game.handle, (0, 0, 10, 10), None, cycle=7)
 
     assert len(backend.grabs) == 1
+
+
+def test_ocr_uses_the_same_bound_frame_as_pixel_rules(monkeypatch):
+    """OCR encoding must not recapture pixels already sampled this cycle."""
+    backend = RecordingBackend(size=(100, 100))
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    watcher.set_active_game(game)
+    box = (0, 0, 10, 10)
+
+    watcher.capture_array(game.handle, box, None, cycle=9)
+
+    class Result:
+        stdout = "shared frame"
+        returncode = 0
+
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *a, **k: Result())
+    assert watcher.ocr_cached(game.handle, box, cycle=9) == "shared frame"
+
+    assert backend.grabs == [box]
 
 
 def test_capture_array_falls_back_without_a_bound_game():

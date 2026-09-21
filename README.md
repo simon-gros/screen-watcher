@@ -42,6 +42,8 @@ Screen Watcher currently provides:
 
 - anchored regions that follow a resized game window;
 - OCR of chat and other text regions;
+- shared chat-event readers with timestamp-aware fuzzy deduplication, so OCR
+  variants are suppressed without collapsing genuinely repeated events;
 - frame-to-frame visual change and inactivity detection;
 - inventory occupancy and fill-rate monitoring;
 - item detection from visual signatures;
@@ -444,10 +446,11 @@ architectural limitations are documented in
 - Quest and boss profile types are accepted by validation, but the repository
   does not yet include complete quest or boss profiles.
 - `watcher.py` is still monolithic and is planned to be split into capture,
-  profiles, signals, rules, events, notifications, and CLI modules. The
-  rule evaluators now route through a bound `GameInstance`, so they inherit
-  the selected capture backend, but they still call `capture_array`/`ocr`
-  rather than taking a scheduler or reader as a parameter.
+  profiles, signals, rules, events, notifications, and CLI modules. Rule
+  evaluators route through a bound `GameInstance`; chat-driven rules also
+  consume one shared `ChatReader` event stream per region/cycle. Pixel rules
+  still call the compatibility `capture_array` helper rather than taking a
+  scheduler directly.
 - **Chat OCR dominates the poll cycle.** Tesseract over the 0.39 MPx
   `chat_tail` region costs ~1121 ms, against ~18 ms for the capture itself.
   Native capture and sprite OCR removed the other bottlenecks; this one is

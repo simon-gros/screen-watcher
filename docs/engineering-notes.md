@@ -636,3 +636,41 @@ proportional text, not a fixed numeric readout. Making chat OCR cheaper is
 a separate problem, and the realistic options are reducing the region,
 running Tesseract less often than every poll, or a RuneScape-specific
 chat-font reader of the kind Alt1 uses.
+
+
+## Post-step-10 validation fixes
+
+Validation of the integrated Priority-0 stack exposed several defects that unit
+tests written during the individual steps had not yet covered.
+
+The XCB backend now validates an empty window id and degenerate capture boxes
+before importing the optional `xcffib` binding. This preserves deterministic
+`CaptureError` behaviour on hosts that intentionally run without xcffib and
+use the ImageMagick fallback. A live `watch` session also verifies that the
+selected backend is actually usable before entering the polling loop. Automatic
+selection may still fall back, while an explicitly requested unusable backend
+fails immediately with its availability reason.
+
+`doctor` now sends OCR through the exact `GameInstance` and backend it has
+selected instead of silently falling back to the legacy ImageMagick path. The
+frame scheduler also distinguishes a region that was never sampled from one
+whose every capture attempt failed; the latter is a diagnostic failure rather
+than a warning.
+
+OCR encoding now reuses the `GameInstance` frame for the current cycle. This
+closes the remaining coherence gap between pixel rules and OCR rules: if a
+pixel detector has already sampled a region, Tesseract is fed those same pixels
+instead of triggering a second capture.
+
+The step-5 `ChatReader` is now part of the live rule path rather than dormant
+infrastructure. OCR, activity, supply, loot, counter, and presence-corroboration
+rules consume one deduplicated event list per region and cycle. The reader
+caches that list so every rule sees the same events, uses timestamp-aware fuzzy
+matching to suppress OCR variants without collapsing repeated game events, and
+retains the current viewport when compacting history so visible scrollback
+cannot become new again after the dedup set is capped.
+
+Regression coverage was added for each of these cases, including clean hosts
+without xcffib, all-failed frame health, explicit backend rejection, doctor
+backend routing, same-cycle reader fan-out, history compaction, and OCR/pixel
+frame reuse.
