@@ -1870,6 +1870,7 @@ class Rule:
     _armed: bool = field(default=True, repr=False)
     _seen: set = field(default_factory=set, repr=False)
     _low_streak: int = field(default=0, repr=False)
+    _high_streak: int = field(default=0, repr=False)
     _last_reading: int | None = field(default=None, repr=False)
     _primed: bool = field(default=False, repr=False)
     _history: list = field(default_factory=list, repr=False)
@@ -2542,9 +2543,13 @@ def _eval_percent(rule: Rule, wid: str, box, now: float,
 
     if value < rule.warn_at_or_above:
         rule._low_streak = 0
-        rule._armed = True
-        rule._primed = True
+        # Re-arm only on confirmed recovery, as for gauge rules.
+        rule._high_streak += 1
+        if rule._high_streak >= max(1, int(rule.confirm_readings)):
+            rule._armed = True
+            rule._primed = True
         return None
+    rule._high_streak = 0
 
     rule._low_streak += 1
     if rule._low_streak < max(1, int(rule.confirm_readings)):
@@ -2634,9 +2639,16 @@ def _eval_gauge(rule: Rule, wid: str, box, now: float,
 
     if not low:
         rule._low_streak = 0
-        rule._armed = True
-        rule._primed = True
+        # Re-arming needs the same confirmation as firing does. A single
+        # misread frame - prayer sitting at 0 but decoding as 780 once -
+        # otherwise re-armed the rule, and the next reading fired the alert
+        # again, which is how an empty prayer kept re-announcing itself.
+        rule._high_streak += 1
+        if rule._high_streak >= max(1, int(rule.confirm_readings)):
+            rule._armed = True
+            rule._primed = True
         return None
+    rule._high_streak = 0
 
     rule._low_streak += 1
     if rule._low_streak < max(1, int(rule.confirm_readings)):

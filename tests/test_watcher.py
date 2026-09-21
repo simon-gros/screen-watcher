@@ -2544,15 +2544,22 @@ def test_gauge_fires_once_per_decline(monkeypatch):
 
 
 def test_gauge_rearms_after_recovery(monkeypatch):
+    """Recovery needs confirming, exactly as firing does.
+
+    A single healthy reading is indistinguishable from an OCR misread -
+    prayer sitting at 0 decoded as 780 once - and re-arming on it made an
+    empty prayer re-announce itself indefinitely.
+    """
     rule = _gauge_rule()
     region = Region("top-left", 0, 0, 10, 10)
     monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
 
-    seq = iter(["50/780", "50/780", "780/780", "50/780", "50/780"])
+    seq = iter(["50/780", "50/780", "780/780", "780/780",
+                "50/780", "50/780"])
     monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(seq))
 
     fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
-             for n in range(1, 6)]
+             for n in range(1, 7)]
     assert sum(1 for a in fired if a is not None) == 2
 
 
@@ -3132,11 +3139,12 @@ def test_percent_rearms_after_dropping_below(monkeypatch):
     region = Region("top-left", 0, 0, 10, 10)
     monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
 
-    readings = iter(["@100%", "@100%", "@100%", "@40%", "@100%", "@100%"])
+    readings = iter(["@100%", "@100%", "@100%", "@40%", "@40%",
+                     "@100%", "@100%"])
     monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
 
     fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
-             for n in range(6)]
+             for n in range(7)]
     assert sum(1 for a in fired if a is not None) == 2
 
 
@@ -3555,3 +3563,49 @@ def test_kill_alert_carries_the_running_count(monkeypatch):
 def test_kill_rule_has_no_cooldown():
     cfg = load_config(Path("profiles/boss-arch-glacor.json"))
     assert {r["name"]: r for r in cfg["rules"]}["boss_defeated"]["cooldown"] == 0
+
+
+def test_a_single_misread_does_not_revive_a_low_alert(monkeypatch):
+    """Prayer stuck at 0 kept re-announcing itself.
+
+    One frame decoding 0/780 as 780/780 re-armed the rule, so the next
+    reading fired again - repeatedly, for a state that never changed.
+    """
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    specs = {r["name"]: r for r in cfg["rules"]}
+    region = Region("top-left", 0, 0, 10, 10)
+    flicker = (["0/780"] * 8 + ["780/780"] + ["0/780"] * 8) * 3
+
+    for name in ("low_prayer", "prayer_out"):
+        rule = watcher.Rule(**{k: v for k, v in specs[name].items()
+                               if not k.startswith("_")})
+        rule._armed = True
+        monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+        it = iter(flicker)
+        monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(it))
+
+        fired = sum(1 for i in range(len(flicker))
+                    if watcher.evaluate(rule, "0x1", region, (100, 100),
+                                        float(i) * 2))
+        assert fired == 0, name
+
+
+def test_a_confirmed_recovery_still_re_arms(monkeypatch):
+    """Sustained recovery must not be mistaken for flicker."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    spec = {r["name"]: r for r in cfg["rules"]}["low_prayer"]
+    rule = watcher.Rule(**{k: v for k, v in spec.items()
+                           if not k.startswith("_")})
+    rule._armed = True
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    seq = (["0/780"] * 6 + ["780/780"] * 4
+           + ["400/780", "100/780", "50/780", "0/780"])
+    it = iter(seq)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(it))
+
+    fired = sum(1 for i in range(len(seq))
+                if watcher.evaluate(rule, "0x1", region, (100, 100),
+                                    float(i) * 2))
+    assert fired == 1
