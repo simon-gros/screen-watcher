@@ -3090,6 +3090,13 @@ def _check_backends(requested: str | None) -> tuple[list[Check], CaptureBackend]
     out = []
     for name in sorted(BACKENDS):
         ok, why = BACKENDS[name]().available()
+        # An unconfigured replay backend is the normal state, not a fault:
+        # it is opt-in for reproducing detector bugs. Warning about it on
+        # every run trains people to ignore the warning column.
+        if not ok and name == ReplayBackend.name and requested != name:
+            out.append(Check(f"backend:{name}", PASS, "not configured "
+                             "(opt-in; see SCREEN_WATCHER_REPLAY)"))
+            continue
         out.append(Check(f"backend:{name}", PASS if ok else WARN, why,
                          "" if ok else "this backend will not be used"))
     selected = make_backend(requested)
@@ -3290,6 +3297,15 @@ def _check_profile(cfg: dict, path: Path) -> list[Check]:
     else:
         out.append(Check("rules", PASS,
                          f"{len(enabled)} enabled, {disabled} disabled"))
+    # Name them. A disabled rule is silent by design, which is exactly what
+    # makes an accidental one impossible to notice: the watcher runs, the
+    # other alerts arrive, and the missing detector looks like an activity
+    # that simply never happened.
+    off = [r["name"] for r in cfg["rules"] if not r.get("enabled", True)]
+    if off:
+        out.append(Check("rules disabled", WARN, ", ".join(off),
+                         "these detectors never fire; enable them in the "
+                         "profile if that is not deliberate"))
     unused = sorted(set(cfg["_regions"])
                     - {r["region"] for r in enabled})
     if unused:
@@ -3444,6 +3460,35 @@ def cmd_shot(args) -> None:
     print(f"wrote {out}  {label} anchor={reg.anchor} -> box={box} (window {size[0]}x{size[1]})")
 
 
+#: Never shown in the rule summary: identity is already in its own column,
+#: and `_note` fields are multi-paragraph design rationale that made this
+#: command's output unreadable when dumped inline.
+_RULE_SUMMARY_SKIP = ("name", "kind", "region", "message", "enabled")
+
+
+def summarise_rule(rule: dict, width: int = 96, verbose: bool = False) -> str:
+    """One readable line of a rule's tuning parameters.
+
+    `regions` is a diagnostic command, so its job is to show at a glance what
+    a rule is set to. Printing the raw dict defeated that: the profiles carry
+    long `_note` essays explaining why each threshold was chosen, and a single
+    rule ran to over 2,000 characters of mostly prose.
+    """
+    parts = []
+    for k, v in rule.items():
+        if k in _RULE_SUMMARY_SKIP:
+            continue
+        if k.startswith("_") and not verbose:
+            continue
+        if isinstance(v, str) and not verbose and len(v) > 32:
+            v = v[:29] + "..."
+        parts.append(f"{k}={v}")
+    line = " ".join(parts)
+    if not verbose and len(line) > width:
+        line = line[:width - 3] + "..."
+    return line
+
+
 def cmd_regions(args) -> None:
     cfg = load_config(args.config)
     wid, size = resolve_window(cfg)
@@ -3451,12 +3496,14 @@ def cmd_regions(args) -> None:
     print(f"{'region':<16} {'anchor':<14} {'resolved x,y,w,h'}")
     for n, r in cfg["_regions"].items():
         print(f"{n:<16} {r.anchor:<14} {r.resolve(size)}")
-    print(f"\n{'rule':<18} {'kind':<7} {'region':<16} {'params'}")
+    verbose = getattr(args, "verbose", False)
+    print(f"\n{'rule':<18} {'kind':<9} {'region':<16} {'params'}")
     for r in cfg["rules"]:
-        extra = {k: v for k, v in r.items()
-                 if k not in ("name", "kind", "region", "message")}
         flag = "" if r.get("enabled", True) else "  (disabled)"
-        print(f"{r['name']:<18} {r['kind']:<7} {r['region']:<16} {extra}{flag}")
+        print(f"{r['name']:<18} {r['kind']:<9} {r['region']:<16} "
+              f"{summarise_rule(r, verbose=verbose)}{flag}")
+    if not verbose:
+        print("\n(--verbose for full parameters and notes)")
 
 
 def cmd_probe(args) -> None:
@@ -3619,6 +3666,36 @@ def cmd_alerts(args) -> None:
         for r in rows[-args.tail:]:
             stamp = time.strftime("%H:%M:%S", time.localtime(r["t"]))
             print(f"  {stamp}  {r['rule']:<18} {r['body'][:70]}")
+
+
+def next_deadline(previous: float, interval: float,
+                  now: float | None = None) -> float:
+    """The next poll deadline, skipping any that have already passed.
+
+    Advancing by exactly one interval looks right and is wrong after a slow
+    cycle. Measured with the loop's own arithmetic, a single 7s stall at a
+    1.5s interval produced:
+
+        cycle 2   work 7.00s   sleep 0.00s
+        cycle 3   work 0.05s   sleep 0.00s   <- 0.05s after the previous
+        cycle 4   work 0.05s   sleep 0.00s   <- and again
+        cycle 5   work 0.05s   sleep 0.00s   <- and again
+
+    Three cycles fired back-to-back while the schedule caught up. That
+    bursts capture and OCR work, and any rule reasoning about elapsed time
+    sees a near-zero gap that never happened on screen.
+
+    Skipping missed deadlines keeps the cadence honest: a late cycle is
+    simply late, and the next one lands on the following real boundary.
+    """
+    now = time.monotonic() if now is None else now
+    deadline = previous + interval
+    if deadline <= now:
+        # Land on the next boundary strictly in the future, preserving the
+        # original phase rather than restarting the clock from `now`.
+        missed = int((now - deadline) // interval) + 1
+        deadline += missed * interval
+    return deadline
 
 
 class WindowTracker:
@@ -3850,7 +3927,7 @@ def cmd_watch(args) -> None:
             elif status == "gone":
                 notify("Screen Watcher", "game window gone - stopping", "critical")
                 sys.exit("window gone")
-            next_poll += interval
+            next_poll = next_deadline(next_poll, interval)
             time.sleep(max(0.0, next_poll - time.monotonic()))
             continue
         cur = tracker.poll_size()
@@ -3899,7 +3976,7 @@ def cmd_watch(args) -> None:
                 else:
                     notify("Screen Watcher", "game window gone - stopping", "critical")
                     sys.exit("window gone")
-        next_poll += interval
+        next_poll = next_deadline(next_poll, interval)
         time.sleep(max(0.0, next_poll - time.monotonic()))
 
 
@@ -3942,7 +4019,12 @@ def main() -> None:
     s.add_argument("--box", help="anchor,dx,dy,w,h or x,y,w,h")
     s.add_argument("--out"); s.set_defaults(func=cmd_shot)
 
-    r = sub.add_parser("regions"); r.set_defaults(func=cmd_regions)
+    r = sub.add_parser("regions",
+                       help="show regions and rules resolved against the "
+                            "current window")
+    r.add_argument("-v", "--verbose", action="store_true",
+                   help="show full rule parameters including design notes")
+    r.set_defaults(func=cmd_regions)
 
     pr = sub.add_parser("probe")
     pr.add_argument("-n", "--count", type=int, default=12)

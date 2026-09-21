@@ -2062,3 +2062,50 @@ def test_replay_backend_is_registered(tmp_path):
 def test_replay_backend_reads_the_env_var(tmp_path, monkeypatch):
     monkeypatch.setenv("SCREEN_WATCHER_REPLAY", str(_write_frames(tmp_path)))
     assert watcher.ReplayBackend().available()[0] is True
+
+
+# --------------------------------------------------------------------------
+# Poll scheduling - a late cycle must not cause a catch-up burst
+# --------------------------------------------------------------------------
+
+def test_next_deadline_advances_one_interval_when_on_time():
+    assert watcher.next_deadline(10.0, 1.5, now=10.2) == pytest.approx(11.5)
+
+
+def test_next_deadline_skips_missed_deadlines():
+    """Advancing by one interval fires immediately when already overdue."""
+    # Deadline was 11.5; it is now 18.0, so 11.5, 13.0, 14.5, 16.0 and 17.5
+    # have all passed. The next real boundary is 19.0.
+    assert watcher.next_deadline(10.0, 1.5, now=18.0) == pytest.approx(19.0)
+
+
+def test_next_deadline_preserves_phase():
+    """Recovery keeps the original cadence rather than restarting from now.
+
+    Restarting at `now` would work too, but drifts the schedule on every
+    slow cycle; preserving phase keeps poll times predictable.
+    """
+    deadline = watcher.next_deadline(0.0, 1.5, now=7.05)
+    assert deadline == pytest.approx(7.5)
+    assert (deadline / 1.5) == pytest.approx(round(deadline / 1.5))
+
+
+def test_next_deadline_recovers_a_steady_cadence_after_a_stall():
+    """The regression: a 7s stall used to fire three cycles 0.05s apart."""
+    interval, deadline, now = 1.5, 0.0, 0.0
+    gaps, last = [], 0.0
+    for work in (0.05, 0.05, 7.0, 0.05, 0.05, 0.05):
+        now += work
+        deadline = watcher.next_deadline(deadline, interval, now=now)
+        now += max(0.0, deadline - now)
+        gaps.append(now - last)
+        last = now
+
+    assert gaps[2] == pytest.approx(7.5)          # the slow cycle itself
+    for gap in gaps[3:]:
+        assert gap == pytest.approx(interval)     # never a burst
+
+
+def test_next_deadline_handles_an_exactly_due_deadline():
+    """`now` landing exactly on the deadline must still move forward."""
+    assert watcher.next_deadline(10.0, 1.5, now=11.5) == pytest.approx(13.0)

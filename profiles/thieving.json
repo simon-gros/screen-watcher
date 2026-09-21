@@ -114,7 +114,8 @@
       "_disabled_note": "Superseded by fishing_stopped, which detects the same event from chat in 30s instead of 60s. Two rules firing for one spot move is just double beeping. Metrics XP is also the weaker signal: it stalls identically whether the spot moved, the client was minimised, or the panel was closed. Re-enable for a grind with no per-action chat message, where XP is the only evidence of progress.",
       "enabled": false,
       "urgency": "normal",
-      "timeout_ms": 30000
+      "timeout_ms": 30000,
+      "_note": "DISABLED: superseded by activity_icon_gone, which corroborates against chat and does not fire during normal XP lulls."
     },
     {
       "name": "impling",
@@ -125,7 +126,7 @@
       "message": "Impling spawned",
       "alert_body": "An impling appeared. Naturally, while you were busy stealing.",
       "sound": "message-highlight",
-      "_note": "Implings spawn silently and despawn; the message is easy to miss mid-grind. Rare enough to deserve its own sound - message-highlight is distinct from the warning tones used by pack_filling and xp_stalled, so it is recognisable without looking. Long timeout because the impling despawns: the popup should still be on screen when you glance over.",
+      "_note": "DISABLED pending live verification: the wording has never been seen in this session's chat, so the pattern is unconfirmed. Enable once an impling message has been observed and the pattern matched against it. Implings spawn silently and despawn; the message is easy to miss mid-grind. Rare enough to deserve its own sound - message-highlight is distinct from the warning tones used by pack_filling and xp_stalled, so it is recognisable without looking. Long timeout because the impling despawns: the popup should still be on screen when you glance over.",
       "enabled": false,
       "urgency": "normal",
       "timeout_ms": 20000,
@@ -155,7 +156,7 @@
       "message": "Thieving stopped",
       "alert_body": "No pickpocketing for {quiet:.0f}s. The target, at least, is enjoying this.",
       "sound": "dialog-warning",
-      "_note": "Fires when ALL evidence of pickpocketing stops. VERIFIED wording from live chat. The pattern uses three independent activity signals: the pickpocket success line, the money-pouch line, and the camouflage-outfit line. OCR of this font degrades badly when a busy 3D scene shows through the semi-transparent chat panel (observed 'ACE rrire aasws Bamrs'), and with only the success line this rule fired 4 times in 3 minutes while pickpocketing was demonstrably continuing - the coin counter advanced throughout. Any of the three activity lines proves progress. stop_seconds=45 (up from 20) because a stun alone pauses gains for ~3s and a garbled OCR run can hide several polls; 45s still leaves room for transient unreadability. The stun notice is deliberately excluded: being stunned is evidence of a halt, and counting it kept the stop timer alive through a genuine stop.",
+      "_note": "DISABLED: superseded by activity_icon_gone. Kept for reference because its three-signal pattern documents which chat lines prove activity. Fires when ALL evidence of pickpocketing stops. VERIFIED wording from live chat. The pattern uses three independent activity signals: the pickpocket success line, the money-pouch line, and the camouflage-outfit line. OCR of this font degrades badly when a busy 3D scene shows through the semi-transparent chat panel (observed 'ACE rrire aasws Bamrs'), and with only the success line this rule fired 4 times in 3 minutes while pickpocketing was demonstrably continuing - the coin counter advanced throughout. Any of the three activity lines proves progress. stop_seconds=45 (up from 20) because a stun alone pauses gains for ~3s and a garbled OCR run can hide several polls; 45s still leaves room for transient unreadability. The stun notice is deliberately excluded: being stunned is evidence of a halt, and counting it kept the stop timer alive through a genuine stop.",
       "enabled": false,
       "urgency": "normal",
       "timeout_ms": 20000,
@@ -185,7 +186,7 @@
       "message": "Loot",
       "alert_body": "Loot: {item}. The economy survives another drop.",
       "sound": "message-highlight",
-      "_note": "Announces a named item drop and ignores the currency line. Item list taken from the RuneScape Wiki drop table for Menaphos market guards: coins 758/1000, extra fine sand 100/1000, acadia wood spirit 50/1000, waterskin 50/1000, large bladed adamant salvage 20/1000, sealed clue (hard) 6/1000, menaphite gift offering small 4/1000, potato cactus 5/1000, vital spark 2/1000, gift offering medium 2/1000, sealed clue (elite) ~495/100000, master 5/100000. Coins are excluded because they land in the money pouch roughly every two seconds and would bury the rare drops. cooldown=0 because every drop is worth seeing; the alternatives in the pattern are ordered longest-first so '(elite)' wins over the bare 'sealed clue scroll'.",
+      "_note": "DISABLED pending live verification: the item list comes from the wiki drop table, not from observed chat, and the rarest entries are 2-6 per 1000. Enable once a named drop has been seen and its exact wording confirmed. Announces a named item drop and ignores the currency line. Item list taken from the RuneScape Wiki drop table for Menaphos market guards: coins 758/1000, extra fine sand 100/1000, acadia wood spirit 50/1000, waterskin 50/1000, large bladed adamant salvage 20/1000, sealed clue (hard) 6/1000, menaphite gift offering small 4/1000, potato cactus 5/1000, vital spark 2/1000, gift offering medium 2/1000, sealed clue (elite) ~495/100000, master 5/100000. Coins are excluded because they land in the money pouch roughly every two seconds and would bury the rare drops. cooldown=0 because every drop is worth seeing; the alternatives in the pattern are ordered longest-first so '(elite)' wins over the bare 'sealed clue scroll'.",
       "enabled": false,
       "urgency": "normal",
       "timeout_ms": 6000,
