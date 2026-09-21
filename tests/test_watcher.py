@@ -1,3 +1,5 @@
+import builtins
+import os
 import re
 from pathlib import Path
 import numpy as np
@@ -927,3 +929,72 @@ def test_report_covers_every_touched_region():
     names = [row[0] for row in sched.report()]
     assert names == ["backpack", "chat_tail"]
     assert all(len(row) == 3 for row in sched.report())
+
+
+# --------------------------------------------------------------------------
+# Priority 0, step 3: native XCB backend
+# --------------------------------------------------------------------------
+
+def test_xcb_backend_is_registered_and_default():
+    """XCB is the default because it measured 42x faster over a full cycle."""
+    assert watcher.X11XcbBackend.name in watcher.BACKENDS
+    assert watcher.DEFAULT_BACKEND == watcher.X11XcbBackend.name
+
+
+def test_make_backend_rejects_unknown_name():
+    with pytest.raises(ValueError, match="unknown backend"):
+        watcher.make_backend("nonsense")
+
+
+def test_make_backend_returns_requested_backend():
+    """An explicit request is honoured so `doctor` can explain a failure."""
+    backend = watcher.make_backend("x11-imagemagick")
+    assert backend.name == "x11-imagemagick"
+
+
+def test_make_backend_falls_back_when_default_unavailable(monkeypatch):
+    """A host without python-xcffib should still run, just slower."""
+
+    class Unavailable(watcher.X11XcbBackend):
+        def available(self):
+            return False, "python-xcffib unavailable"
+
+    class Usable(watcher.X11ImageMagickBackend):
+        def available(self):
+            return True, "ok"
+
+    monkeypatch.setitem(watcher.BACKENDS, "x11-xcb", Unavailable)
+    monkeypatch.setattr(watcher, "X11ImageMagickBackend", Usable)
+
+    assert watcher.make_backend().name == "x11-imagemagick"
+
+
+def test_xcb_backend_rejects_degenerate_boxes():
+    backend = watcher.X11XcbBackend()
+    for box in ((0, 0, 0, 10), (0, 0, 10, 0)):
+        with pytest.raises(watcher.CaptureError, match="degenerate"):
+            backend.grab_array("1234", box)
+
+
+def test_xcb_backend_rejects_empty_handle():
+    with pytest.raises(watcher.CaptureError, match="empty window id"):
+        watcher.X11XcbBackend().grab_array("", (0, 0, 10, 10))
+
+
+def test_xcb_backend_reports_missing_binding(monkeypatch):
+    """`available` must name the missing dependency, not just say no."""
+    backend = watcher.X11XcbBackend()
+    monkeypatch.setitem(os.environ, "DISPLAY", ":0")
+    monkeypatch.setattr(watcher, "ensure_x_env", lambda: None)
+
+    real_import = builtins.__import__
+
+    def missing(name, *args, **kwargs):
+        if name.startswith("xcffib"):
+            raise ImportError("No module named 'xcffib'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing)
+    ok, reason = backend.available()
+    assert ok is False
+    assert "xcffib" in reason

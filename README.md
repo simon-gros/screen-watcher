@@ -66,7 +66,8 @@ Screen Watcher currently expects:
 - `numpy`
 - Pillow
 - `xdotool`
-- ImageMagick (`import`)
+- `python-xcffib` — native XCB capture, measured 42x faster than ImageMagick
+- ImageMagick (`import`) — automatic fallback when xcffib is unavailable
 - Tesseract OCR with English language data
 - `notify-send`
 - `paplay` for per-rule sounds
@@ -75,7 +76,7 @@ On CachyOS/Arch Linux:
 
 ```bash
 sudo pacman -S --needed \
-  python python-numpy python-pillow \
+  python python-numpy python-pillow python-xcffib \
   xdotool imagemagick \
   tesseract tesseract-data-eng \
   libnotify libpulse
@@ -84,7 +85,7 @@ sudo pacman -S --needed \
 On Debian/Ubuntu:
 
 ```bash
-sudo apt install xdotool imagemagick tesseract-ocr libnotify-bin pulseaudio-utils python3-pil python3-numpy
+sudo apt install xdotool imagemagick tesseract-ocr libnotify-bin pulseaudio-utils python3-pil python3-numpy python3-xcffib
 ```
 
 For development and tests:
@@ -168,6 +169,7 @@ nohup python3 watcher.py --config profiles/fishing.json watch \
 | `stats` | analyse logged inventory fill/bank cycles |
 | `watch` | run the polling and notification loop |
 | `alerts` | show per-rule alert counts and rates |
+| `backends` | list capture backends and whether they work on this host |
 | `status` | report whether a watcher process is running |
 | `pause` | pause the running watcher |
 | `resume` | resume the paused watcher |
@@ -427,7 +429,10 @@ architectural limitations are documented in
 
 ## Known limitations
 
-- Linux/X11/XWayland is the currently implemented capture path.
+- Linux/X11/XWayland is the currently implemented capture path. Native XCB
+  capture is the default and measured 42x faster than the ImageMagick path
+  (648.6 ms -> 15.3 ms per four-region cycle); ImageMagick remains as an
+  automatic fallback when `python-xcffib` is unavailable.
 - Desktop notifications are the implemented notification backend.
 - Per-rule sound names currently resolve against KDE's Ocean sound theme under
   `/usr/share/sounds/ocean/stereo`; if a configured sound file or `paplay`
