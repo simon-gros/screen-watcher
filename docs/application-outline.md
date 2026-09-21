@@ -39,11 +39,11 @@ expanding broadly into additional skills**. The detailed research and package
 choices are recorded at the top of
 [`future-implementation-ideas.md`](future-implementation-ideas.md).
 
-The immediate sequence is:
+The implementation order remains:
 
 1. `GameInstance` / `CaptureBackend` abstraction.
 2. Shared-frame scheduler/cache.
-3. Native X11/XComposite/XShm backend and benchmark.
+3. Native X11 capture and benchmark.
 4. Backend/frame health integrated with `doctor`.
 5. Reusable interface-reader registry beginning with `ChatReader`.
 6. Layered OCR abstraction and specialized RuneScape numeric/sprite path.
@@ -51,6 +51,11 @@ The immediate sequence is:
 8. XDG ScreenCast portal + PipeWire Wayland capture proof of concept.
 9. PySide6/Qt + layer-shell read-only overlay proof of concept.
 10. Migration of existing Fishing/Thieving rules to normalized reader/events.
+
+The numbered order is not the completion status. Steps 1–3 and the current
+numeric OCR path are implemented; diagnostics and ChatReader/event migration
+are partial; steps 7–9 are not started. See
+[priority-0-status.md](priority-0-status.md) for the authoritative status.
 
 This work is an implementation **gate**, not another equal-priority wishlist.
 Skill-specific development during this stage should be limited to small cases
@@ -60,7 +65,8 @@ that validate a new reader/event primitive.
 
 Use distro-supported components where possible:
 
-- X11: XCB/xcffib + XComposite + XShm;
+- X11: current shipped backend is XCB/xcffib `GetImage`; XComposite/XShm
+  remain possible optimizations if measurement justifies them;
 - Wayland capture: XDG Desktop Portal ScreenCast + PipeWire, KDE backend through
   `xdg-desktop-portal-kde`/KPipeWire;
 - KDE window metadata: read-only KWin scripting/D-Bus integration;
@@ -189,15 +195,17 @@ inspectable so the operator can see exactly why a rule exists.
 
 ### Observation backends
 
-The current ImageMagick/X11 capture path is an acceptable prototype but should
-not remain the long-term high-frequency architecture. The backend should resolve
-the game window, maintain geometry, detect resize/reacquisition, expose frames,
-and know nothing about Fishing, Thieving, bosses, or skill semantics.
+The current high-frequency X11/XWayland path is native XCB `GetImage`, with
+the original ImageMagick implementation retained as an automatic fallback.
+Backends resolve the game window, maintain geometry, detect
+resize/reacquisition, expose frames, and know nothing about Fishing, Thieving,
+bosses, or skill semantics.
 
 Define a `GameInstance`/observation-backend interface before capture
 assumptions spread further. Candidate backends:
 
-- native X11/XComposite/XShm capture;
+- native X11/XCB capture (currently `GetImage`, with XShm/XComposite optional
+  future optimizations);
 - XWayland-compatible capture where appropriate;
 - Wayland portal/PipeWire capture;
 - recorded fixture/replay input;
@@ -564,8 +572,9 @@ multi-client support possible without cross-contaminating alerts.
 
 ### Priority 0 engineering stage — implement before broad profile expansion
 
-This is the next coding stage and should be read before the broader coverage
-section.
+This remains the gating engineering stage and should be read before the broader
+coverage section. Current completion is tracked in
+[priority-0-status.md](priority-0-status.md).
 
 - Split the monolithic script into observation backends, profiles, calibration/
   health, extractors, normalized events, activity/session state, rules, alerts,
@@ -573,8 +582,9 @@ section.
 - Define a `GameInstance` / `CaptureBackend` interface first.
 - Add the shared-frame scheduler/cache so readers do not independently recapture
   the game window.
-- Prototype native X11/XComposite/XShm capture using the Arch/CachyOS-friendly
-  XCB/xcffib stack and benchmark it against ImageMagick.
+- Maintain and benchmark the shipped XCB/xcffib `GetImage` path against the
+  ImageMagick fallback; only add XComposite/XShm if measurement shows a useful
+  improvement.
 - Implement `screen-watcher doctor` with PASS/WARN/FAIL diagnostics for session
   type, capture backend, window identity/geometry/focus, frame health, OCR,
   notifications, portal/PipeWire readiness, and profile assumptions.
