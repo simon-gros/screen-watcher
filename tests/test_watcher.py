@@ -1146,3 +1146,148 @@ def test_doctor_reports_missing_required_tool(monkeypatch):
                         lambda t: None if t == "paplay" else "/usr/bin/" + t)
     areas = {c.area: c for c in watcher._check_tools()}
     assert areas["paplay"].verdict == "WARN"
+
+
+# --------------------------------------------------------------------------
+# Priority 0, step 5: interface readers
+# --------------------------------------------------------------------------
+
+class ChatBackend(RecordingBackend):
+    """Backend whose chat region OCRs to a scripted list of lines."""
+
+    def __init__(self, pages):
+        super().__init__(size=(2505, 1986))
+        self.pages = list(pages)
+        self.page = 0
+
+    def next_page(self):
+        text = self.pages[min(self.page, len(self.pages) - 1)]
+        self.page += 1
+        return text
+
+
+def _chat_env(pages, monkeypatch):
+    backend = ChatBackend(pages)
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    regions = load_config(Path("profiles/thieving.json"))["_regions"]
+    sched = watcher.FrameScheduler(game, regions)
+    monkeypatch.setattr(watcher, "ocr_cached",
+                        lambda *a, **k: backend.next_page())
+    return sched
+
+
+def test_registry_shares_one_reader_per_region():
+    """Two rules on one region must share a dedup set, not keep two."""
+    registry = watcher.ReaderRegistry()
+    first = registry.chat("chat_tail")
+    second = registry.chat("chat_tail")
+    other = registry.chat("metrics_xp")
+
+    assert first is second
+    assert first is not other
+    assert len(registry) == 2
+
+
+def test_chat_reader_emits_each_line_once(monkeypatch):
+    """The chat tail redisplays old lines every poll until they scroll off."""
+    page = "[16:10:26] You catch a desert sole.\n[16:10:30] You catch a catfish."
+    sched = _chat_env([page, page, page], monkeypatch)
+    reader = watcher.ChatReader("chat_tail")
+
+    sched.begin()
+    first = reader.read(sched)
+    sched.begin()
+    second = reader.read(sched)
+
+    assert len(first) == 2
+    assert second == []
+
+
+def test_chat_reader_skips_short_keys(monkeypatch):
+    sched = _chat_env(["ok\n[16:10:26] You catch a desert sole."], monkeypatch)
+    reader = watcher.ChatReader("chat_tail")
+
+    sched.begin()
+    lines = reader.read(sched)
+
+    assert [line.text for line in lines] == ["[16:10:26] You catch a desert sole."]
+
+
+def test_repeated_events_are_not_collapsed():
+    """Regression: catches a second apart differ only by timestamp.
+
+    Fuzzy dedup without timestamp awareness suppressed these, which would
+    break every rule that counts occurrences.
+    """
+    reader = watcher.ChatReader("chat_tail", similarity=0.90)
+    keys = [norm_line(f"[16:10:{s}] You catch a desert sole.")
+            for s in ("26", "30", "35")]
+
+    reader._recent = [keys[0]]
+    assert reader._is_variant(keys[1]) is False
+    reader._recent = keys[:2]
+    assert reader._is_variant(keys[2]) is False
+
+
+def test_ocr_variants_of_one_line_are_collapsed():
+    """Same timestamp, mangled wording: one game event, not three."""
+    reader = watcher.ChatReader("chat_tail", similarity=0.90)
+    reader._recent = [norm_line("[16:10:26] You catch a desert sole.")]
+
+    for variant in ("[16:10:26] You catch a desert soIe.",
+                    "(16:10:26] YoU catch a desert sole,"):
+        assert reader._is_variant(norm_line(variant)) is True
+
+
+def test_unstamped_variants_are_collapsed():
+    reader = watcher.ChatReader("chat_tail", similarity=0.90)
+    reader._recent = [norm_line("Your camouflage outfit keeps you hidden")]
+
+    assert reader._is_variant(
+        norm_line("Your camoufiage outfit kesps you hidden")) is True
+
+
+def test_distinct_messages_stay_distinct():
+    """Fuzzy matching must not merge different game events."""
+    reader = watcher.ChatReader("chat_tail", similarity=0.90)
+    reader._recent = [norm_line("You've been stunned.")]
+
+    for other in ("You fail to steal from the target.",
+                  "Your pickpocket target becomes aware of your presence.",
+                  "455 coins have been added to your money pouch."):
+        assert reader._is_variant(norm_line(other)) is False
+
+
+def test_similarity_of_one_disables_fuzzy_matching():
+    reader = watcher.ChatReader("chat_tail", similarity=1.0)
+    reader._recent = [norm_line("[16:10:26] You catch a desert sole.")]
+
+    assert reader._is_variant(
+        norm_line("[16:10:26] You catch a desert soIe.")) is False
+
+
+def test_seen_set_is_capped_and_unprimes(monkeypatch):
+    """Clearing the set would let on-screen lines re-fire, so re-prime."""
+    page = "\n".join(f"[16:10:{s}] You catch a desert sole."
+                     for s in ("26", "31", "36"))
+    sched = _chat_env([page], monkeypatch)
+    reader = watcher.ChatReader("chat_tail", max_seen=2)
+    reader.primed = True
+
+    sched.begin()
+    reader.read(sched)
+
+    assert reader._seen == set()
+    assert reader.primed is False
+
+
+def test_registry_reports_reader_statistics(monkeypatch):
+    sched = _chat_env(["[16:10:26] You catch a desert sole."], monkeypatch)
+    registry = watcher.ReaderRegistry()
+    reader = registry.chat("chat_tail")
+
+    sched.begin()
+    reader.read(sched)
+
+    assert registry.stats() == [("chat", "chat_tail", 1, 1)]

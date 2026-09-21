@@ -456,3 +456,61 @@ anchor confidence, profile schema versioning, locale and UI-scale assumptions,
 drift against a saved calibration, and `--profile` readiness requirements.
 Those depend on calibration baselines and profile metadata that do not exist
 yet.
+
+
+## Priority 0, step 5 — interface readers
+
+A reader turns one region's pixels into normalized events that any number of
+rules can consume.
+
+```text
+ReaderRegistry
+    .chat(region) -> ChatReader        # one reader per (kind, region)
+        .read(scheduler) -> [ChatLine(text, key, cycle)]
+```
+
+### The duplication it removes
+
+Five rule kinds (`ocr`, `activity`, `supply`, `loot`, `counter`) each carried
+their own copy of: OCR the region, split lines, normalize a dedup key, skip
+keys already seen, cap the seen-set at 400. The copies had drifted, and a fix
+to one never reached the others.
+
+Sharing matters beyond tidiness. When every rule kept its own seen-set, each
+one independently consumed the same line, which meant N copies of the same
+400-entry set and N chances for the capping logic to differ. The registry is
+keyed on `(kind, region)` so two rules watching one chat region get the same
+reader and therefore one authoritative dedup set.
+
+### Fuzzy deduplication, and the regression it caused
+
+Exact-key dedup is not sufficient. Tesseract mis-reads this font differently
+on each pass, so one unchanging chat line yields a stream of distinct keys and
+a rule can fire several times for one game event.
+
+Adding a similarity check fixed that and immediately broke something worse:
+repeated catches a second apart differ **only** by their timestamp, so fuzzy
+matching collapsed them. That would silently break `fishing_stopped`,
+`coin_milestone`, and every other rule that counts occurrences.
+
+`_split_stamp` separates the leading `HHMMSS` from the wording. A different
+in-game timestamp now means a different event regardless of similarity, while
+same-stamp variants still collapse.
+
+Measured on live chat over 6 cycles:
+
+| measure | value |
+|---|---|
+| events emitted | 46 |
+| distinct timestamps | **30** (real events) |
+| same-stamp duplicates | 6 (true OCR variants) |
+| variants suppressed | 11 |
+
+An earlier measurement reported "67% near-duplicates" and looked alarming. It
+was wrong: those were 12 genuine catches with 12 distinct timestamps. Judging
+similarity without separating the clock measured real gameplay as noise.
+
+### Not yet wired in
+
+The rule evaluators still call `ocr_cached` directly. Moving them onto readers
+is step 10. `InventoryReader` and `BuffBarReader` are not implemented.
