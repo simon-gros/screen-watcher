@@ -953,3 +953,83 @@ whose model is "subscribe to a stream" rather than "request a rectangle" -
 The value delivered here is the proof the acceptance criteria asked for:
 a working portal/PipeWire path on KDE/CachyOS, benchmarked against the
 current backend, with the pixels verified as real game content.
+
+## Priority 0, step 9 — click-through Wayland overlay
+
+`tools/overlay.py` plus `tools/overlay.qml`. A compositor-level overlay,
+never an injection into RuneScape's GL/Vulkan context: Screen Watcher stays
+an observer.
+
+The mechanism is `wl-layer-shell` via KDE's `layer-shell-qt`, which the
+roadmap's reference projects identify as the one approach that works on
+native KWin Wayland where X11 and Electron overlay shims fail.
+
+### No C++ needed
+
+There is no Python binding for LayerShellQt. The package does ship a QML
+module, `org.kde.layershell`, exposing the full API - `layer`, `anchors`,
+`keyboardInteractivity`, `exclusionZone`, `margins`. So the surface is
+configured in QML and driven from Python, with no build step.
+
+The three properties that make this an overlay rather than a window:
+
+| property | value | effect |
+|---|---|---|
+| `layer` | `LayerOverlay` | draws above normal windows, including the game |
+| `keyboardInteractivity` | `None` | never takes focus |
+| input region | empty | clicks pass through to the game |
+
+`exclusionZone: -1` is the fourth: without it the compositor reserves screen
+space for the surface and shrinks a maximised game window.
+
+### Verified against the live game
+
+A compositor-level screenshot through the step 8 portal shows the alert
+cards rendering over the running client, with the minimap and game UI
+visible through the translucent backgrounds. That screenshot was the only
+way to prove it: XCB captures the *game's own surface*, so it cannot show an
+overlay composited above it by definition.
+
+Measured with KWin discovery from step 7:
+
+| check | result |
+|---|---|
+| surface geometry | 380x165 at (1782, 16), matching the 16px margin |
+| `active` while showing alerts | `false` - never steals focus |
+| window mask | empty region - click-through |
+| compact vs detailed | 66px vs 108px for the same two alerts |
+
+Feeding it JSON on stdin is the intended integration path. A deliberately
+malformed line is skipped rather than crashing the surface, confirmed by the
+overlay still rendering exactly two cards afterwards.
+
+### Qt does not fall back, it aborts
+
+The first run dumped core with no message. The cause was an empty
+`WAYLAND_DISPLAY`: this shell runs outside the desktop session, and Qt
+responds to a missing compositor by aborting the interpreter rather than
+raising something catchable.
+
+`ensure_wayland_env` recovers `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` from a
+live `plasmashell`/`kwin_wayland` process, exactly as `ensure_x_env` already
+does for X11, and it must run *before* Qt is imported. This is the same
+class of problem twice now, and both times the symptom was a hard crash
+rather than an error message.
+
+A second failure worth recording: the QML refused to load with no diagnostic
+from `QQmlApplicationEngine.load`. Loading the same file through
+`QQmlComponent` and reading `component.errors()` named it immediately -
+`implicitWidth` is read-only on `Column`. Use `QQmlComponent` when QML fails
+silently.
+
+### Not yet wired to the watcher
+
+The overlay is a separate process reading stdin, which matches the reference
+projects' "keep the application persistent" lesson - no process spawn per
+alert. Connecting it to `notify()` is deliberately left out: that is a
+product decision about whether alerts should appear on-screen at all, not a
+Priority 0 primitive.
+
+Wayland-only by nature. `tools/overlay.py` reports that plainly on an X11
+session, and every Qt import is function-local so the module - and its
+tests - load on a machine without PySide6.

@@ -450,6 +450,12 @@ architectural limitations are documented in
   streams continuously instead of paying a round trip per region. Adopting it
   needs a persistent session, restore-token storage, and a `CaptureBackend`
   shaped around subscribing to a stream rather than requesting a rectangle.
+- A click-through KDE/Wayland overlay prototype lives in `tools/overlay.py`
+  (with `tools/overlay.qml`). It uses `wl-layer-shell` through `layer-shell-qt`
+  on the OVERLAY layer, never takes keyboard focus, and has an empty input
+  region so clicks pass through to the game. Verified rendering above the live
+  client. It reads JSON alerts on stdin and is not yet connected to `notify()`.
+  Wayland-only, and it needs `pyside6` and `layer-shell-qt`.
 - Desktop notifications are the implemented notification backend.
 - Per-rule sound names currently resolve against KDE's Ocean sound theme under
   `/usr/share/sounds/ocean/stereo`; if a configured sound file or `paplay`

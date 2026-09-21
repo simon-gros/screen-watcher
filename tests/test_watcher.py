@@ -1903,3 +1903,91 @@ def test_hidden_reacquire_reports_the_kwin_reason(windows, monkeypatch):
                                              "{id}"))
 
     assert tracker.reacquire() == ("hidden", "minimised")
+
+
+# --------------------------------------------------------------------------
+# Wayland overlay helpers (Priority 0, step 9)
+#
+# The Qt/QML surface itself needs a live compositor and is verified by hand
+# against the running game; what is unit-testable is the environment
+# recovery that decides whether it can start at all.
+# --------------------------------------------------------------------------
+
+def _load_overlay():
+    """Import tools/overlay.py without requiring PySide6 at module scope."""
+    import importlib.util
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "sw_overlay", root / "tools" / "overlay.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_overlay_keeps_an_existing_wayland_env(monkeypatch):
+    overlay = _load_overlay()
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-9")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+
+    def explode(*a, **k):
+        raise AssertionError("must not scan /proc when the env is already set")
+
+    monkeypatch.setattr(overlay.subprocess, "run", explode)
+    assert overlay.ensure_wayland_env() is True
+
+
+def test_overlay_recovers_wayland_env_from_the_session(monkeypatch, tmp_path):
+    """Started outside the session, Qt does not fall back - it dumps core.
+
+    Reproduced while building this: with WAYLAND_DISPLAY unset, PySide6
+    aborted the interpreter rather than raising, so the variables have to be
+    recovered before Qt is touched.
+    """
+    overlay = _load_overlay()
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+
+    env = tmp_path / "environ"
+    env.write_bytes(
+        b"WAYLAND_DISPLAY=wayland-0\x00XDG_RUNTIME_DIR=/run/user/1000\x00"
+        b"UNRELATED=x\x00")
+
+    class R:
+        stdout = "4242"
+
+    monkeypatch.setattr(overlay.subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(overlay, "Path",
+                        lambda p: env if "4242" in str(p) else Path(p))
+
+    assert overlay.ensure_wayland_env() is True
+    assert os.environ["WAYLAND_DISPLAY"] == "wayland-0"
+    assert os.environ["XDG_RUNTIME_DIR"] == "/run/user/1000"
+
+
+def test_overlay_reports_no_wayland_session(monkeypatch):
+    """An X11-only machine must get a clear refusal, not a crash."""
+    overlay = _load_overlay()
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+
+    class R:
+        stdout = ""
+
+    monkeypatch.setattr(overlay.subprocess, "run", lambda *a, **k: R())
+    assert overlay.ensure_wayland_env() is False
+
+
+def test_overlay_qml_declares_a_click_through_overlay_surface():
+    """Guard the three properties that make this an overlay, not a window.
+
+    Each has been verified live: LayerOverlay draws above the game,
+    KeyboardInteractivityNone keeps active=False in KWin, and a negative
+    exclusion zone stops the compositor reserving screen space.
+    """
+    qml = (Path(__file__).resolve().parents[1] / "tools" / "overlay.qml"
+           ).read_text()
+    assert "LayerShell.Window.layer: LayerShell.Window.LayerOverlay" in qml
+    assert ("LayerShell.Window.keyboardInteractivity: "
+            "LayerShell.Window.KeyboardInteractivityNone") in qml
+    assert "LayerShell.Window.exclusionZone: -1" in qml
+    assert "Qt.WindowTransparentForInput" in qml
