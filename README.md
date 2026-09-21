@@ -14,9 +14,9 @@ the mouse, or otherwise sending input to the game.
 > notifications. It does not automate gameplay or generate game input.
 
 The project is currently an early, functional foundation for a broader
-RuneScape observability application. Fishing and thieving/pickpocketing
-profiles are included today; most other skills, quests, bosses, and minigames
-still need researched profiles, calibration, and fixtures.
+RuneScape observability application. Fishing, thieving/pickpocketing, and an Arch-Glacor boss profile are included
+today; most other skills, quests, bosses, and minigames still need researched
+profiles, calibration, and fixtures.
 
 For the longer-term architecture and roadmap, see
 [docs/application-outline.md](docs/application-outline.md).
@@ -27,7 +27,7 @@ For the longer-term architecture and roadmap, see
 - **Display path:** X11/XWayland for pixels; KWin scripting for window state
   on KDE Wayland (read-only, optional)
 - **Game window detection:** configurable through `window.wm_class`
-- **Included profiles:** fishing and thieving/pickpocketing
+- **Included profiles:** fishing, thieving/pickpocketing, and Arch-Glacor
 - **Profile families supported by validation:** `skill`, `quest`, and `boss`
 - **Outputs:** desktop notifications, sounds, terminal output, and local JSONL history
 - **Automation boundary:** observation only; no synthetic input
@@ -37,11 +37,13 @@ The current implementation is still centered on a single `watcher.py` module.
 The planned modular architecture is documented separately and should not be
 confused with functionality that has already landed.
 
-The **Priority 0 Linux technical foundation** is complete: capture backend
+The **core Priority 0 Linux observation stack** is implemented: capture backend
 abstraction, shared frame scheduler, native XCB capture, diagnostics, reader
 registry, layered OCR, KWin window discovery, a Wayland portal/PipeWire proof
-of concept, a click-through overlay prototype, and a replay backend. Broader
-skill and profile coverage is now the priority.
+of concept, a click-through overlay prototype, and a replay backend. Priority 0
+is not fully closed: production Wayland capture/overlay integration, broader
+reader normalization, schema compatibility, modularization, and practical
+validation remain.
 
 ## Features
 
@@ -115,6 +117,7 @@ The repository currently includes:
 ```text
 profiles/fishing.json
 profiles/thieving.json
+profiles/boss-arch-glacor.json
 ```
 
 Use `--config` before the subcommand:
@@ -473,9 +476,10 @@ architectural limitations are documented in
   is unavailable, notification delivery continues without that extra sound.
 - OCR-based rules require the relevant text region to remain visible.
 - Region calibration depends on the user's RuneScape interface layout.
-- Only fishing and thieving profiles are currently included.
-- Quest and boss profile types are accepted by validation, but the repository
-  does not yet include complete quest or boss profiles.
+- Fishing, thieving, and Arch-Glacor profiles are currently included.
+- Quest and boss profile types are accepted by validation, but broader quest
+  and boss coverage still requires researched profiles, calibration, and
+  replay/live fixtures.
 - `watcher.py` is still monolithic and is planned to be split into capture,
   profiles, signals, rules, events, notifications, and CLI modules. The
   rule evaluators now route through a bound `GameInstance`, so they inherit
