@@ -103,6 +103,90 @@ def test_rule_fire_bad_template_falls_back_instead_of_dropping_alert(capsys):
     assert "invalid alert body template" in capsys.readouterr().err
 
 
+def _urn_rule(**over):
+    """An item_count rule shaped like the live urns_carried rule."""
+    base = dict(name="urns_carried", kind="item_count", region="backpack",
+                item="urns", warn_below=1, out_below=0, confirm_seconds=8,
+                repeat_seconds=180, cooldown=30, prime_on_start=True,
+                out_message="No urns in the pack.")
+    base.update(over)
+    return Rule(**base)
+
+
+def _count_is(monkeypatch, value):
+    """Force the colour counter, wherever the evaluator resolves it."""
+    from screen_watcher import rules as rules_mod
+    monkeypatch.setattr(rules_mod, "count_by_colour", lambda *a, **k: value)
+
+
+def test_item_count_does_not_alert_on_a_shortage_that_predates_the_watcher(
+        monkeypatch):
+    """Six false 'No urns remain' alerts fired with no fishing happening.
+
+    `_armed` defaults to True and nothing required a prior healthy
+    reading, so starting the watcher next to a bank - empty backpack, no
+    activity under way - announced the urns had run out within
+    confirm_seconds. Every urns alert in the logged history was this
+    'out' state; the real warn_below=1 case had never fired.
+    """
+    rule = _urn_rule()
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: np.zeros((10, 10, 3), dtype=np.int16))
+    _count_is(monkeypatch, 0)
+
+    now = 1000.0
+    for _ in range(5):
+        assert watcher.evaluate(rule, "w", region, (100, 100), now) is None
+        now += 10
+
+
+def test_item_count_still_alerts_once_it_has_watched_the_drain(monkeypatch):
+    """Priming must not cost a real alert - the pack draining to zero."""
+    rule = _urn_rule()
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: np.zeros((10, 10, 3), dtype=np.int16))
+
+    now = 1000.0
+    alerts = []
+    for count in (3, 2, 1, 0, 0):
+        _count_is(monkeypatch, count)
+        alert = watcher.evaluate(rule, "w", region, (100, 100), now)
+        if alert:
+            alerts.append(alert.body)
+        now += 10
+
+    assert alerts == ["No urns in the pack."]
+
+
+def test_item_count_priming_is_opt_in(monkeypatch):
+    """A rule without prime_on_start keeps the old cold-start behaviour."""
+    rule = _urn_rule(prime_on_start=False)
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: np.zeros((10, 10, 3), dtype=np.int16))
+    _count_is(monkeypatch, 0)
+
+    watcher.evaluate(rule, "w", region, (100, 100), 1000.0)
+    assert watcher.evaluate(rule, "w", region, (100, 100), 1010.0) is not None
+
+
+def test_supply_rules_that_can_nag_are_primed():
+    """The two item_count rules that fired falsely must stay primed.
+
+    Checks the shipped profiles, not a synthetic rule: the defect was a
+    missing profile flag, so asserting on the evaluator alone would not
+    have caught it.
+    """
+    for profile, name in (("profiles/fishing.json", "urns_carried"),
+                          ("profiles/boss-arch-glacor.json", "food_left")):
+        cfg = json.loads((Path(__file__).resolve().parents[1]
+                          / profile).read_text())
+        rule = next(r for r in cfg["rules"] if r["name"] == name)
+        assert rule.get("prime_on_start") is True, f"{profile}:{name}"
+
+
 def test_item_count_out_state_uses_separate_template(monkeypatch):
     rule = Rule(
         name="urns", kind="item_count", region="backpack", item="urns",
@@ -292,8 +376,12 @@ def test_profiles_have_configured_copy_for_representative_rules():
 
     assert "slots left" in fishing_rules["pack_nearly_full"]["alert_body"]
     assert "{n}" in fishing_rules["urns_carried"]["alert_body"]
-    assert "No urns remain" in fishing_rules["urns_carried"]["out_alert_body"]
-    assert "nearing the end" in fishing_rules["urn_full"]["alert_body"]
+    # Assert the alert carries its facts, not one exact phrasing: the copy
+    # is meant to be reworded, and pinning a sentence here made a wording
+    # pass fail a test that had no opinion about wording.
+    out_body = fishing_rules["urns_carried"]["out_alert_body"].lower()
+    assert "no urns" in out_body and "xp" in out_body
+    assert "urn" in fishing_rules["urn_full"]["alert_body"].lower()
     assert "{item}" in thieving_rules["loot_drop"]["alert_body"]
     assert "{total}" in thieving_rules["coin_milestone"]["alert_body"]
     assert "{gone:.0f}" in thieving_rules["activity_icon_gone"]["alert_body"]

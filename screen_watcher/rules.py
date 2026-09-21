@@ -442,6 +442,17 @@ def _eval_item_count(rule: Rule, wid: str, region: "_w().Region", box,
 
     if level == "ok":
         rule._armed = True
+        rule._primed = True
+        return
+    # A shortage that was already there when the watcher started is not an
+    # event. Observed firing six times with no fishing under way at all:
+    # the watcher was started with an empty or banked backpack, and since
+    # `_armed` defaults to True the rule announced "No urns remain" within
+    # `confirm_seconds` of launch. Requiring a prior "ok" reading means the
+    # count has to be seen draining, which is what the alert claims.
+    # Opt-in, exactly as for gauge and percent rules, so an item that is
+    # genuinely meant to alert from a cold start can still do so.
+    if rule.prime_on_start and not rule._primed:
         return
     # An unresolved "out" re-arms on a timer: the loss is ongoing, so one alert
     # that scrolls past is not enough. "low" stays one-shot - it is advice, and
