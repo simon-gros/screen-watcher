@@ -127,6 +127,22 @@
       "warn_at": 3
     },
     {
+      "name": "adrenaline_full",
+      "kind": "percent",
+      "region": "vitals",
+      "warn_at_or_above": 100,
+      "confirm_readings": 2,
+      "cooldown": 20,
+      "message": "Adrenaline full",
+      "item": "adrenaline",
+      "alert_body": "Adrenaline {percent}% - a threshold ability is ready.",
+      "sound": "message-attention",
+      "urgency": "normal",
+      "timeout_ms": 12000,
+      "enabled": true,
+      "_note": "Adrenaline is the one vitals field with no maximum to anchor against - it prints as '100%', not '100/100' - so parse_gauge cannot read it and parse_percent uses the percent sign instead. VERIFIED against real OCR of this row: '@100%', '@85%', '@92%' and a bare '55%' all extract correctly, while a frame whose digits are mangled to 'y@x%' yields nothing rather than a wrong number. Readings above 100 are rejected outright, since adrenaline cannot exceed it and a larger value means the digits ran together with the life total beside them. A separate rule kind from gauge because the two differ in direction as well as parser: a gauge warns on the way down, this fires on the way up. urgency=normal, not critical - full adrenaline is a cue to act, not a danger. Re-arms only after adrenaline falls below the threshold, so sitting at 100% produces one alert rather than one per second."
+    },
+    {
       "name": "food_left",
       "kind": "item_count",
       "region": "backpack",

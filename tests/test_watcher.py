@@ -3077,3 +3077,97 @@ def test_gauge_recovers_after_a_bad_first_reading(monkeypatch):
     fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
              for n in range(3)]
     assert sum(1 for a in fired if a is not None) == 1
+
+
+# --------------------------------------------------------------------------
+# Adrenaline: a bare percentage, alerting on the way up
+# --------------------------------------------------------------------------
+
+def test_parse_percent_reads_the_real_vitals_row():
+    """Verbatim OCR from live Arch-Glacor frames."""
+    assert watcher.parse_percent(
+        "I 6 9,140/10,597 @100% @ 780/780 @ 60/60") == 100
+    assert watcher.parse_percent("I§9,347[1o,597 @85% @3&2[7&0") == 85
+    assert watcher.parse_percent("9,309/10,597 55% 0/780 60/60") == 55
+    assert watcher.parse_percent("I 0% @ 780/780") == 0
+
+
+def test_parse_percent_rejects_unreadable_and_impossible_values():
+    """A wrong number is worse than none.
+
+    Adrenaline cannot exceed 100%, so a larger value means the digits ran
+    together with the life total beside them.
+    """
+    assert watcher.parse_percent("I © 2177/10597 y@x% g @p/no") is None
+    assert watcher.parse_percent("597% nonsense") is None
+    assert watcher.parse_percent("") is None
+
+
+def _percent_rule(**kw):
+    opts = dict(name="adrenaline_full", kind="percent", region="vitals",
+                warn_at_or_above=100, confirm_readings=2, cooldown=0,
+                message="Adrenaline full", alert_body="{percent}%")
+    opts.update(kw)
+    rule = watcher.Rule(**opts)
+    rule._armed = True
+    return rule
+
+
+def test_percent_fires_once_on_reaching_the_threshold(monkeypatch):
+    rule = _percent_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["@43%", "@85%", "@100%", "@100%", "@100%"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(5)]
+    assert sum(1 for a in fired if a is not None) == 1
+
+
+def test_percent_rearms_after_dropping_below(monkeypatch):
+    """Spending an ability drops adrenaline; the next full bar alerts again."""
+    rule = _percent_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["@100%", "@100%", "@100%", "@40%", "@100%", "@100%"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(6)]
+    assert sum(1 for a in fired if a is not None) == 2
+
+
+def test_percent_stays_silent_below_the_threshold(monkeypatch):
+    rule = _percent_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "@99%")
+
+    for now in (1.0, 2.0, 3.0):
+        assert watcher.evaluate(rule, "0x1", region, (100, 100), now) is None
+
+
+def test_percent_ignores_an_unreadable_frame(monkeypatch):
+    """A mangled frame must not break a genuine streak."""
+    rule = _percent_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["@100%", "y@x%", "@100%"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(3)]
+    assert sum(1 for a in fired if a is not None) == 1
+
+
+def test_boss_profile_declares_the_adrenaline_rule():
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    rule = {r["name"]: r for r in cfg["rules"]}["adrenaline_full"]
+    assert rule["kind"] == "percent"
+    assert rule["warn_at_or_above"] == 100
+    # A cue to act, not a danger.
+    assert rule["urgency"] == "normal"

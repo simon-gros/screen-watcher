@@ -48,7 +48,7 @@ ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
 RULE_KINDS = {"inventory", "activity", "supply", "item_count",
               "ocr", "change", "idle", "loot", "counter", "stack", "timer",
-              "presence", "gauge"}
+              "presence", "gauge", "percent"}
 PROFILE_TYPES = {"skill", "quest", "boss"}
 
 
@@ -1828,6 +1828,7 @@ class Rule:
     maximum: int = 0
     warn_below: float = 0.0
     warn_at: int = 0
+    warn_at_or_above: int = 0
     confirm_readings: int = 2
     # supply
     item: str = "supplies"
@@ -2390,6 +2391,25 @@ _GAUGE_FIXUPS = str.maketrans({"[": "/", "]": "/", "I": "/", "|": "/",
                                "&": "8", "l": "1", "O": "0", "o": "0"})
 
 
+def parse_percent(text: str) -> int | None:
+    """Read a bare percentage, such as the adrenaline readout.
+
+    Adrenaline is the one vitals field with no maximum to anchor against -
+    it is printed as "100%", not "100/100" - so `parse_gauge` cannot read
+    it and it needs the percent sign as its anchor instead.
+
+    Values above 100 are rejected. Adrenaline cannot exceed 100%, so a
+    larger number means the digits ran together with the life total beside
+    them, and a confident wrong reading is worse than none.
+    """
+    best = None
+    for m in re.finditer(r"(\d{1,3})\s*%", text):
+        value = int(m.group(1))
+        if 0 <= value <= 100:
+            best = value
+    return best
+
+
 def parse_gauge(text: str, maximum: int, tolerance: int | None = None
                 ) -> tuple[int, int] | None:
     """Read a ``current/maximum`` pair whose maximum is already known.
@@ -2470,6 +2490,43 @@ def parse_timer(text: str) -> int | None:
         return None
     h, mi, s = (int(g) for g in m.groups())
     return h * 3600 + mi * 60 + s
+
+
+def _eval_percent(rule: Rule, wid: str, box, now: float,
+                  cycle: int = 0) -> Alert | None:
+    """Alert when a bare percentage reaches or passes a threshold.
+
+    Separate from `gauge` rather than a flag on it, because the two differ
+    in both parser and direction: a gauge reads `current/maximum` and warns
+    on the way *down*, while this reads a percent sign and fires on the way
+    *up*. Folding them together would mean a rule whose fields only make
+    sense in combinations the config cannot express.
+
+    Built for adrenaline reaching 100%, which is a cue to act rather than a
+    danger - so the default urgency is normal, not critical.
+    """
+    if rule.warn_at_or_above <= 0:
+        return None
+    value = parse_percent(ocr_array(capture_array(wid, box, None, cycle)))
+    if value is None:
+        return None
+
+    if value < rule.warn_at_or_above:
+        rule._low_streak = 0
+        rule._armed = True
+        return None
+
+    rule._low_streak += 1
+    if rule._low_streak < max(1, int(rule.confirm_readings)):
+        return None
+    if not rule._armed or not rule.ready(now):
+        return None
+    # Re-arms only once the value drops below the threshold again, so
+    # sitting at 100% produces one alert rather than one per poll.
+    rule._armed = False
+    return rule.fire(now, rule.alert_body or f"{value}%",
+                     source_text=f"{value}%", percent=str(value),
+                     current=str(value), item=rule.item)
 
 
 def _eval_gauge(rule: Rule, wid: str, box, now: float,
@@ -2789,6 +2846,8 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
     box = region.resolve(size)
     if rule.kind == "presence":
         return _eval_presence(rule, wid, box, now, cycle)
+    if rule.kind == "percent":
+        return _eval_percent(rule, wid, box, now, cycle)
     if rule.kind == "gauge":
         return _eval_gauge(rule, wid, box, now, cycle)
     if rule.kind == "timer":
