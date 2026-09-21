@@ -65,7 +65,7 @@ Session records:
 | Step | Status | Current state |
 |---|---|---|
 | 1. `GameInstance` / `CaptureBackend` abstraction | **Complete** | Live capture and interactive capture commands use the backend abstraction. |
-| 2. Shared frame scheduler/cache | **Complete** | `watch` lets `FrameScheduler` own the cycle, prefetches required regions, and isolates failed regions. `GameInstance` owns per-cycle frame reuse. |
+| 2. Shared frame scheduler/cache | **Partial** | `GameInstance` owns per-cycle frame reuse, which is what makes one capture serve several rules, and `doctor` drives `FrameScheduler` directly. The watch loop does **not** build a scheduler - it calls `evaluate` and relies on the per-cycle cache - so scheduler-level prefetch and per-region isolation are not exercised during a real run. Corrected after reading the code: this row previously claimed `watch` let the scheduler own the cycle. |
 | 3. Native X11 capture | **Complete for XCB GetImage** | `X11XcbBackend` is the default and is benchmarked against ImageMagick. The shipped implementation uses persistent XCB `GetImage`; XComposite/XShm remain optional future optimizations, not completed work. |
 | 4. Backend/frame diagnostics | **Partial** | `doctor` covers dependencies, backend selection, window/geometry, regions/grids, real captures, OCR, outputs, profile structure, KWin focus/window state, and detected logical-to-pixel scale. Long-duration frozen-frame diagnosis and compatibility fingerprints remain outstanding. |
 | 5. Interface-reader registry | **Partial** | `ChatReader` is live and shared by chat-driven rules. Inventory, buff/action-bar, target, RuneMetrics, and other reusable readers remain to be implemented. |
@@ -96,7 +96,12 @@ addressed:
 - the click-through Wayland overlay proof of concept is integrated with the
   normal notification/application-service path;
 - long-duration frame-health assumptions and compatibility fingerprints are
-  surfaced by diagnostics where they can be measured;
+  surfaced by diagnostics where they can be measured. **Addressed:**
+  `RegionHealth` runs inside the watch loop and reports a region that has
+  frozen or gone blank, which previously nothing watched for - the
+  scheduler tracked it but only `doctor` ever built a scheduler. It reads
+  the per-cycle frame cache, so monitoring costs no extra capture, and
+  reports once per episode rather than every cycle;
 - the monolithic `watcher.py` is split into independently testable capture,
   runtime, profile, reader/signal, rule, persistence, notification, diagnostic,
   and CLI modules.

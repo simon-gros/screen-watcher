@@ -3902,3 +3902,68 @@ def test_shipped_profiles_declare_their_calibration():
         assert fp["window_size"] == [3840, 2058]
         assert fp["capture_backend"] == "x11-xcb"
         assert fp["last_validated"]
+
+
+# --------------------------------------------------------------------------
+# Long-duration frame health during a real run
+# --------------------------------------------------------------------------
+
+def _frames(seed=0):
+    rng = np.random.default_rng(seed)
+    return lambda: rng.integers(0, 255, (20, 20, 3), dtype=np.uint8)
+
+
+def test_region_health_is_silent_during_normal_play():
+    """Chat and vitals change constantly; a warning here would be noise."""
+    health = watcher.RegionHealth(freeze_cycles=5, blank_cycles=3)
+    live = _frames()
+    assert all(health.note("chat_tail", live()) is None for _ in range(20))
+
+
+def test_region_health_reports_a_frozen_region():
+    """A region that stops updating produces no alerts at all.
+
+    That looks exactly like a quiet session, which is why it needs
+    reporting rather than inferring.
+    """
+    health = watcher.RegionHealth(freeze_cycles=5, blank_cycles=99)
+    frozen = _frames()()
+    messages = [health.note("vitals", frozen) for _ in range(8)]
+    reported = [m for m in messages if m]
+    assert len(reported) == 1
+    assert "unchanged" in reported[0]
+
+
+def test_region_health_reports_a_blank_region():
+    health = watcher.RegionHealth(freeze_cycles=99, blank_cycles=3)
+    blank = np.zeros((20, 20, 3), dtype=np.uint8)
+    reported = [m for m in (health.note("backpack", blank)
+                            for _ in range(6)) if m]
+    assert len(reported) == 1
+    assert "blank" in reported[0]
+
+
+def test_region_health_reports_once_per_episode():
+    """The point is to say the watcher has gone blind, not fill the log."""
+    health = watcher.RegionHealth(freeze_cycles=3, blank_cycles=99)
+    frozen = _frames()()
+    messages = [health.note("chat_tail", frozen) for _ in range(30)]
+    assert sum(1 for m in messages if m) == 1
+
+
+def test_region_health_rearms_after_recovery():
+    """A second freeze after real activity is a new episode."""
+    health = watcher.RegionHealth(freeze_cycles=3, blank_cycles=99)
+    live = _frames()
+    frozen = live()
+
+    assert any(health.note("x", frozen) for _ in range(5))
+    for _ in range(2):
+        health.note("x", live())
+    assert any(health.note("x", frozen) for _ in range(5))
+
+
+def test_region_health_ignores_an_empty_frame():
+    health = watcher.RegionHealth()
+    assert health.note("x", None) is None
+    assert health.note("x", np.zeros((0, 0, 3), dtype=np.uint8)) is None

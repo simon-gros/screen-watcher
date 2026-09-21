@@ -4384,6 +4384,77 @@ def next_deadline(previous: float, interval: float,
     return deadline
 
 
+class RegionHealth:
+    """Notices when a watched region stops carrying real content.
+
+    `FrameScheduler` already tracks this, but only `doctor` builds one -
+    the watch loop calls `evaluate` directly, so during an actual run
+    nothing was watching for a frozen region. That is the case worth
+    catching: a region that has silently stopped updating produces no
+    alerts at all, which looks exactly like a quiet session.
+
+    Two distinct failures, deliberately reported differently:
+
+    - **frozen**: pixels identical for many consecutive cycles. Chat and
+      the vitals row change constantly in play, so a long freeze means the
+      client is paused, occluded, or the capture is stale.
+    - **blank**: uniformly flat. Almost always a capture fault rather than
+      real content.
+
+    Thresholds are generous because a false "your watcher is broken" is
+    worse than a slow one: at a 1s interval, 120 cycles is two minutes.
+    """
+
+    def __init__(self, freeze_cycles: int = 120, blank_cycles: int = 30):
+        self.freeze_cycles = freeze_cycles
+        self.blank_cycles = blank_cycles
+        self._digest: dict[str, int] = {}
+        self._static: dict[str, int] = {}
+        self._flat: dict[str, int] = {}
+        self._reported: set[str] = set()
+
+    def note(self, name: str, frame: np.ndarray) -> str | None:
+        """Record a frame. Returns a message the first time it looks wrong.
+
+        Reports once per episode rather than every cycle: the point is to
+        tell someone the watcher has gone blind, not to fill the log.
+        """
+        if frame is None or frame.size == 0:
+            return None
+
+        # A cheap digest; an exact comparison would cost a full copy.
+        digest = hash(frame.tobytes())
+        if self._digest.get(name) == digest:
+            self._static[name] = self._static.get(name, 0) + 1
+        else:
+            self._static[name] = 0
+        self._digest[name] = digest
+
+        if float(frame.std()) < 0.5:
+            self._flat[name] = self._flat.get(name, 0) + 1
+        else:
+            self._flat[name] = 0
+
+        if self._flat[name] >= self.blank_cycles:
+            return self._once(name, f"{name} has been blank for "
+                                    f"{self._flat[name]} cycles - capture "
+                                    f"may have failed")
+        if self._static[name] >= self.freeze_cycles:
+            return self._once(name, f"{name} unchanged for "
+                                    f"{self._static[name]} cycles - client "
+                                    f"paused, occluded, or capture stale")
+        # Recovered: allow the next episode to be reported.
+        if self._static[name] == 0 and self._flat[name] == 0:
+            self._reported.discard(name)
+        return None
+
+    def _once(self, name: str, message: str) -> str | None:
+        if name in self._reported:
+            return None
+        self._reported.add(name)
+        return message
+
+
 class WindowTracker:
     """Keeps a watch loop pointed at the live game window.
 
@@ -4618,6 +4689,7 @@ def cmd_watch(args) -> None:
     print("ctrl-c to stop", flush=True)
 
     tracker = WindowTracker(wm_class, wid, size, game)
+    health = RegionHealth()
     cycle = 0
     next_poll = time.monotonic()
     while True:
@@ -4646,6 +4718,19 @@ def cmd_watch(args) -> None:
             for r in rules:
                 r.reset()
         try:
+            # Health is read from the per-cycle frame cache the rules are
+            # about to populate, so watching costs one dictionary lookup
+            # per region rather than another capture.
+            for name in {r.region for r in rules}:
+                try:
+                    frame = capture_array(wid, regs[name].resolve(size),
+                                          None, cycle)
+                except CaptureError:
+                    continue
+                problem = health.note(name, frame)
+                if problem:
+                    print(f"health: {problem}", flush=True)
+                    notify("Screen Watcher", problem, "critical")
             for rule in rules:
                 try:
                     if rule.corroborate_region:
