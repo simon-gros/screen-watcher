@@ -119,7 +119,23 @@ addressed:
   reports once per episode rather than every cycle;
 - the monolithic `watcher.py` is split into independently testable capture,
   runtime, profile, reader/signal, rule, persistence, notification, diagnostic,
-  and CLI modules.
+  and CLI modules. **Addressed:** `watcher.py` is 1,233 lines, down from
+  5,292, with twelve modules under `screen_watcher/`. Submodules reach
+  back for watcher-owned names through a late `_w()` accessor, so the
+  tests' existing patch points keep working.
+
+  Notification (`play`, `notify`, `log_alert`) deliberately stays in
+  `watcher.py`. It reads three heavily patched module globals -
+  `STATE_DIR` and `ALERT_LOG` are redirected by the `isolate_state`
+  conftest fixture that stops tests overwriting live counters - and
+  moving mutable module state is precisely what caused the `ACTIVE_GAME`
+  outage. Ninety-five cohesive lines is not worth that risk.
+
+  Two hazards this split proved, both recorded in the
+  [validation session](validation-session-2026-09-21.md): moving a
+  mutable global silently breaks every reader, and a monkeypatch aimed
+  at the old home usually keeps passing while testing nothing. Only a
+  live run caught the first; a static guard now catches the second.
 
 ## Current architectural rules
 
