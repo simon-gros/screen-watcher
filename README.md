@@ -29,6 +29,8 @@ The dedicated Linux/Windows GUI and platform plan is in
 
 ## Current status
 
+- **Current software version:** `0.0.1`
+- **Versioning:** milestone-oriented Semantic Versioning; see [docs/versioning-policy.md](docs/versioning-policy.md)
 - **Current platform:** Linux desktop
 - **Major target platforms:** Linux and Windows desktop
 - **Planned GUI:** shared PySide6/Qt 6 application with platform adapters
@@ -410,6 +412,24 @@ treated as potentially account-specific captures.
 
 Do not commit runtime screenshots, logs, or account-specific captures unless
 they have been deliberately sanitized and added as test fixtures.
+
+## Versioning policy
+
+Screen Watcher follows a formal `MAJOR.MINOR.PATCH` policy from version
+`0.0.1` onward. The repository-root [`VERSION`](VERSION) file is the
+canonical version source, and `python watcher.py --version` reports it.
+
+Before `1.0.0`:
+
+- PATCH releases (`0.x.Y`) are corrective/smaller development releases;
+- MINOR releases (`0.X.0`) mark completed **major coding milestones** that
+  have been implemented and practically validated;
+- planning, documentation, commit count, or partially implemented work do not
+  justify a milestone bump;
+- `1.0.0` is reserved for the first stable public compatibility contract.
+
+See [docs/versioning-policy.md](docs/versioning-policy.md) for release,
+pre-release, build-metadata, tagging, Windows/Linux, and post-1.0 rules.
 
 ## Validation priority
 
