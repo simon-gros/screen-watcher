@@ -73,8 +73,11 @@ def ensure_x_env() -> None:
         if Path(os.environ["XAUTHORITY"]).exists():
             return
     for proc in ("plasmashell", "kwin_wayland", "gnome-shell"):
-        r = subprocess.run(["pgrep", "-u", str(os.getuid()), proc],
-                           capture_output=True, text=True)
+        try:
+            r = subprocess.run(["pgrep", "-u", str(os.getuid()), proc],
+                               capture_output=True, text=True)
+        except OSError:
+            return          # no pgrep: keep whatever the caller's env has
         for pid in r.stdout.split():
             try:
                 env = Path(f"/proc/{pid}/environ").read_bytes().decode(
@@ -92,7 +95,18 @@ def ensure_x_env() -> None:
 
 
 def _xdo(*args: str) -> str:
-    r = subprocess.run(["xdotool", *args], capture_output=True, text=True)
+    """One xdotool call, or "" when it fails.
+
+    An absent xdotool is treated exactly like a search that matched nothing.
+    It is a required tool, so the honest report belongs to `doctor`, which
+    names it directly; letting the OSError escape from here instead killed
+    `doctor` before it could print that line - the one command whose job is
+    to say which tools are missing.
+    """
+    try:
+        r = subprocess.run(["xdotool", *args], capture_output=True, text=True)
+    except OSError:
+        return ""
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
@@ -223,8 +237,11 @@ def _session_is_wayland() -> bool:
     """
     if os.environ.get("XDG_SESSION_TYPE") == "wayland":
         return True
-    r = subprocess.run(["pgrep", "-u", str(os.getuid()), "kwin_wayland"],
-                       capture_output=True, text=True)
+    try:
+        r = subprocess.run(["pgrep", "-u", str(os.getuid()), "kwin_wayland"],
+                           capture_output=True, text=True)
+    except OSError:
+        return False        # no pgrep: fall back to the X11 assumption
     return bool(r.stdout.split())
 
 
@@ -978,6 +995,8 @@ def capture(wid: str, box: tuple[int, int, int, int] | None, out: Path,
         r = subprocess.run(args, capture_output=True, text=True, timeout=20)
     except subprocess.TimeoutExpired:
         raise CaptureError("import timed out")
+    except OSError:
+        raise CaptureError("import not installed (ImageMagick)")
     if r.returncode != 0 or not out.exists():
         raise CaptureError(f"import failed: {r.stderr.strip()[:200]}")
     return out
@@ -1467,6 +1486,29 @@ def ocr_scrolling(wid: str, box, cycle: int, psm: int = 6) -> str:
     return text
 
 
+class OcrError(RuntimeError):
+    """Tesseract could not be run, or did not finish.
+
+    Distinct from `CaptureError`: the pixels arrived, so the window is fine
+    and the watcher must not treat this as a lost window and start trying to
+    reacquire it. The per-rule guard in the poll loop catches this and drops
+    that one rule for the cycle.
+    """
+
+
+def _run_tesseract(path: str, psm: int, env: dict | None = None) -> str:
+    """One tesseract pass over a PNG on disk."""
+    try:
+        r = subprocess.run(["tesseract", path, "stdout", "--psm", str(psm)],
+                           capture_output=True, text=True, timeout=30,
+                           env=env)
+    except subprocess.TimeoutExpired:
+        raise OcrError("tesseract timed out")
+    except OSError:
+        raise OcrError("tesseract not installed")
+    return r.stdout.strip()
+
+
 def ocr_array(frame: np.ndarray, psm: int = 6) -> str:
     """Tesseract over an in-memory frame.
 
@@ -1481,9 +1523,7 @@ def ocr_array(frame: np.ndarray, psm: int = 6) -> str:
     env = dict(os.environ, OMP_THREAD_LIMIT="1")
     with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
         Image.fromarray(img).save(tmp.name)
-        r = subprocess.run(["tesseract", tmp.name, "stdout", "--psm", str(psm)],
-                           capture_output=True, text=True, timeout=30, env=env)
-        return r.stdout.strip()
+        return _run_tesseract(tmp.name, psm, env)
 
 
 def ocr_cached(wid: str, box, cycle: int, psm: int = 6) -> str:
@@ -1523,9 +1563,7 @@ def ocr(wid: str, box, psm: int = 6) -> str:
             game.save(box, Path(tmp.name))
         else:
             capture(wid, box, Path(tmp.name))
-        r = subprocess.run(["tesseract", tmp.name, "stdout", "--psm", str(psm)],
-                           capture_output=True, text=True, timeout=30)
-        return r.stdout.strip()
+        return _run_tesseract(tmp.name, psm)
 
 
 # --------------------------------------------------------------------------
@@ -1769,7 +1807,14 @@ def notify(title: str, body: str, urgency: str = "normal",
     if urgency != "critical":
         cmd += ["-t", str(timeout_ms)]
     cmd += [title, body]
-    subprocess.run(cmd, capture_output=True)
+    try:
+        subprocess.run(cmd, capture_output=True)
+    except OSError:
+        # The desktop banner is one of four deliveries; the sound, the alert
+        # log and the console line below are the other three. Losing the
+        # banner is a degraded alert, but dying here loses the alert itself -
+        # and it would happen mid-session, hours after the last green start.
+        print("notify-send not installed: banner skipped", flush=True)
     play(sound)
     log_alert(rule_name or title, title, body, source_text)
     print(f"[{time.strftime('%H:%M:%S')}] NOTIFY {title}: {body}", flush=True)
