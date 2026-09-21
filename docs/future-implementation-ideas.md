@@ -27,7 +27,7 @@ optional feature ideas.
 
 ## VERSIONING RULE — milestone numbers follow implementation
 
-The current product version is **0.0.1**. Screen Watcher follows the formal
+The current product version is **0.0.2**. Screen Watcher follows the formal
 policy in [versioning-policy.md](versioning-policy.md).
 
 Roadmap items must **not** be assigned release numbers merely because they have

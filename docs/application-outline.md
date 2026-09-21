@@ -574,7 +574,7 @@ practically validated major coding milestone. Roadmap stages do not receive
 version numbers in advance, and documentation/research alone cannot trigger a
 version bump.
 
-The project remains on `0.0.1` until a later release/snapshot is deliberately
+The project remains on `0.0.2` until a later release/snapshot is deliberately
 declared under that policy.
 
 ## Delivery stages

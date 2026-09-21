@@ -14,7 +14,7 @@ documentation must derive from or agree with that value.
 Current version:
 
 ```text
-0.0.1
+0.0.2
 ```
 
 ## Why this scheme
@@ -301,9 +301,9 @@ For every declared version bump:
 Once a version has been released, its contents are immutable. Corrections require
 a new version.
 
-## Current 0.0.1 status
+## Current 0.0.2 status
 
-`0.0.1` is the current initial-development version and remains valid until a
+`0.0.2` is the current initial-development version and remains valid until a
 new release/snapshot is deliberately declared.
 
 The repository has already accumulated substantial work, but roadmap documents,

@@ -14,7 +14,7 @@ Status meanings:
 
 ## Current software version
 
-Screen Watcher is currently **0.0.1**.
+Screen Watcher is currently **0.0.2**.
 
 Version numbers are governed by
 [versioning-policy.md](versioning-policy.md). During initial development,

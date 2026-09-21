@@ -29,7 +29,7 @@ The dedicated Linux/Windows GUI and platform plan is in
 
 ## Current status
 
-- **Current software version:** `0.0.1`
+- **Current software version:** `0.0.2`
 - **Versioning:** milestone-oriented Semantic Versioning; see [docs/versioning-policy.md](docs/versioning-policy.md)
 - **Current platform:** Linux desktop
 - **Major target platforms:** Linux and Windows desktop
