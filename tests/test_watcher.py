@@ -12,6 +12,34 @@ from watcher import (Region, Rule, _FRAME_CACHE, capture_array, load_config,
                      mean_abs_diff, norm_line, validate_config)
 
 
+def test_canonical_version_file_is_semver():
+    value = (watcher.ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    semver = re.compile(
+        r"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"
+        r"(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?"
+        r"(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    )
+
+    assert value == watcher.__version__
+    assert semver.fullmatch(value)
+
+
+def test_cli_version_uses_canonical_version_without_desktop_setup(
+        monkeypatch, capsys):
+    monkeypatch.setattr(watcher.sys, "argv", ["watcher.py", "--version"])
+
+    def desktop_setup_must_not_run():
+        raise AssertionError("--version must not initialize the X11 environment")
+
+    monkeypatch.setattr(watcher, "ensure_x_env", desktop_setup_must_not_run)
+
+    with pytest.raises(SystemExit) as exc:
+        watcher.main()
+
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"watcher {watcher.__version__}"
+
+
 def test_region_resolves_bottom_right_anchor():
     region = Region("bottom-right", -13, -38, 330, 560)
 
