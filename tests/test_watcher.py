@@ -2680,3 +2680,75 @@ def test_boss_profile_counts_food():
     assert food["min_cover"] <= 0.25
     assert food["out_below"] == 0
     assert cfg["_regions"]["backpack"].grid is not None
+
+
+# --------------------------------------------------------------------------
+# Arch-Glacor loot and kill detection
+# --------------------------------------------------------------------------
+
+#: Verbatim OCR from a live Arch-Glacor session, mangling included.
+GLACOR_CHAT = [
+    "15:39:04] A aolden beam shines over one of your items, You receive: & x Runi",
+    "15:40:32] A golden bieam shines over one of your items, You receive: 1| X La",
+    "15:41:55] A golden beam shines over one of your items, You receive: 12 x",
+    "15:40:32] You have killed 625 Arch-Glacor in normal mode.",
+    "15:41:55] You have killed 626 Arch-Glacor in normal mode.",
+    "15:41:55] You are awarded 25 Marks of War and now have a total of 2,090.",
+    "15:41:46] You eat the desert sole.",
+    "15:41:46] It restores 1450 life points.",
+    "15:41:55] 00:55.8",
+]
+
+
+def _glacor_pattern(name):
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    return {r["name"]: r for r in cfg["rules"]}[name]["pattern"]
+
+
+def test_loot_pattern_survives_ocr_mangling():
+    """'golden' came back as 'aolden' and 'bieam' in one session.
+
+    Matching the beam phrase OR the 'You receive:' prefix means either
+    half alone identifies the line.
+    """
+    pat = _glacor_pattern("loot_received")
+    hits = [ln for ln in GLACOR_CHAT if re.search(pat, ln, re.I)]
+    assert len(hits) == 3
+
+
+def test_loot_pattern_ignores_eating_and_timers():
+    pat = _glacor_pattern("loot_received")
+    for line in ("15:41:46] You eat the desert sole.",
+                 "15:41:46] It restores 1450 life points.",
+                 "15:41:55] 00:55.8",
+                 "15:41:55] You are awarded 25 Marks of War and now have a total of 2,090."):
+        assert not re.search(pat, line, re.I), line
+
+
+def test_kill_pattern_matches_the_real_wording():
+    """The original guess matched none of the real lines.
+
+    'kill count is|completed ... in |defeated' never fired; the game says
+    'You have killed 626 Arch-Glacor in normal mode.'
+    """
+    pat = _glacor_pattern("boss_defeated")
+    hits = [ln for ln in GLACOR_CHAT if re.search(pat, ln, re.I)]
+    assert len(hits) == 2
+    assert not re.search(pat, "You are awarded 25 Marks of War", re.I)
+
+
+def test_loot_rule_reports_the_whole_line(monkeypatch):
+    """The item and quantity must reach the notification."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    spec = {r["name"]: r for r in cfg["rules"]}["loot_received"]
+    rule = watcher.Rule(**{k: v for k, v in spec.items()
+                           if not k.startswith("_")})
+    rule._primed = True
+    line = ("[15:41:55] A golden beam shines over one of your items, "
+            "You receive: 12 x Glacor remnants.")
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: line)
+
+    alert = watcher.evaluate(rule, "0x1", Region("top-left", 0, 0, 10, 10),
+                             (100, 100), 100.0)
+    assert alert is not None
+    assert "Glacor remnants" in alert.body

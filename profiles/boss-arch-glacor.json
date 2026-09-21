@@ -134,6 +134,34 @@
       "_note": "Counts desert sole by icon colour rather than reading stack digits, for the reason the urn rule documents: digits are small, anti-aliased and drawn over the icon, and OCR of an unchanging stack was measured flickering between 6, 13 and 1. MEASURED on this pack: desert sole scores +64 to +66 red-minus-blue on the icon's bright pixels (+87 at the stricter luminance floor the counter actually uses), against -48 to +54 for every other item carried - potions, runes, scrolls. min_red=70 sits in that gap, and the count held at exactly 13 across thresholds from 60 to 80. min_cover=0.2 is required: a desert sole fills only 0.22 of its cell where a bulky urn fills 0.4, so the 0.30 default rejected all thirteen and counted one. confirm_seconds=6 rejects the overlay case, where a bank or loot window covering the backpack briefly reads as zero food."
     },
     {
+      "name": "loot_received",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "beam shines over one of your items|you receive:",
+      "cooldown": 0,
+      "message": "Loot",
+      "alert_body": "{line}",
+      "sound": "message-highlight",
+      "urgency": "normal",
+      "timeout_ms": 25000,
+      "enabled": true,
+      "_note": "VERIFIED from live chat. Arch-Glacor rewards go to a reward chest rather than a ground drop, and each item is announced as 'A golden beam shines over one of your items, You receive: 12 x Glacor remnants.' The pattern deliberately matches the beam phrase OR the 'You receive:' prefix, because OCR mangles the first words badly - observed as 'A aolden beam' and 'A golden bieam' in the same session - and either half alone identifies the line. alert_body echoes the whole line so the item and quantity are visible without switching to the game. cooldown=0 because a kill can drop several items at once and each is worth reporting; deduplication by line already stops the same drop repeating while it sits on screen."
+    },
+    {
+      "name": "boss_defeated",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "you have killed \\d[\\d,]* arch[- ]?glacor",
+      "cooldown": 20,
+      "message": "Boss defeated",
+      "alert_body": "{line}",
+      "sound": "outcome-success",
+      "urgency": "normal",
+      "timeout_ms": 10000,
+      "enabled": true,
+      "_note": "VERIFIED from live chat: 'You have killed 626 Arch-Glacor in normal mode.' The previous pattern was a guess - 'kill count is|completed ... in |defeated' - and matched none of the real lines, so this rule would never have fired. Confirmed against two consecutive kills. The digit group also makes the running total visible in the alert, which is the per-session statistic worth having. Per the wiki, rewards accumulate across a killstreak and part is LOST on death, which is why player_died matters here beyond the immediate risk."
+    },
+    {
       "name": "encounter_started",
       "kind": "ocr",
       "region": "chat_tail",
@@ -146,20 +174,6 @@
       "timeout_ms": 6000,
       "enabled": true,
       "_note": "VERIFIED from live chat: 'Welcome to your session against: Arch-Glacor.' Marks the start of an instance, which is the anchor every per-kill statistic needs. Deliberately matches the generic prefix rather than the boss name, so the same rule works for any instanced encounter."
-    },
-    {
-      "name": "boss_defeated",
-      "kind": "ocr",
-      "region": "chat_tail",
-      "pattern": "your (\\w+[- ]?\\w*) kill ?count is|completed .*? in |defeated",
-      "cooldown": 20,
-      "message": "Boss defeated",
-      "alert_body": "{line}",
-      "sound": "outcome-success",
-      "urgency": "normal",
-      "timeout_ms": 10000,
-      "enabled": true,
-      "_note": "UNVERIFIED wording. RS3 announces a kill count on most boss deaths, but the exact phrasing for Arch-Glacor has not been observed yet - confirm on the first kill and tighten. The alternatives cover the common shapes: a kill-count line, a completion-time line, and a bare 'defeated'. This is deliberately broad because a missed kill is a lost statistic, whereas a false positive here is merely a spurious success chime."
     },
     {
       "name": "player_died",
