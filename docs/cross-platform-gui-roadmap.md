@@ -562,6 +562,15 @@ The UI should receive stable models such as:
 This keeps QML/widgets free of direct runtime globals and makes replay,
 headless CLI, and GUI tests consume the same state representation.
 
+## Tracking issues
+
+- [#9 — shared PySide6/Qt desktop GUI for Linux and Windows](https://github.com/simon-gros/screen-watcher/issues/9)
+- [#10 — Windows observation backend and desktop integration](https://github.com/simon-gros/screen-watcher/issues/10)
+- [#11 — Linux/Windows packaging, migrations and release channels](https://github.com/simon-gros/screen-watcher/issues/11)
+
+These complement the existing Priority 0 issues for modularization/replay,
+Wayland/overlay infrastructure, diagnostics, and repository administration.
+
 ## Research references
 
 Windows:
