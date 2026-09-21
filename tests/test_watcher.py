@@ -1616,3 +1616,169 @@ def test_successful_cycle_clears_the_miss_counter(windows):
 
     assert tracker.misses == 0
     assert tracker.note_miss() is False
+
+
+# --------------------------------------------------------------------------
+# Incremental chat OCR - read only the rows that actually scrolled
+# --------------------------------------------------------------------------
+
+def _text_frame(lines, width=200, pitch=20, height=None):
+    """Synthetic chat frame: one bright bar per line, at a fixed pitch.
+
+    `detect_scroll` only looks at per-row ink counts, so bars of differing
+    widths are a faithful stand-in for rendered text and make the expected
+    shift exact rather than approximate.
+    """
+    height = height or len(lines) * pitch
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    for i, w in enumerate(lines):
+        top = i * pitch
+        if top + 8 <= height:
+            frame[top:top + 8, :w] = 255
+    return frame
+
+
+def test_detect_scroll_finds_exact_shift():
+    lines = [30, 60, 90, 120, 150, 180, 45, 75]
+    prev = _text_frame(lines)
+    # Scrolling up by two lines drops the top two and exposes two new ones.
+    cur = _text_frame(lines[2:] + [100, 130])
+    assert watcher.detect_scroll(prev, cur) == 40
+
+
+def test_detect_scroll_reports_zero_when_nothing_moved():
+    frame = _text_frame([30, 60, 90, 120, 150, 180])
+    assert watcher.detect_scroll(frame, frame.copy()) == 0
+
+
+def test_detect_scroll_rejects_unrelated_frames():
+    """A full re-read is the correct answer when no offset explains the frame.
+
+    Accepting a bogus shift here would OCR the wrong strip and stitch
+    unrelated text onto the cache.
+    """
+    prev = _text_frame([30, 60, 90, 120, 150, 180])
+    cur = np.zeros_like(prev)
+    cur[::3, :180] = 255
+    assert watcher.detect_scroll(prev, cur) is None
+
+
+def test_detect_scroll_rejects_mismatched_shapes():
+    assert watcher.detect_scroll(_text_frame([30, 60]),
+                                 _text_frame([30, 60], width=300)) is None
+
+
+def test_is_readable_keeps_real_chat_and_drops_ocr_noise():
+    """Both sets are verbatim OCR output from the live game."""
+    real = [
+        "[14:19:41] 455 coins have been added to your money pouch.",
+        "(14:19;42] You pick the target's pocket.",
+        "[14:12:51] Your camouflage outfit keeps you hidden and you steal",
+        "[12:03:11] You've just advanced a Thieving level! You are now level 71.",
+        "You are stunned!",
+        "loot.",
+    ]
+    noise = [
+        "g e e P e S e e oL ARl Ty presaetle ]",
+        "T14- 94321 ACE rrire fanses nnry aeirdart $73 3% 17 e e 1B",
+        "E 8 AN AT ATE ook St P TN s At -",
+        "TN AR AL roirve Ianen Ity ariciart $75 2% 17 AP st i By -",
+        "[14- 13- 191 ACE rrirne e By B et 73 3% 17 e rvest ioby -",
+    ]
+    assert all(watcher.is_readable(line) for line in real)
+    assert not any(watcher.is_readable(line) for line in noise)
+
+
+def test_stitch_appends_only_new_lines():
+    old = "line one\nline two\nline three"
+    # The strip overlaps the previous read, so "line three" arrives twice.
+    new = "line three\nline four"
+    assert watcher._stitch(old, new).splitlines() == [
+        "line one", "line two", "line three", "line four"]
+
+
+def test_stitch_tolerates_ocr_wobble_in_the_overlap():
+    """Tesseract is not byte-stable, so dedup must normalise before comparing."""
+    old = "[11:03:15] You pick the target's pocket."
+    new = "(11:03:15] You pick the target's pocket.\n[11:03:17] New line."
+    assert watcher._stitch(old, new).splitlines() == [
+        "[11:03:15] You pick the target's pocket.", "[11:03:17] New line."]
+
+
+def test_stitch_is_bounded():
+    """Unbounded growth would let rules read lines that scrolled off screen."""
+    text = "\n".join(f"line {i}" for i in range(100))
+    assert len(watcher._stitch(text, "line 100", keep=40).splitlines()) == 40
+
+
+def test_stitch_discards_clipped_garbage():
+    old = "[11:03:15] You pick the target's pocket."
+    new = "E 8 AN AT ATE ook St P TN s At -\n[11:03:17] You find a nest."
+    assert watcher._stitch(old, new).splitlines() == [
+        "[11:03:15] You pick the target's pocket.",
+        "[11:03:17] You find a nest."]
+
+
+def test_ocr_scrolling_reads_only_the_new_strip(monkeypatch):
+    """The whole point: a scrolled frame must not re-OCR the full region."""
+    lines = [30, 60, 90, 120, 150, 180, 45, 75]
+    first = _text_frame(lines)
+    second = _text_frame(lines[2:] + [100, 130])
+    frames = iter([first, second])
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: next(frames))
+
+    seen = []
+
+    def fake_ocr(frame, psm=6):
+        seen.append(frame.shape[0])
+        return "alpha\nbravo" if len(seen) == 1 else "bravo\ncharlie"
+
+    monkeypatch.setattr(watcher, "ocr_array", fake_ocr)
+    watcher._SCROLL_CACHE.clear()
+
+    box = (0, 0, 200, 160)
+    assert watcher.ocr_scrolling("0x1", box, cycle=1) == "alpha\nbravo"
+    text = watcher.ocr_scrolling("0x1", box, cycle=2)
+
+    assert seen[0] == 160                    # first pass reads everything
+    assert seen[1] < 160                     # second reads only the new strip
+    assert text.splitlines() == ["alpha", "bravo", "charlie"]
+
+
+def test_ocr_scrolling_reuses_text_when_nothing_scrolled(monkeypatch):
+    frame = _text_frame([30, 60, 90, 120, 150, 180])
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: frame.copy())
+    calls = []
+
+    def fake_ocr(f, psm=6):
+        calls.append(f.shape[0])
+        return "only line"
+
+    monkeypatch.setattr(watcher, "ocr_array", fake_ocr)
+    watcher._SCROLL_CACHE.clear()
+
+    box = (0, 0, 200, 120)
+    watcher.ocr_scrolling("0x1", box, cycle=1)
+    assert watcher.ocr_scrolling("0x1", box, cycle=2) == "only line"
+    assert len(calls) == 1                   # no second tesseract pass
+
+
+def test_ocr_scrolling_falls_back_on_unrelated_frame(monkeypatch):
+    first = _text_frame([30, 60, 90, 120, 150, 180])
+    second = np.zeros_like(first)
+    second[::3, :180] = 255
+    frames = iter([first, second])
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: next(frames))
+    seen = []
+    monkeypatch.setattr(watcher, "ocr_array",
+                        lambda f, psm=6: (seen.append(f.shape[0]), "text")[1])
+    watcher._SCROLL_CACHE.clear()
+
+    box = (0, 0, 200, 120)
+    watcher.ocr_scrolling("0x1", box, cycle=1)
+    watcher.ocr_scrolling("0x1", box, cycle=2)
+
+    assert seen == [120, 120]                # both are full reads

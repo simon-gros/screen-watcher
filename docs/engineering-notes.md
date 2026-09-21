@@ -710,3 +710,92 @@ returned `None`. The game was running. RS3 under Steam has WM_CLASS
 profiles configure and what I failed to use in the ad-hoc check. Verify
 against the configured `window.wm_class`, never a guessed name, or a
 working window looks like an absent one.
+
+## Attacking the chat-OCR bottleneck
+
+Step 10 left Tesseract at ~98% of the poll cycle. The obvious readings were
+all wrong, and measuring beat each of them:
+
+| idea | measured | verdict |
+|---|---|---|
+| binarise before OCR | 687 ms vs 766 ms | loses a line; not worth it |
+| downscale to half | 316 ms | 0 lines read at threshold; useless |
+| `OMP_THREAD_LIMIT=1` | 1181 -> 790 ms | **kept** |
+| crop the region | 170 ms | rejected - see below |
+
+The threading result is the surprising one. Tesseract's OpenMP parallelism
+is a *net loss* here: on a 24-core host the default took 1181 ms against
+790 ms pinned to one thread, because the region is small enough that thread
+coordination costs more than the work it splits. `OMP_THREAD_LIMIT=4` was
+no better than the default.
+
+Cropping looked like the winner at 4.3x, but `chat_tail`'s `_note` already
+explains why `h=650`: at `h=375` a line's median visible lifetime was 11s,
+and rare messages scrolled past between OCR passes. Cropping would trade a
+missed-alert bug for speed. Rejected.
+
+### The actual insight
+
+Looking at the captured region rather than the numbers: it holds **32 lines
+of scrollback, and between two 1.5s polls only the newest one or two are
+new**. The program was re-reading ~30 already-parsed lines every cycle,
+forever.
+
+So `ocr_scrolling` detects how far the text scrolled, OCRs only the newly
+exposed strip, and stitches it onto the cached text. Live, over ten cycles:
+**8 took the fast path, mean 297 ms against ~750 ms** - 2.5x, with no
+region shrunk and no line given up.
+
+Scroll offset comes from per-row ink counts, which is cheap (10 ms) and
+needs no OCR. Chat scrolls in whole lines, so the offset lands exactly on
+the line pitch: 42px, or 84px when two lines arrived at once.
+
+### Two things the live test caught that the prototype did not
+
+The prototype reported 3.7x and looked finished. Running it through the
+real call path exposed both of these:
+
+- **Unbounded growth.** Stitching climbed 31 -> 52 lines over six cycles,
+  so a rule asking for "the last N lines" would eventually read text that
+  had scrolled off screen. `_stitch` now caps its output.
+- **Garbage lines.** The strip's top edge cuts a line through its glyphs,
+  and Tesseract renders that as `g e e P e S e e oL ARl Ty presaetle`.
+  Deduplication cannot catch it - it matches nothing, precisely because it
+  is garbage - so it was being stitched in as real chat.
+
+`is_readable` rejects those on the share of word-shaped tokens. Real lines
+scored 0.50-0.91 and noise 0.08-0.31, no overlap. Mean token length, the
+first thing I tried, was not enough: noise like `T14- 94321 ACE rrire
+fanses nnry aeirdart` averages a respectable 3.54 characters.
+
+### Acceptance by margin, not by threshold
+
+The first scroll detector accepted a match when its error fell below 3.0.
+That rejected valid scrolls: measured over live cycles, true matches scored
+2.45-4.60 while their runners-up scored 5.35-7.62. The ranges overlap, so
+no fixed cutoff works. What separates them is that the correct offset is
+*distinctly* better than the next best, so acceptance now requires winning
+by 1.5x - ignoring near neighbours of the winner, which align almost as
+well by construction.
+
+## The newest chat line was never readable
+
+Found while measuring the above, and the more serious bug of the two.
+
+`chat_tail` used `dy=-57`, which put the region boundary in the middle of a
+text line. The bottom row was clipped to ~10px of its 17px height, so the
+**newest message - the one every rule cares about most - was OCR'd as
+garbage on every single cycle**:
+
+```text
+dy=-57   E 8 AN AT ATE ook St P TN s At -
+dy=-36   [14:15:21] 455 coins have been added to your money pouch.
+```
+
+`-36` is the largest offset that still keeps the chat input bar out of the
+region. Fixed in `config.json`, both profiles, and `config.fishing.json`,
+whose drift from `profiles/fishing.json` the test suite caught immediately.
+
+This had been present the whole time and no test could have found it: every
+check asserted that OCR returned *lines*, and it did - the last one was
+simply always wrong. It took looking at the actual pixels.

@@ -448,10 +448,13 @@ architectural limitations are documented in
   rule evaluators now route through a bound `GameInstance`, so they inherit
   the selected capture backend, but they still call `capture_array`/`ocr`
   rather than taking a scheduler or reader as a parameter.
-- **Chat OCR dominates the poll cycle.** Tesseract over the 0.39 MPx
-  `chat_tail` region costs ~1121 ms, against ~18 ms for the capture itself.
-  Native capture and sprite OCR removed the other bottlenecks; this one is
-  unaddressed and caps the practical poll rate.
+- **Chat OCR still dominates the poll cycle**, though less than it did.
+  Tesseract over the 0.39 MPx `chat_tail` region cost ~1121 ms; pinning it
+  to one thread (its OpenMP parallelism is a net loss at this size) and
+  re-reading only the rows that actually scrolled brings a typical cycle to
+  ~297 ms, against ~18 ms for the capture itself. A frame that cannot be
+  matched against the previous one still pays the full read, so the cost is
+  uneven rather than uniformly low.
 - Identical region/mask requests are reused within a polling cycle, and
   `FrameScheduler` keeps one pass coherent, but different regions are still
   captured independently. Detectors can therefore observe slightly different

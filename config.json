@@ -19,10 +19,10 @@
     "chat_tail": {
       "anchor": "bottom-left",
       "dx": 5,
-      "dy": -57,
+      "dy": -36,
       "w": 600,
       "h": 650,
-      "_note": "most recent ~32 lines of All Chat. h=650 measured, not guessed: pickpocketing produces ~2 chat lines every 2s, and at h=375 a line's median visible lifetime was only 11s (max 23.8s). Rare drops and the yellow stun notice were scrolling off between clean OCR passes, so the taller region roughly doubles the number of chances to read each line. w=600 because text ends near x=560; the earlier 500 clipped lines mid-word and hid item names entirely."
+      "_note": "most recent ~32 lines of All Chat. h=650 measured, not guessed: pickpocketing produces ~2 chat lines every 2s, and at h=375 a line's median visible lifetime was only 11s (max 23.8s). Rare drops and the yellow stun notice were scrolling off between clean OCR passes, so the taller region roughly doubles the number of chances to read each line. w=600 because text ends near x=560; the earlier 500 clipped lines mid-word and hid item names entirely. dy=-36, not -57: at -57 the region boundary fell mid-line, so the NEWEST message - the one rules care about most - was clipped to ~10px of its 17px height and OCR'd as garbage on every single cycle ('E 8 AN AT ATE ook St P' where -36 reads '[14:15:21] 455 coins have been added to your money pouch'). -36 is the largest offset that still excludes the chat input bar below it."
     },
     "backpack": {
       "anchor": "bottom-right",
