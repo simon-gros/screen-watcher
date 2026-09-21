@@ -61,6 +61,25 @@ Until the remaining work is complete:
 5. Broad skill/profile expansion remains secondary to reusable readers,
    replay/fixtures, schema/versioning, Wayland support, and modularization.
 
+## Next major roadmap target — cross-platform desktop application
+
+Priority 0 is the immediate Linux observation foundation, but it is not the
+final platform boundary. The next major product stage is a shared
+**PySide6/Qt 6 desktop application for Linux and Windows**, documented in
+[cross-platform-gui-roadmap.md](cross-platform-gui-roadmap.md).
+
+Architecture added during Priority 0 should therefore remain portable:
+
+- detector/rule/profile/event logic must stay platform-neutral;
+- Linux capture/window/overlay code remains behind platform interfaces;
+- Windows will add its own capture/window/notification/overlay adapters;
+- the CLI and future Qt GUI must consume the same application-service state;
+- packaged state/config paths must eventually become OS-standard rather than
+  repository-relative.
+
+Linux GUI implementation and Windows GUI/platform parity are both major roadmap
+targets.
+
 ## Deferred branch work
 
 The historical `refactor/application-architecture` branch contains useful

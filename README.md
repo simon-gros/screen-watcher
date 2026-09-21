@@ -4,9 +4,11 @@
   <img src="assets/logo.png" alt="Screen Watcher logo" width="600">
 </p>
 
-Screen Watcher is a read-only RuneScape companion for Linux that watches
-configured regions of the game client and notifies you when something needs
-attention. It can combine OCR, visual change detection, inventory state,
+Screen Watcher is currently a Linux-first, read-only RuneScape companion that
+watches configured regions of the game client and notifies you when something
+needs attention. The mature application is planned for both **Linux and
+Windows**, using one shared core and PySide6/Qt desktop interface with
+platform-specific capture/window/overlay adapters. It can combine OCR, visual change detection, inventory state,
 activity timing, and profile-specific rules without clicking, typing, moving
 the mouse, or otherwise sending input to the game.
 
@@ -19,11 +21,15 @@ profiles are included today; most other skills, quests, bosses, and minigames
 still need researched profiles, calibration, and fixtures.
 
 For the longer-term architecture and roadmap, see
-[docs/application-outline.md](docs/application-outline.md).
+[docs/application-outline.md](docs/application-outline.md). The dedicated
+Linux/Windows GUI and platform plan is in
+[docs/cross-platform-gui-roadmap.md](docs/cross-platform-gui-roadmap.md).
 
 ## Current status
 
-- **Platform:** Linux desktop
+- **Current platform:** Linux desktop
+- **Major target platforms:** Linux and Windows desktop
+- **Planned GUI:** shared PySide6/Qt 6 application with platform adapters
 - **Display path:** X11/XWayland
 - **Game window detection:** configurable through `window.wm_class`
 - **Included profiles:** fishing and thieving/pickpocketing
