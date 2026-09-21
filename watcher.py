@@ -1830,6 +1830,7 @@ class Rule:
     warn_at: int = 0
     warn_at_or_above: int = 0
     column: int = 0
+    prime_on_start: bool = False
     confirm_readings: int = 2
     # supply
     item: str = "supplies"
@@ -2542,10 +2543,15 @@ def _eval_percent(rule: Rule, wid: str, box, now: float,
     if value < rule.warn_at_or_above:
         rule._low_streak = 0
         rule._armed = True
+        rule._primed = True
         return None
 
     rule._low_streak += 1
     if rule._low_streak < max(1, int(rule.confirm_readings)):
+        return None
+    # Already at the threshold when the watcher started: pre-existing
+    # state, not an event. Opt-in, as for gauge rules.
+    if rule.prime_on_start and not rule._primed:
         return None
     if not rule._armed or not rule.ready(now):
         return None
@@ -2629,10 +2635,22 @@ def _eval_gauge(rule: Rule, wid: str, box, now: float,
     if not low:
         rule._low_streak = 0
         rule._armed = True
+        rule._primed = True
         return None
 
     rule._low_streak += 1
     if rule._low_streak < max(1, int(rule.confirm_readings)):
+        return None
+    # `prime_on_start` suppresses a state that predates the watcher. Every
+    # restart otherwise re-announced prayer that had been at zero for
+    # twenty minutes - five identical pairs of alerts across five test
+    # runs - exactly as OCR rules would re-report old chat scrollback.
+    #
+    # Opt-in per rule, deliberately. The two cases differ in consequence:
+    # a stale prayer warning is noise, but starting the watcher while
+    # already at 5% health is precisely when an alert is most needed, and
+    # suppressing that could be fatal. Set it on the nagging rules only.
+    if rule.prime_on_start and not rule._primed:
         return None
     if not rule._armed or not rule.ready(now):
         return None

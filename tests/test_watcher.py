@@ -3252,3 +3252,118 @@ def test_boss_profile_declares_the_gold_rule():
     assert rule["step"] == 1_000_000
     assert rule["column"] == 0          # Gain, not Drops or GP/h
     assert cfg["_regions"]["gold_row"] is not None
+
+
+# --------------------------------------------------------------------------
+# Startup priming: a gauge already low is pre-existing state, not an event
+# --------------------------------------------------------------------------
+
+def test_gauge_does_not_alert_on_a_state_that_predates_the_watcher(monkeypatch):
+    """Prayer at zero before the watcher started is not news.
+
+    Every restart re-announced prayer that had been empty for twenty
+    minutes - five identical pairs of alerts across five short test runs.
+    """
+    rule = _gauge_rule(maximum=780, warn_below=20, confirm_readings=2,
+                       prime_on_start=True)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "0/780")
+
+    for now in (1.0, 2.0, 3.0, 4.0):
+        assert watcher.evaluate(rule, "0x1", region, (100, 100), now) is None
+
+
+def test_gauge_alerts_once_the_state_is_genuinely_new(monkeypatch):
+    """Seen healthy first, so a later decline is a real event."""
+    rule = _gauge_rule(maximum=780, warn_below=20, confirm_readings=2)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["780/780", "700/780", "100/780", "50/780"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(4)]
+    assert sum(1 for a in fired if a is not None) == 1
+
+
+def test_gauge_arms_after_recovering_from_a_pre_existing_low(monkeypatch):
+    """Starting low, restoring, then draining again must alert."""
+    rule = _gauge_rule(maximum=780, warn_below=20, confirm_readings=2,
+                       prime_on_start=True)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["0/780", "780/780", "700/780", "100/780", "50/780"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(5)]
+    assert sum(1 for a in fired if a is not None) == 1
+
+
+def test_percent_does_not_alert_on_a_pre_existing_full_bar(monkeypatch):
+    """Adrenaline already at 100% when the watcher starts is not an event."""
+    rule = _percent_rule(prime_on_start=True)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "@100%")
+
+    for now in (1.0, 2.0, 3.0, 4.0):
+        assert watcher.evaluate(rule, "0x1", region, (100, 100), now) is None
+
+
+def test_prayer_rules_fire_at_separate_points_of_a_drain(monkeypatch):
+    """low_prayer warns while cover remains; prayer_out reports it gone."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    specs = {r["name"]: r for r in cfg["rules"]}
+    region = Region("top-left", 0, 0, 10, 10)
+    readings = ["780/780", "700/780", "300/780", "100/780", "50/780",
+                "2/780", "0/780"]
+
+    fired = {}
+    for name in ("low_prayer", "prayer_out"):
+        rule = watcher.Rule(**{k: v for k, v in specs[name].items()
+                               if not k.startswith("_")})
+        rule._armed = True
+        monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+        it = iter(readings)
+        monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(it))
+        fired[name] = [readings[i] for i in range(len(readings))
+                       if watcher.evaluate(rule, "0x1", region, (100, 100),
+                                           float(i) * 100)]
+
+    assert fired["low_prayer"] == ["50/780"]
+    assert fired["prayer_out"] == ["0/780"]
+
+
+def test_priming_is_set_on_the_nagging_rules_only():
+    """Prayer and adrenaline prime; health deliberately does not.
+
+    A stale prayer warning is noise. Starting the watcher while already at
+    5% health is precisely when an alert is most needed, so suppressing
+    that could be fatal - the flag is opt-in for exactly this reason.
+    """
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    rules = {r["name"]: r for r in cfg["rules"]}
+
+    for name in ("low_prayer", "prayer_out", "adrenaline_full"):
+        assert rules[name].get("prime_on_start") is True, name
+    assert not rules["low_health"].get("prime_on_start", False)
+
+
+def test_low_health_still_alerts_on_a_pre_existing_low(monkeypatch):
+    """Without priming, a dangerous state at startup is reported at once."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    spec = {r["name"]: r for r in cfg["rules"]}["low_health"]
+    rule = watcher.Rule(**{k: v for k, v in spec.items()
+                           if not k.startswith("_")})
+    rule._armed = True
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "2,000/10,597")
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(3)]
+    assert sum(1 for a in fired if a is not None) == 1
