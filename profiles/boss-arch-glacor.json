@@ -1,0 +1,152 @@
+{
+  "skill": "arch-glacor",
+  "profile_type": "boss",
+  "window": {
+    "wm_class": "steam_app_1343400",
+    "_comment": "RS3 NXT. WM_CLASS survives title changes and skips the Steam launcher window."
+  },
+  "interval": 1.0,
+  "_profile_note": "Arch-Glacor, 0 mechanics enabled. A boss profile is a different shape from a skilling one: the failure modes are survival and attrition inside a fight, not inventory capacity over a bank cycle. Interval is 1.0s rather than 1.5s because health can fall faster than a skilling pack fills. CALIBRATED against a 3840x2058 window with the default RS3 layout - the boss health bar top-centre, the vitals row bottom-centre, and All Chat bottom-left. Re-run `shot <region>` after any interface move.",
+  "_regions_help": "anchor + dx,dy offset from that corner + fixed w,h. Negative dx/dy measure inward from a right/bottom edge.",
+  "regions": {
+    "boss_health": {
+      "anchor": "top-center",
+      "dx": -180,
+      "dy": 100,
+      "w": 660,
+      "h": 70,
+      "_note": "The ARCH-GLACOR target bar and its remaining health. VERIFIED: OCR returns 'ARCH-GLACOR | 24,448' through the bar's decorative frame, so the pattern anchors on the boss name and takes the first long number after it rather than trusting the whole string."
+    },
+    "vitals": {
+      "anchor": "bottom-center",
+      "dx": -80,
+      "dy": -168,
+      "w": 800,
+      "h": 70,
+      "_note": "The life/adrenaline/prayer/summoning row. VERIFIED: OCR returns '9,140/10,597 @100% @ 780/780 @ 60/60'. Icons decode as noise between the numbers, which is why each rule extracts its own field with an anchored pattern instead of parsing the row as a whole."
+    },
+    "chat_tail": {
+      "anchor": "bottom-left",
+      "dx": 10,
+      "dy": -258,
+      "w": 580,
+      "h": 660,
+      "_note": "All Chat in the bossing layout, which sits higher and wider than in the skilling profiles because the ability bar occupies the bottom-centre. VERIFIED reading 27 lines cleanly at this size."
+    },
+    "kill_timer": {
+      "anchor": "top-center",
+      "dx": -920,
+      "dy": 0,
+      "w": 200,
+      "h": 60,
+      "_note": "The encounter timer shown top-left of centre during an instanced fight. OCR returns '0036' for 00:36 - the colon is lost to the decorative frame, so the parser accepts digits with optional separators."
+    }
+  },
+  "rules": [
+    {
+      "name": "low_health",
+      "kind": "ocr",
+      "region": "vitals",
+      "pattern": "\\b([0-9][0-9,]{0,2}|[0-9]{1,3}),?([0-9]{3})?\\s*/\\s*10,?597\\b",
+      "cooldown": 8,
+      "message": "Health low",
+      "alert_body": "{line}",
+      "sound": "dialog-error-serious",
+      "urgency": "critical",
+      "timeout_ms": 8000,
+      "enabled": false,
+      "_note": "DISABLED pending a threshold implementation. An `ocr` rule can only match text, not compare numbers, so this cannot express 'below 50%' - it would fire on every reading. The correct fix is a numeric threshold rule kind that extracts a value and compares it; see _todo in this profile. Left here, disabled, to document the intended detector rather than shipping one that cries wolf every second."
+    },
+    {
+      "name": "encounter_started",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "welcome to your session against",
+      "cooldown": 30,
+      "message": "Encounter started",
+      "alert_body": "{line}",
+      "sound": "message-new-instant",
+      "urgency": "normal",
+      "timeout_ms": 6000,
+      "enabled": true,
+      "_note": "VERIFIED from live chat: 'Welcome to your session against: Arch-Glacor.' Marks the start of an instance, which is the anchor every per-kill statistic needs. Deliberately matches the generic prefix rather than the boss name, so the same rule works for any instanced encounter."
+    },
+    {
+      "name": "boss_defeated",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "your (\\w+[- ]?\\w*) kill ?count is|completed .*? in |defeated",
+      "cooldown": 20,
+      "message": "Boss defeated",
+      "alert_body": "{line}",
+      "sound": "outcome-success",
+      "urgency": "normal",
+      "timeout_ms": 10000,
+      "enabled": true,
+      "_note": "UNVERIFIED wording. RS3 announces a kill count on most boss deaths, but the exact phrasing for Arch-Glacor has not been observed yet - confirm on the first kill and tighten. The alternatives cover the common shapes: a kill-count line, a completion-time line, and a bare 'defeated'. This is deliberately broad because a missed kill is a lost statistic, whereas a false positive here is merely a spurious success chime."
+    },
+    {
+      "name": "player_died",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "oh dear, you are dead|you have died|you died",
+      "cooldown": 30,
+      "message": "You died",
+      "alert_body": "{line}",
+      "sound": "dialog-error-serious",
+      "urgency": "critical",
+      "timeout_ms": 20000,
+      "enabled": true,
+      "_note": "UNVERIFIED for this encounter, but 'Oh dear, you are dead!' is RS3's long-standing death message and is worth having armed from the start. Critical urgency because a death inside an instance costs the run and, without a gravestone reclaim, potentially the kit."
+    },
+    {
+      "name": "food_gone",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "you (have )?(ran|run) out of|you don'?t have (enough|any)|nothing left to eat",
+      "cooldown": 30,
+      "message": "Supplies out",
+      "alert_body": "{line}",
+      "sound": "battery-low",
+      "urgency": "critical",
+      "timeout_ms": 15000,
+      "enabled": true,
+      "_note": "UNVERIFIED wording. Running out of food mid-fight is the attrition failure that ends a session, so this is armed early even though the exact lines are unconfirmed. Reuses the shape of the fishing profile's out_of_supplies rule, which was written from the same family of messages."
+    },
+    {
+      "name": "fight_stalled",
+      "kind": "activity",
+      "region": "chat_tail",
+      "pattern": "you (hit|deal|damage)|arch[- ]?glacor",
+      "stop_seconds": 45,
+      "cooldown": 120,
+      "message": "Fight stalled",
+      "alert_body": "No combat evidence for {quiet:.0f}s. Disconnected, dead, or the instance ended.",
+      "sound": "dialog-warning",
+      "urgency": "normal",
+      "timeout_ms": 15000,
+      "enabled": false,
+      "_note": "DISABLED pending live measurement. The concept is sound - silence means the fight stopped - but RS3 does not print a chat line per hit with default settings, so this rule has no reliable recurring signal to watch. Enabling it without measuring the true inter-message gap would reproduce the false-positive storm the thieving profile hit, where a stop rule fired four times in three minutes while the activity was demonstrably continuing. Measure first, then set stop_seconds from the observed p99."
+    },
+    {
+      "name": "level_up",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "advanced\\s+(an?|\\d+)\\s+\\w+\\s+levels?|you'?(ve|r)?\\s*(have\\s+)?reached level \\d+|\\w+ level is now \\d+",
+      "cooldown": 60,
+      "message": "Level up",
+      "alert_body": "{line}",
+      "sound": "outcome-success",
+      "urgency": "normal",
+      "timeout_ms": 15000,
+      "enabled": true,
+      "_note": "Shared with the skill profiles: combat levels advance while bossing too. Same broadened pattern, which does not require the leading 'Congratulations' because RS3 splits some notices across lines."
+    }
+  ],
+  "_todo": [
+    "Add a numeric threshold rule kind so low_health and low_prayer can compare an extracted value against a limit, rather than matching text. That is the main capability this profile needs and the reason two rules ship disabled.",
+    "Verify boss_defeated, player_died and food_gone wording against live chat and tighten each pattern.",
+    "Measure a real inter-message gap before enabling fight_stalled.",
+    "Consider a kill-timer reader once a full kill has been observed, for per-kill duration statistics."
+  ]
+}
