@@ -2435,3 +2435,143 @@ def test_evaluating_a_counter_never_writes_the_real_state_dir(isolate_state):
     assert watcher.COUNTER_LOG.exists()
     assert not (Path(__file__).resolve().parents[1]
                 / "state" / "counters.jsonl").samefile(watcher.COUNTER_LOG)
+
+
+# --------------------------------------------------------------------------
+# Gauge rules - numeric thresholds for AFK bossing
+# --------------------------------------------------------------------------
+
+#: Verbatim OCR of the RS3 vitals row during a live Arch-Glacor kill.
+VITALS_OCR = "I§9,347[1o,597 @85% @3&2[7&0 @so/so G‘"
+
+
+def test_parse_gauge_reads_a_mangled_vitals_row():
+    """Icons decode as noise and the slash renders as a bracket."""
+    assert watcher.parse_gauge(VITALS_OCR, 10597) == (9347, 10597)
+    assert watcher.parse_gauge(VITALS_OCR, 780) == (382, 780)
+
+
+def test_parse_gauge_ignores_the_adrenaline_percentage():
+    """'@100% @ 780/780' must not read prayer as 100.
+
+    The percentage sits immediately before the maximum, so a naive
+    take-the-previous-number parser picks it up.
+    """
+    text = "I 6 9,140/10,597 @100% @ 780/780 @ 60/60"
+    assert watcher.parse_gauge(text, 780) == (780, 780)
+    assert watcher.parse_gauge(text, 10597) == (9140, 10597)
+
+
+def test_parse_gauge_handles_a_full_gauge_after_leading_noise():
+    """The false positive: a critical health alert fired at full health.
+
+    "I 6 10,597/10,597" has icon noise before the pair, and matching the
+    first occurrence of the maximum read the current value as 6.
+    """
+    text = "I 6 10,597/10,597 @85% @ 0/780 @ 60/60 c"
+    assert watcher.parse_gauge(text, 10597) == (10597, 10597)
+    assert watcher.parse_gauge(text, 780) == (0, 780)
+
+
+def test_parse_gauge_rejects_unreadable_text():
+    assert watcher.parse_gauge("garbage with no numbers", 780) is None
+    assert watcher.parse_gauge("", 780) is None
+
+
+def test_parse_gauge_rejects_a_current_above_its_maximum():
+    """A confident wrong number is worse than silence."""
+    assert watcher.parse_gauge("99,999/780", 780) is None
+
+
+def _gauge_rule(**kw):
+    opts = dict(name="low_prayer", kind="gauge", region="vitals",
+                maximum=780, warn_below=20, confirm_readings=2,
+                cooldown=0, message="Prayer low", alert_body="{percent}%")
+    opts.update(kw)
+    rule = watcher.Rule(**opts)
+    rule._armed = True
+    return rule
+
+
+def test_gauge_alerts_below_the_threshold(monkeypatch):
+    rule = _gauge_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "100/780")
+
+    assert watcher.evaluate(rule, "0x1", region, (100, 100), 1.0) is None
+    alert = watcher.evaluate(rule, "0x1", region, (100, 100), 2.0)
+    assert alert is not None and "13%" in alert.body
+
+
+def test_gauge_requires_consecutive_readings(monkeypatch):
+    """One bad OCR frame must not wake someone up.
+
+    Hitsplats and overlays draw over the digits and produce a single wrong
+    number; that false alarm is what makes alerts worth ignoring.
+    """
+    rule = _gauge_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["100/780", "700/780", "100/780"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    for cycle, now in enumerate((1.0, 2.0, 3.0), start=1):
+        assert watcher.evaluate(rule, "0x1", region, (100, 100), now) is None
+
+
+def test_gauge_stays_quiet_above_the_threshold(monkeypatch):
+    rule = _gauge_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "780/780")
+
+    for now in (1.0, 2.0, 3.0):
+        assert watcher.evaluate(rule, "0x1", region, (100, 100), now) is None
+
+
+def test_gauge_fires_once_per_decline(monkeypatch):
+    """A long drain must produce one alert, not one per poll."""
+    rule = _gauge_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "50/780")
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(1, 8)]
+    assert sum(1 for a in fired if a is not None) == 1
+
+
+def test_gauge_rearms_after_recovery(monkeypatch):
+    rule = _gauge_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    seq = iter(["50/780", "50/780", "780/780", "50/780", "50/780"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(seq))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(1, 6)]
+    assert sum(1 for a in fired if a is not None) == 2
+
+
+def test_gauge_ignores_an_unreadable_frame(monkeypatch):
+    """Unreadable is not evidence of a low gauge."""
+    rule = _gauge_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "noise")
+
+    for now in (1.0, 2.0, 3.0):
+        assert watcher.evaluate(rule, "0x1", region, (100, 100), now) is None
+
+
+def test_boss_profile_loads_and_declares_gauges():
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    assert cfg["profile_type"] == "boss"
+    rules = {r["name"]: r for r in cfg["rules"]}
+    for name in ("low_health", "low_prayer"):
+        assert rules[name]["kind"] == "gauge"
+        assert rules[name]["maximum"] > 0
+        assert rules[name].get("enabled", True)

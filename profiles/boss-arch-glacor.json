@@ -45,17 +45,37 @@
   "rules": [
     {
       "name": "low_health",
-      "kind": "ocr",
+      "kind": "gauge",
       "region": "vitals",
-      "pattern": "\\b([0-9][0-9,]{0,2}|[0-9]{1,3}),?([0-9]{3})?\\s*/\\s*10,?597\\b",
-      "cooldown": 8,
+      "maximum": 10597,
+      "warn_below": 50,
+      "confirm_readings": 2,
+      "cooldown": 30,
       "message": "Health low",
-      "alert_body": "{line}",
+      "item": "health",
+      "alert_body": "Life {current}/{maximum} ({percent}%). Eat or leave.",
       "sound": "dialog-error-serious",
       "urgency": "critical",
-      "timeout_ms": 8000,
-      "enabled": false,
-      "_note": "DISABLED pending a threshold implementation. An `ocr` rule can only match text, not compare numbers, so this cannot express 'below 50%' - it would fire on every reading. The correct fix is a numeric threshold rule kind that extracts a value and compares it; see _todo in this profile. Left here, disabled, to document the intended detector rather than shipping one that cries wolf every second."
+      "timeout_ms": 20000,
+      "enabled": true,
+      "_note": "Now expressible as a gauge rule rather than an ocr rule, which could only match text and would have fired on every reading. warn_below=50 rather than lower because at Arch-Glacor an unattended player who is already halved is usually losing faster than they can react. confirm_readings=2 rejects a single bad frame: hitsplats and overlays draw over the digits and produce one wrong number, and waking someone for that is the false alarm that makes alerts worth ignoring. maximum=10597 is this character's life points."
+    },
+    {
+      "name": "low_prayer",
+      "kind": "gauge",
+      "region": "vitals",
+      "maximum": 780,
+      "warn_below": 20,
+      "confirm_readings": 2,
+      "cooldown": 45,
+      "message": "Prayer low",
+      "item": "prayer",
+      "alert_body": "Prayer {current}/{maximum} ({percent}%). Overheads are about to drop.",
+      "sound": "dialog-warning",
+      "urgency": "critical",
+      "timeout_ms": 20000,
+      "enabled": true,
+      "_note": "THE alert for AFK bossing. Prayer running out is the silent failure: there is no chat line for it, overhead protection simply stops and damage taken multiplies. Measured on a live Arch-Glacor kill at roughly 150 points/minute, which empties the 780 pool in about five minutes. warn_below=20 leaves ~1 minute to react at that rate. maximum=780 is THIS character's prayer pool and is the anchor the parser needs - update it when the pool changes, or the rule silently stops reading."
     },
     {
       "name": "encounter_started",
@@ -144,7 +164,6 @@
     }
   ],
   "_todo": [
-    "Add a numeric threshold rule kind so low_health and low_prayer can compare an extracted value against a limit, rather than matching text. That is the main capability this profile needs and the reason two rules ship disabled.",
     "Verify boss_defeated, player_died and food_gone wording against live chat and tighten each pattern.",
     "Measure a real inter-message gap before enabling fight_stalled.",
     "Consider a kill-timer reader once a full kill has been observed, for per-kill duration statistics."

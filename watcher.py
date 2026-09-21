@@ -47,7 +47,8 @@ ACTIVE_SKILL = ""
 ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
 RULE_KINDS = {"inventory", "activity", "supply", "item_count",
-              "ocr", "change", "idle", "loot", "counter", "stack", "timer", "presence"}
+              "ocr", "change", "idle", "loot", "counter", "stack", "timer",
+              "presence", "gauge"}
 PROFILE_TYPES = {"skill", "quest", "boss"}
 
 
@@ -1823,6 +1824,10 @@ class Rule:
     # activity
     stop_seconds: float = 25.0
     suppress_pattern: str | None = None
+    # gauge
+    maximum: int = 0
+    warn_below: float = 0.0
+    confirm_readings: int = 2
     # supply
     item: str = "supplies"
     trip_pattern: str | None = None
@@ -1858,6 +1863,7 @@ class Rule:
     _last_fired: float = field(default=0.0, repr=False)
     _armed: bool = field(default=True, repr=False)
     _seen: set = field(default_factory=set, repr=False)
+    _low_streak: int = field(default=0, repr=False)
     _primed: bool = field(default=False, repr=False)
     _history: list = field(default_factory=list, repr=False)
     _full_since: float = field(default=0.0, repr=False)
@@ -2358,6 +2364,62 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
 
 TIMER_RE = re.compile(r"(\d{1,2}):([0-5]\d):([0-5]\d)")
 
+#: OCR confusions seen on the RS3 vitals row, where the separator between a
+#: current and maximum value renders as a bracket or a letter.
+_GAUGE_FIXUPS = str.maketrans({"[": "/", "]": "/", "I": "/", "|": "/",
+                               "&": "8", "l": "1", "O": "0", "o": "0"})
+
+
+def parse_gauge(text: str, maximum: int, tolerance: int = 2
+                ) -> tuple[int, int] | None:
+    """Read a ``current/maximum`` pair whose maximum is already known.
+
+    The RS3 life/prayer row decodes with the icons as noise and the slash
+    frequently mangled - ``I§9,347[1o,597 @85% @3&2[7&0`` is a real reading
+    of 9,347/10,597 health, 85% adrenaline and 382/780 prayer. Parsing that
+    as free text is hopeless.
+
+    Knowing the maximum makes it tractable: find that number in the stream
+    and take the value immediately before it. `tolerance` allows the
+    maximum's own digits to be misread by a little, since a gauge maximum
+    is fixed for a given character and any near match is the right anchor.
+
+    Returns ``(current, maximum)``, or None when no plausible pair is found.
+    Values above the maximum are rejected rather than clamped: they mean the
+    reading was wrong, and a confident wrong number is worse than silence.
+    """
+    fixed = text.translate(_GAUGE_FIXUPS)
+    values = []
+    for m in re.finditer(r"\d[\d,]*", fixed):
+        try:
+            value = int(m.group(0).replace(",", ""))
+        except ValueError:
+            continue
+        # A number followed by '%' is the adrenaline readout, not a gauge
+        # value. Without this, '@100% @ 780/780' read prayer as 100 - the
+        # percentage happens to sit immediately before the maximum.
+        percent = fixed[m.end():m.end() + 2].lstrip().startswith("%")
+        values.append((value, percent))
+
+    # Walk right to left. The *last* occurrence of the maximum closes the
+    # pair, which matters when current == maximum and the stream reads
+    # "... 10,597 / 10,597 ...": matching the first one treats whatever
+    # precedes it as the current value. Observed live as "I 6 10,597/10,597"
+    # - leading icon noise - which read health as 6 and raised a critical
+    # alert at full health.
+    for i in range(len(values) - 1, 0, -1):
+        if abs(values[i][0] - maximum) > tolerance or values[i][1]:
+            continue
+        current, current_is_percent = values[i - 1]
+        if current_is_percent:
+            # The real current value is separated from its maximum by the
+            # adrenaline field, which means this maximum is the *second*
+            # half of a pair whose first half we already passed.
+            continue
+        if 0 <= current <= maximum:
+            return current, maximum
+    return None
+
 
 def parse_timer(text: str) -> int | None:
     """Seconds from an ``H:MM:SS`` reading, or None if it does not parse.
@@ -2371,6 +2433,59 @@ def parse_timer(text: str) -> int | None:
         return None
     h, mi, s = (int(g) for g in m.groups())
     return h * 3600 + mi * 60 + s
+
+
+def _eval_gauge(rule: Rule, wid: str, box, now: float,
+                cycle: int = 0) -> Alert | None:
+    """Alert when a `current/maximum` readout falls below a threshold.
+
+    The capability the `ocr` kind cannot provide: it matches text and cannot
+    compare numbers, so "prayer below 20%" was impossible to express and a
+    health rule written that way would fire on every single reading.
+
+    This exists for AFK bossing, where nobody is watching the screen. Prayer
+    draining to zero is the classic silent failure - measured on a live
+    Arch-Glacor kill at roughly 150 points/minute, which empties a 780-point
+    pool in about five minutes with no chat line to announce it.
+
+    `confirm_readings` guards against a single bad OCR frame: an overlay,
+    a damage splat, or a hitsplat drawn over the digits can produce one
+    wrong number, and waking someone for that is exactly the false alarm
+    that makes an alert worth ignoring. Two consecutive readings below the
+    threshold are required by default.
+    """
+    if rule.maximum <= 0 or rule.warn_below <= 0:
+        return None
+    frame = capture_array(wid, box, None, cycle)
+    reading = parse_gauge(ocr_array(frame), rule.maximum)
+    if reading is None:
+        # An unreadable frame is not evidence of a low gauge. Hold the
+        # streak rather than resetting it, so a single bad frame in a
+        # genuine decline does not restart the confirmation count.
+        return None
+    current, maximum = reading
+    fraction = current / maximum if maximum else 1.0
+    threshold = (rule.warn_below / 100.0 if rule.warn_below > 1
+                 else rule.warn_below)
+
+    if fraction > threshold:
+        rule._low_streak = 0
+        rule._armed = True
+        return None
+
+    rule._low_streak += 1
+    if rule._low_streak < max(1, int(rule.confirm_readings)):
+        return None
+    if not rule._armed or not rule.ready(now):
+        return None
+    # Re-arms only when the gauge recovers above the threshold, so a long
+    # decline produces one alert rather than one per poll.
+    rule._armed = False
+    return rule.fire(
+        now, rule.alert_body or f"{current:,}/{maximum:,}",
+        source_text=f"{current}/{maximum}", current=f"{current:,}",
+        maximum=f"{maximum:,}", percent=f"{fraction * 100:.0f}",
+        item=rule.item)
 
 
 def _eval_timer(rule: Rule, wid: str, box, now: float,
@@ -2600,6 +2715,8 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
     box = region.resolve(size)
     if rule.kind == "presence":
         return _eval_presence(rule, wid, box, now, cycle)
+    if rule.kind == "gauge":
+        return _eval_gauge(rule, wid, box, now, cycle)
     if rule.kind == "timer":
         return _eval_timer(rule, wid, box, now, cycle)
     if rule.kind == "stack":
