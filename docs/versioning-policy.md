@@ -258,6 +258,30 @@ If a milestone is Linux-only or Windows-only during development, the product
 version still advances once according to this policy. Platform support status
 belongs in release notes/capability metadata.
 
+## Development head versus an immutable release
+
+The `VERSION` file is the product version of the current development line.
+Multiple ordinary commits may carry the same version while work toward the next
+declared snapshot/milestone is in progress.
+
+A version becomes an **immutable released version** when that version is
+deliberately published/tagged. Before creating that release tag, the release
+pull request must contain the intended final `VERSION` value.
+
+Therefore:
+
+- not every commit increments the version;
+- not every merged pull request increments the version;
+- a corrective development release increments PATCH when it is deliberately
+  declared;
+- a completed milestone release increments MINOR when it is deliberately
+  declared;
+- once `vX.Y.Z` is tagged/released, that version must never be reused for
+  different contents.
+
+This distinction allows normal development between releases without turning the
+version number into a commit counter.
+
 ## Version-change procedure
 
 A version change must be deliberate.
