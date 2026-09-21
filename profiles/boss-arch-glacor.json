@@ -72,6 +72,14 @@
       "w": 520,
       "h": 290,
       "_note": "The whole Metrics panel body: four XP rows with their XP/h and ETA columns, and the Gain/Drops/GP-h row beneath them. Wider and taller than the skilling profiles' metrics_xp (20,100,410,105), which covers only the XP rows and cuts off the gold row entirely. Measured from a full-window capture at 3840x2058. NOT YET OCR-VERIFIED at native resolution - the readability check was done on a downscaled screenshot and is not representative; confirm with `shot metrics_panel` before relying on it."
+    },
+    "gold_row": {
+      "anchor": "top-left",
+      "dx": 20,
+      "dy": 320,
+      "w": 400,
+      "h": 44,
+      "_note": "The Metrics panel's gold row: Gain, Drops and GP/h, left to right, after the coin icon. Narrowed from metrics_panel so OCR sees only these three figures - reading the whole panel would mix them with the four XP rows above. Measured from a full-window capture at 3840x2058 and confirmed by cropping: the row contains exactly the coin icon and three numbers. NOT YET OCR-VERIFIED with real values - the only full-resolution sample available was taken at session start, when all three read 0."
     }
   },
   "rules": [
@@ -192,6 +200,23 @@
       "timeout_ms": 25000,
       "enabled": true,
       "_note": "VERIFIED from live chat. Arch-Glacor rewards go to a reward chest rather than a ground drop, and each item is announced as 'A golden beam shines over one of your items, You receive: 12 x Glacor remnants.' The pattern deliberately matches the beam phrase OR the 'You receive:' prefix, because OCR mangles the first words badly - observed as 'A aolden beam' and 'A golden bieam' in the same session - and either half alone identifies the line. alert_body echoes the whole line so the item and quantity are visible without switching to the game. cooldown=0 because a kill can drop several items at once and each is worth reporting; deduplication by line already stops the same drop repeating while it sits on screen."
+    },
+    {
+      "name": "gold_milestone",
+      "kind": "total",
+      "region": "gold_row",
+      "step": 1000000,
+      "column": 0,
+      "cooldown": 30,
+      "message": "Gold milestone",
+      "item": "gold",
+      "milestone_message": "{total} gold this session ({n}M at Arch-Glacor).",
+      "alert_body": "{total} gold this session ({n}M at Arch-Glacor).",
+      "sound": "complete-media-burn",
+      "urgency": "normal",
+      "timeout_ms": 20000,
+      "enabled": true,
+      "_note": "Reads the Metrics panel's own session Gain rather than summing chat lines. That matters: the pickpocketing counter accumulates its own total and therefore only counts while the watcher runs, which left it reading 513k against a real 2.3M. Here the game owns the number, so a restart mid-session resumes at the true figure. column=0 selects Gain from the three figures in the row; Drops and GP/h are columns 1 and 2. step=1000000 fires once per million. The parser handles RS3's abbreviations - '1.2M' is 1,200,000, and dropping the suffix would understate the total by six orders of magnitude and the milestone would never fire. A reading below the last one is rejected as a misread since the panel only counts up; a large fall is treated as a session reset and rewinds the milestone counter. UNVERIFIED against live values - confirm with `shot gold_row` once gold has actually accumulated."
     },
     {
       "name": "boss_defeated",

@@ -48,7 +48,7 @@ ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
 RULE_KINDS = {"inventory", "activity", "supply", "item_count",
               "ocr", "change", "idle", "loot", "counter", "stack", "timer",
-              "presence", "gauge", "percent"}
+              "presence", "gauge", "percent", "total"}
 PROFILE_TYPES = {"skill", "quest", "boss"}
 
 
@@ -1829,6 +1829,7 @@ class Rule:
     warn_below: float = 0.0
     warn_at: int = 0
     warn_at_or_above: int = 0
+    column: int = 0
     confirm_readings: int = 2
     # supply
     item: str = "supplies"
@@ -2391,6 +2392,33 @@ _GAUGE_FIXUPS = str.maketrans({"[": "/", "]": "/", "I": "/", "|": "/",
                                "&": "8", "l": "1", "O": "0", "o": "0"})
 
 
+def parse_total(text: str, column: int = 0) -> int | None:
+    """Read one column of a numeric Metrics row.
+
+    The gold row prints three figures side by side - Gain, Drops and GP/h -
+    so a rule has to say which it wants. `column` is a zero-based index
+    into the numbers found, left to right.
+
+    RS3 abbreviates large values, and the suffix carries the magnitude:
+    "1.2M" is 1,200,000, not 1.2. Dropping it would understate the total by
+    six orders of magnitude and the milestone would never fire.
+    """
+    # Only fix an O that sits against other digits. A blanket substitution
+    # turned "no numbers here" into "n0 numbers here" and read it as zero.
+    cleaned = re.sub(r"(?<=\d)[Oo]|[Oo](?=\d)", "0", text.replace(",", ""))
+    values = []
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*([KMB])?", cleaned, re.I):
+        raw, suffix = m.group(1), (m.group(2) or "").upper()
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        scale = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}.get(suffix, 1)
+        if suffix or value == int(value):
+            values.append(int(value * scale))
+    return values[column] if len(values) > column else None
+
+
 def parse_percent(text: str) -> int | None:
     """Read a bare percentage, such as the adrenaline readout.
 
@@ -2781,6 +2809,55 @@ def _eval_loot(rule: Rule, wid: str, box, now: float,
     return None
 
 
+def _eval_total(rule: Rule, wid: str, box, now: float,
+                cycle: int = 0) -> Alert | None:
+    """Alert on each milestone of a running total the game already keeps.
+
+    Distinct from `counter`, which accumulates a total itself by summing
+    repeated chat lines. Here the game owns the number - the Metrics
+    panel's session Gain - so summing anything would be wrong. Reading it
+    directly also means a watcher restart mid-session resumes at the true
+    figure rather than from zero, which is the flaw that left the
+    pickpocketing counter reading 513k against a real 2.3M.
+
+    The reading must not go backwards. The panel only counts up within a
+    session, so a lower value means either a misread or a session reset,
+    and neither should fire a milestone. A large fall is treated as a
+    reset and rewinds the milestone counter so the next session starts
+    clean; a small one is discarded as noise.
+    """
+    step = max(1, int(rule.step))
+    text = ocr_array(capture_array(wid, box, None, cycle))
+    total = parse_total(text, column=rule.column)
+    if total is None:
+        return None
+
+    if total + step < rule._total:
+        rule._milestone = total // step
+        rule._total = total
+        return None
+    if total < rule._total:
+        return None
+    rule._total = total
+
+    reached = total // step
+    if reached <= rule._milestone:
+        return None
+    rule._milestone = reached
+    if not rule.ready(now):
+        return None
+    fields = {"total": f"{total:,}", "n": reached, "step": f"{step:,}",
+              "item": rule.item}
+    template = rule.milestone_message or rule.alert_body or "{total}"
+    try:
+        body = template.format(**fields)
+    except (KeyError, IndexError, ValueError):
+        # A template naming a field this rule does not provide must not
+        # take the watcher down; report the raw total instead.
+        body = f"{total:,}"
+    return rule.fire(now, body, source_text=text.strip()[:120], **fields)
+
+
 def _eval_counter(rule: Rule, wid: str, box, now: float,
                   cycle: int = 0) -> Alert | None:
     """Sum a repeating numeric chat line and alert on each milestone.
@@ -2846,6 +2923,8 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
     box = region.resolve(size)
     if rule.kind == "presence":
         return _eval_presence(rule, wid, box, now, cycle)
+    if rule.kind == "total":
+        return _eval_total(rule, wid, box, now, cycle)
     if rule.kind == "percent":
         return _eval_percent(rule, wid, box, now, cycle)
     if rule.kind == "gauge":

@@ -3171,3 +3171,84 @@ def test_boss_profile_declares_the_adrenaline_rule():
     assert rule["warn_at_or_above"] == 100
     # A cue to act, not a danger.
     assert rule["urgency"] == "normal"
+
+
+# --------------------------------------------------------------------------
+# Gold milestones from the Metrics panel's running total
+# --------------------------------------------------------------------------
+
+def test_parse_total_selects_a_column():
+    """The gold row prints Gain, Drops and GP/h side by side."""
+    row = "1,250,000  12  2,400,000"
+    assert watcher.parse_total(row, column=0) == 1_250_000
+    assert watcher.parse_total(row, column=1) == 12
+    assert watcher.parse_total(row, column=2) == 2_400_000
+
+
+def test_parse_total_expands_rs3_abbreviations():
+    """'1.2M' is 1,200,000. Dropping the suffix understates by 10^6."""
+    assert watcher.parse_total("1.2M  12  2.4M", column=0) == 1_200_000
+    assert watcher.parse_total("950K  8  1.9M", column=0) == 950_000
+    assert watcher.parse_total("1.9M  8  950K", column=2) == 950_000
+
+
+def test_parse_total_rejects_text_without_numbers():
+    """A blanket O-to-zero fix read "no numbers here" as n0 numbers - zero."""
+    assert watcher.parse_total("no numbers here") is None
+    assert watcher.parse_total("Gain Drops GP/h") is None
+    assert watcher.parse_total("") is None
+    # An O genuinely inside a number is still corrected.
+    assert watcher.parse_total("1O,000  5  2O,000", column=0) == 10_000
+
+
+def _total_rule(**kw):
+    opts = dict(name="gold_milestone", kind="total", region="gold_row",
+                step=1_000_000, column=0, cooldown=0, message="Gold",
+                milestone_message="{total} ({n}M)")
+    opts.update(kw)
+    return watcher.Rule(**opts)
+
+
+def _run_total(rule, readings, monkeypatch):
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+    it = iter(readings)
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(it))
+    out = []
+    for i in range(len(readings)):
+        alert = watcher.evaluate(rule, "0x1", region, (100, 100), float(i))
+        if alert:
+            out.append(alert.body)
+    return out
+
+
+def test_total_fires_once_per_million(monkeypatch):
+    fired = _run_total(_total_rule(),
+                       ["500000 0 0", "999999 0 0", "1050000 0 0",
+                        "1500000 0 0", "2100000 0 0"], monkeypatch)
+    assert fired == ["1,050,000 (1M)", "2,100,000 (2M)"]
+
+
+def test_total_ignores_a_backwards_misread(monkeypatch):
+    """The panel only counts up within a session."""
+    fired = _run_total(_total_rule(),
+                       ["1500000 0 0", "1499000 0 0", "1600000 0 0"],
+                       monkeypatch)
+    assert fired == ["1,500,000 (1M)"]
+
+
+def test_total_rearms_after_a_session_reset(monkeypatch):
+    """Resetting the panel must not re-fire at once, nor go silent."""
+    fired = _run_total(_total_rule(),
+                       ["1500000 0 0", "0 0 0", "200000 0 0",
+                        "1100000 0 0"], monkeypatch)
+    assert fired == ["1,500,000 (1M)", "1,100,000 (1M)"]
+
+
+def test_boss_profile_declares_the_gold_rule():
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    rule = {r["name"]: r for r in cfg["rules"]}["gold_milestone"]
+    assert rule["kind"] == "total"
+    assert rule["step"] == 1_000_000
+    assert rule["column"] == 0          # Gain, not Drops or GP/h
+    assert cfg["_regions"]["gold_row"] is not None
