@@ -4243,3 +4243,17 @@ def test_patching_an_extracted_name_reaches_its_caller(monkeypatch):
 
     tracker = watcher.WindowTracker("game", "0x1", (800, 600), use_kwin=True)
     assert tracker.describe_hidden() == "minimised"
+
+
+def test_overlay_script_path_survives_the_module_move():
+    """SCRIPT is computed from __file__, so a move can silently break it.
+
+    Extracting OverlayChannel into screen_watcher/ pointed it at
+    screen_watcher/tools/overlay.py, which does not exist. The tests kept
+    passing - they never start the real process - so only a live run
+    would have caught it.
+    """
+    channel = watcher.OverlayChannel()
+    assert channel.SCRIPT.exists(), channel.SCRIPT
+    assert channel.SCRIPT.name == "overlay.py"
+    assert channel.SCRIPT.parent.name == "tools"
