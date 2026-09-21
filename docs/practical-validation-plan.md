@@ -436,6 +436,7 @@ For each meaningful practical run, record something equivalent to:
 
 ```text
 Date:
+Software version:
 Commit:
 Machine/OS:
 Kernel:
@@ -472,6 +473,20 @@ Result: PASS / PASS WITH ISSUES / FAIL
 Reports may later be stored as structured files, issue comments, or release
 validation records. The important requirement is reproducibility, not the final
 storage format.
+
+## Version milestone gate
+
+Practical validation is part of the software-version decision.
+
+A planned `0.X.0` milestone must not be declared merely because its coding
+work is mostly present. The milestone version is assigned only after its
+implementation and affected existing behavior have passed the validation
+requirements in this document and no unresolved critical/high defect
+contradicts the milestone claim.
+
+Corrective releases within a milestone line use PATCH increments instead.
+
+The formal rules are in [versioning-policy.md](versioning-policy.md).
 
 ## Development gate
 

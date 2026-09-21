@@ -12,6 +12,17 @@ Status meanings:
   not yet fully satisfied.
 - **Not started** — documented design only.
 
+## Current software version
+
+Screen Watcher is currently **0.0.1**.
+
+Version numbers are governed by
+[versioning-policy.md](versioning-policy.md). During initial development,
+PATCH releases represent corrective/smaller declared snapshots and MINOR
+releases are reserved for completed, practically validated major coding
+milestones. Priority 0 roadmap progress does not automatically change the
+version number.
+
 ## Immediate validation priority
 
 Before additional Priority 0 architecture is allowed to dominate development,

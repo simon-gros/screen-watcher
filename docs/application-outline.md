@@ -562,6 +562,21 @@ multi-client support possible without cross-contaminating alerts.
   any implementation is copied; architectural ideas may be reimplemented
   independently.
 
+## Software versioning
+
+Screen Watcher uses the formal milestone-oriented Semantic Versioning policy in
+[versioning-policy.md](versioning-policy.md). The root `VERSION` file is the
+canonical product version.
+
+During initial development, `0.MINOR.PATCH` is used. PATCH identifies
+corrective/smaller declared snapshots; MINOR is reserved for a completed,
+practically validated major coding milestone. Roadmap stages do not receive
+version numbers in advance, and documentation/research alone cannot trigger a
+version bump.
+
+The project remains on `0.0.1` until a later release/snapshot is deliberately
+declared under that policy.
+
 ## Delivery stages
 
 ### Current foundation

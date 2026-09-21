@@ -26,6 +26,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
           python -m pip check
+      - name: Version metadata
+        run: |
+          test "$(python watcher.py --version)" = "watcher $(tr -d '\n\r' < VERSION)"
       - name: Compile
         run: python -m compileall -q watcher.py tests
       - name: Test
