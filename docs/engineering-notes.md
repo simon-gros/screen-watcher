@@ -72,6 +72,10 @@ reuse one Tesseract result.
 
 ## Capture benchmark
 
+The following is a **legacy ImageMagick-path experiment**, retained because it
+explains why the original subprocess implementation used cropped PPM captures.
+The current default backend is native XCB `GetImage`.
+
 An earlier 4K-window measurement produced approximately:
 
 | method | time |
@@ -81,23 +85,28 @@ An earlier 4K-window measurement produced approximately:
 | cropped region -> PNG | 0.11 s |
 
 The experiment indicated that PNG encoding, rather than raw capture alone, was
-a major source of cost. `capture_array()` therefore uses a temporary PPM file
-before converting the image to a NumPy array. The temporary path is unique per
-capture and is removed automatically.
+a major source of cost. The **ImageMagick compatibility path** therefore uses a
+temporary PPM file before converting the image to a NumPy array. The XCB path
+does not use that subprocess/PPM mechanism.
 
-These numbers are environment-specific benchmarks, not performance guarantees.
+These numbers are environment-specific historical benchmarks, not performance
+guarantees.
 
 ## Current architectural limitations
 
 ### Region-level capture consistency
 
-`capture_array()` caches an identical `(window, region, mask)` request for the
-current polling cycle. Rules that read the same region therefore reuse the same
-pixels.
+The live loop now lets `FrameScheduler` own the polling cycle and prefetches
+every region required by enabled rules. `GameInstance` caches identical
+`(region, mask)` requests inside that cycle, so readers of one region share
+the same pixels and a failure in one prefetched region does not suppress rules
+that depend only on healthy regions.
 
-Different regions are still captured independently, however, so one polling
-cycle does not yet represent one immutable full-window frame. A future capture
-backend should capture once per cycle and crop all detector regions in memory.
+Different regions are still captured independently. A full-window frame was
+measured and rejected for the current 4K layout because moving ~7.9 MPx was
+11.4x slower than capturing the ~0.69 MPx of live regions. Cross-region
+temporal skew therefore remains a known trade-off rather than an unfinished
+full-frame migration.
 
 ### Poll scheduling
 
@@ -105,20 +114,21 @@ The watch loop already uses `time.monotonic()` and a deadline rather than
 sleeping for a fixed interval after processing. This prevents ordinary
 processing time from being blindly added to every cycle.
 
-The current `main` implementation does not skip deadlines that have already
-been missed. A sufficiently slow capture/OCR cycle can therefore be followed by
-back-to-back polling iterations while the deadline catches up. The planned
-scheduler should advance directly to the next future deadline.
+If processing runs past one or more deadlines, the live loop advances directly
+to the next future deadline. It does not run back-to-back catch-up polls after a
+slow OCR cycle.
 
 ### Timekeeping
 
-Cooldowns, inactivity windows, overflow durations, and other elapsed detector
-state use monotonic time. Persisted alert and occupancy logs continue to use
-Unix wall-clock timestamps, which is appropriate for cross-process history.
+Cooldowns, inactivity windows, overflow durations, fill-rate samples, and
+other in-process elapsed detector state use monotonic time. Persisted alerts,
+occupancy transitions, and counters use Unix wall-clock timestamps and include
+profile identity where the record is profile-specific. This prevents reboot
+boundaries from corrupting historical cycle segmentation.
 
 ### Monolithic module
 
-At roughly 1,500+ lines, `watcher.py` now contains window lookup, capture,
+At roughly 3,300+ lines, `watcher.py` now contains window lookup, capture,
 image processing, OCR, rule implementations, persistence, notification output,
 CLI commands, and process management.
 
@@ -160,7 +170,11 @@ Current validation checks include:
 - rule-to-region references;
 - required patterns/grids for relevant rule kinds;
 - regular-expression compilation;
-- non-negative timing/threshold values.
+- numeric geometry/grid types and bounds;
+- boolean rule options;
+- integer-only count/capacity/timeout fields;
+- urgency values and RGB colour triples;
+- non-negative timing/threshold values and positive milestone steps.
 
 A future typed profile model or generated JSON Schema would make configuration
 errors even earlier and more precise.
@@ -184,10 +198,11 @@ replayable sequences.
 
 ## CI
 
-`.github/workflows/ci.yml` currently runs on pushes and pull requests using
-Python 3.12. It installs `requirements-dev.txt`, compiles `watcher.py` and
-`tests/` with `compileall`, runs pytest, and checks `watcher.py` and
-`tests/` with Flake8.
+`.github/workflows/ci.yml` runs on pushes and pull requests with read-only
+repository permissions across Python 3.11, 3.12, and 3.13. It installs and
+checks `requirements-dev.txt`, compiles `watcher.py` and `tests/`, runs
+pytest, and checks `watcher.py` and `tests/` with Flake8. The workflow uses
+`actions/checkout@v7` and `actions/setup-python@v7`.
 
 Live screen capture is intentionally absent from CI because the hosted runner
 does not provide the required RuneScape client, X/XWayland session, or desktop
@@ -228,10 +243,10 @@ GameInstance(wm_class, backend)
     .save(box, path)      write a capture to disk
 ```
 
-`X11ImageMagickBackend` wraps the existing xdotool/ImageMagick path unchanged.
-It stays the default deliberately: a native XCB/XShm backend (step 3) has to be
-benchmarked against a known quantity, so the current behaviour must remain
-measurable rather than being rewritten at the same time.
+`X11ImageMagickBackend` preserves the original xdotool/ImageMagick path as a
+fallback. The default is now `X11XcbBackend`, which uses a persistent XCB
+connection and `GetImage`; it was benchmarked against the preserved fallback
+before becoming the default.
 
 ### Why introduce the seam before the backends exist
 
@@ -256,11 +271,13 @@ these paths run in CI at all.
   cannot disagree about a frame that changed between them.
 - A detected resize clears the cache, so stale geometry cannot be served.
 
-### Not yet done
+### Compatibility surface
 
-The rule evaluators still call `capture_array`/`ocr_cached` with a raw window
-id. Migrating them onto `GameInstance` is step 10 of the Priority 0 order and
-is what finally removes the direct ImageMagick coupling from profile code.
+Some rule evaluator signatures still accept a raw window id and call the
+compatibility `capture_array`/`ocr_cached` helpers. In live operation those
+helpers delegate to the bound `GameInstance`, and `FrameScheduler` has
+already prefetched the required frames. The remaining work is API cleanup and
+reader extraction, not a direct ImageMagick dependency in the live rule path.
 
 
 ## Priority 0, step 2 — shared frame scheduler
@@ -297,9 +314,9 @@ The thieving profile's four live regions total **0.69 MPx** against a
 encode/decode cost tracks that ratio exactly (11.4x slower).
 
 Capture strategy therefore stays per-region. The scheduler's value is
-coherence and accounting, not fewer pixels. This is worth remembering before
-the native XCB/XShm backend lands in step 3: shared memory changes the
-constant factor, not the pixel ratio.
+coherence and accounting, not fewer pixels. The shipped XCB `GetImage` backend
+changes the constant factor substantially; any future XShm work still does not
+change the underlying pixel-ratio trade-off.
 
 ### Failure isolation
 
@@ -314,15 +331,18 @@ cycles a region's pixels stay identical. A region unchanged for 20+ cycles is
 reported as `WARN ... frozen or occluded?`.
 
 This matters because a frozen or blank capture does not look like an error to
-a detector - it looks like confident, stable input. Health tracking is what
-turns that into a visible degraded state, and it is the data `doctor` reports
-in step 4.
+a detector - it looks like confident, stable input. Long-running scheduler
+health can flag repeated identical frames. The short `doctor` capture check
+currently validates real capture, flatness, timing, and failures, but does not
+claim a 20-cycle frozen-frame verdict from its brief sample.
 
-### Not yet wired in
+### Live integration
 
-`cmd_watch` still runs its own cycle counter and calls `capture_array`
-directly. Moving the live loop onto the scheduler belongs with step 10, when
-rules stop owning their own capture/OCR calls.
+`cmd_watch` now uses `FrameScheduler.begin()` for the polling cycle and
+prefetches every region required by enabled rules. Failed regions are isolated:
+rules that do not depend on them still run. Compatibility rule functions may
+still call `capture_array`, but those calls reuse the frame already held by
+the bound `GameInstance`.
 
 
 ## Priority 0, step 3 — native XCB capture backend
@@ -442,7 +462,10 @@ words. Digit groups count as readable tokens too.
 
 Running it against the thieving profile immediately surfaced two real issues:
 
-- `metrics_xp` and `orbs` are captured but used by no enabled rule;
+- the original profiles carried unused `orbs` regions and disabled-only
+  `metrics_xp` regions; obsolete `orbs` entries were removed, while
+  `metrics_xp` remains because the bundled disabled `xp_stalled` rule still
+  references it;
 - `coin_milestone` and `session_hour` shared `complete-media-burn`, so a coin
   milestone and an hour milestone were indistinguishable by ear - which
   defeats the purpose of per-rule sounds. `session_hour` now uses
@@ -453,9 +476,9 @@ Running it against the thieving profile immediately surfaced two real issues:
 
 The full spec in `future-implementation-ideas.md` also asks for template/icon
 anchor confidence, profile schema versioning, locale and UI-scale assumptions,
-drift against a saved calibration, and `--profile` readiness requirements.
-Those depend on calibration baselines and profile metadata that do not exist
-yet.
+focus state, compatibility fingerprints, richer calibration drift checks, and
+profile readiness requirements. Those remain outstanding and are tracked in
+[priority-0-status.md](priority-0-status.md).
 
 
 ## Priority 0, step 5 — interface readers
@@ -510,10 +533,17 @@ An earlier measurement reported "67% near-duplicates" and looked alarming. It
 was wrong: those were 12 genuine catches with 12 distinct timestamps. Judging
 similarity without separating the clock measured real gameplay as noise.
 
-### Not yet wired in
+### Live integration and remaining reader work
 
-The rule evaluators still call `ocr_cached` directly. Moving them onto readers
-is step 10. `InventoryReader` and `BuffBarReader` are not implemented.
+Chat-driven rule evaluators now consume one shared `ChatReader` event stream
+per region/cycle. Timestamped lines use same-stamp fuzzy OCR-variant
+suppression. Unstamped lines are deliberately not fuzzy-collapsed because
+similar wording may be a genuine repeated event; they are deduplicated only
+against visible occurrence counts from the previous read. Local chat timestamps
+are therefore strongly recommended.
+
+`InventoryReader`, `BuffBarReader`, resource/action-bar readers, and other
+reusable interface readers are still not implemented.
 
 
 ## Priority 0, step 6 — layered OCR
