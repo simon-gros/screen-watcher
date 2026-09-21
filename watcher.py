@@ -277,12 +277,18 @@ class X11XcbBackend(CaptureBackend):
         return window_size(handle)
 
     def grab_array(self, handle: str, box) -> np.ndarray:
-        import xcffib.xproto as xproto
+        # Validate arguments before touching the optional xcffib dependency.
+        # This keeps invalid-input behaviour deterministic even on hosts that
+        # intentionally rely on the ImageMagick fallback.
         if not handle:
             raise CaptureError("empty window id")
         x, y, w, h = (int(v) for v in box)
         if w <= 0 or h <= 0:
             raise CaptureError(f"degenerate capture box {box!r}")
+        try:
+            import xcffib.xproto as xproto
+        except ImportError as e:
+            raise CaptureError(f"python-xcffib unavailable: {e}") from e
         try:
             conn = self._connect()
             reply = conn.core.GetImage(
@@ -344,6 +350,23 @@ def make_backend(name: str | None = None) -> CaptureBackend:
         return backend
     fallback = X11ImageMagickBackend()
     return fallback if fallback.available()[0] else backend
+
+
+def make_runtime_backend(name: str | None = None) -> CaptureBackend:
+    """Return a backend that is actually usable for a live watch session.
+
+    `make_backend` deliberately returns an explicitly requested backend even
+    when it is unavailable so diagnostics can explain the problem. A live
+    watcher has different semantics: it must fail before entering the polling
+    loop rather than turning every detector call into the same dependency
+    error.
+    """
+    backend = make_backend(name)
+    ok, why = backend.available()
+    if not ok:
+        requested = f"requested backend {name!r}" if name else "capture backend"
+        raise CaptureError(f"{requested} unavailable: {why}")
+    return backend
 
 
 class GameInstance:
@@ -561,10 +584,12 @@ class FrameScheduler:
     def health(self, name: str, static_limit: int = 20) -> tuple[str, str]:
         """PASS/WARN/FAIL plus a reason, in the shape `doctor` will print."""
         stat = self.stats.get(name)
-        if stat is None or stat.captures == 0:
+        if stat is None:
             return "WARN", "never captured"
-        if stat.failures and stat.captures == 0:
-            return "FAIL", stat.last_error or "all captures failed"
+        if stat.captures == 0:
+            if stat.failures:
+                return "FAIL", stat.last_error or "all captures failed"
+            return "WARN", "never captured"
         static = self._static_cycles.get(name, 0)
         if static >= static_limit:
             return "WARN", f"unchanged for {static} cycles (frozen or occluded?)"
@@ -959,22 +984,29 @@ def ocr_cached(wid: str, box, cycle: int, psm: int = 6) -> str:
     hit = _OCR_CACHE.get(key)
     if hit is not None and hit[0] == cycle:
         return hit[1]
-    text = ocr(wid, box, psm)
+    text = ocr(wid, box, psm, cycle=cycle)
     _OCR_CACHE[key] = (cycle, text)
     return text
 
 
-def ocr(wid: str, box, psm: int = 6) -> str:
-    """Tesseract over one region.
+def ocr(wid: str, box, psm: int = 6, cycle: int | None = None,
+        game: "GameInstance | None" = None) -> str:
+    """Tesseract over one region using the selected capture backend.
 
-    The capture goes through the active `GameInstance` when one is bound, so
-    OCR rules inherit the selected backend instead of always paying for an
-    ImageMagick subprocess.
+    When a `GameInstance` and cycle are available, OCR is encoded from the
+    exact frame already cached for that cycle. Pixel rules and text rules can
+    therefore consume the same pixels rather than recapturing the region.
+    `game` is explicit for diagnostics; normal live rules use ACTIVE_GAME.
     """
+    selected = game if game is not None else ACTIVE_GAME
     with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
-        game = ACTIVE_GAME
-        if game is not None and game.handle == wid:
-            game.save(box, Path(tmp.name))
+        if selected is not None and selected.handle == wid:
+            if cycle is not None:
+                selected.begin_cycle(cycle)
+                frame = selected.frame(box)
+                Image.fromarray(frame.astype(np.uint8)).save(tmp.name)
+            else:
+                selected.save(box, Path(tmp.name))
         else:
             capture(wid, box, Path(tmp.name))
         r = subprocess.run(["tesseract", tmp.name, "stdout", "--psm", str(psm)],
@@ -1105,21 +1137,22 @@ def read_numeric(frame: np.ndarray, separator: str = ":",
 
 
 def ocr_numeric(wid: str, box, frame: np.ndarray | None = None,
-                psm: int = 7) -> str:
+                psm: int = 7, cycle: int | None = None) -> str:
     """Layered read: sprite matching first, Tesseract as fallback.
 
     `frame` lets a caller reuse a frame the scheduler already captured,
-    which is what makes the fast path cost effectively nothing.
+    which is what makes the fast path cost effectively nothing. The fallback
+    keeps the same cycle so Tesseract is encoded from those same pixels.
     """
     if frame is None:
         try:
-            frame = _capture_array_uncached(wid, box)
+            frame = capture_array(wid, box, cycle=cycle)
         except CaptureError:
-            return ocr(wid, box, psm)
+            return ocr(wid, box, psm, cycle=cycle)
     text = read_numeric(frame)
     if text is not None:
         return text
-    return ocr(wid, box, psm)
+    return ocr(wid, box, psm, cycle=cycle)
 
 
 # --------------------------------------------------------------------------
@@ -1464,13 +1497,8 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
     noise the inventory rule was retuned to avoid. Seeing that message means the
     stop is explained, so stay quiet until fishing actually resumes.
     """
-    text = ocr_cached(wid, box, cycle)
-    for line in text.splitlines():
-        line = line.strip()
-        key = norm_line(line)
-        if len(key) < 8 or key in rule._seen:
-            continue
-        rule._seen.add(key)
+    for event in chat_events(rule.region, wid, box, cycle):
+        line = event.text
         if rule.suppress_pattern and re.search(rule.suppress_pattern, line, re.I):
             # An explained stop. Disarm rather than touch the activity clock, so
             # resuming still needs a real catch to re-arm.
@@ -1481,9 +1509,6 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
             rule._last_activity = now
             rule._armed = True
             rule._last_activity_source = line
-    if len(rule._seen) > 400:
-        rule._seen.clear()
-        rule._primed = False
 
     if not rule._primed:
         # Prime the visible scrollback, but do not invent an activity timestamp.
@@ -1633,18 +1658,13 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
     The streak resets whenever a trip loads the item cleanly, so restocking
     silences the rule without any manual action.
     """
-    text = ocr_cached(wid, box, cycle)
     saw_trip = False
     saw_fail = False
     saw_out = False
     fail_line = None
     out_line = None
-    for line in text.splitlines():
-        line = line.strip()
-        key = norm_line(line)
-        if len(key) < 8 or key in rule._seen:
-            continue
-        rule._seen.add(key)
+    for event in chat_events(rule.region, wid, box, cycle):
+        line = event.text
         if rule.trip_pattern and re.search(rule.trip_pattern, line, re.I):
             saw_trip = True
         if rule.out_pattern and re.search(rule.out_pattern, line, re.I):
@@ -1653,9 +1673,6 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
         if re.search(rule.pattern, line, re.I):
             saw_fail = True
             fail_line = line
-    if len(rule._seen) > 400:
-        rule._seen.clear()
-        rule._primed = False
 
     # Scrollback on the first pass predates the watcher; count it, never alert.
     if not rule._primed:
@@ -1742,33 +1759,20 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
         rule._absent_since = now
         rule._last_activity = now
         if corroborates:
-            # Prime the visible scrollback without treating it as new activity.
-            text = ocr_cached(wid, rule._corroborate_box, cycle)
-            rule._seen = {
-                key for line in text.splitlines()
-                if len(key := norm_line(line.strip())) >= 8
-            }
+            # Prime the shared reader without treating visible scrollback as
+            # fresh evidence for this newly started blackout.
+            chat_events(rule.corroborate_region, wid,
+                        rule._corroborate_box, cycle)
         return None
 
     if corroborates:
-        text = ocr_cached(wid, rule._corroborate_box, cycle)
-        visible = set()
-        for line in text.splitlines():
-            key = norm_line(line.strip())
-            if len(key) < 8:
-                continue
-            visible.add(key)
-            if key in rule._seen:
-                continue
-            rule._seen.add(key)
+        for event in chat_events(rule.corroborate_region, wid,
+                                 rule._corroborate_box, cycle):
+            line = event.text
             if re.search(rule.corroborate_pattern, line, re.I):
                 # Fresh independent evidence that the activity is still alive.
                 rule._last_activity = now
-                rule._last_activity_source = line.strip()
-        if len(rule._seen) > 400:
-            # Retain the current viewport as the new baseline. Clearing the set
-            # outright would make old scrollback look fresh on the next poll.
-            rule._seen = visible
+                rule._last_activity_source = line
 
     gone = now - rule._absent_since
     if not rule._armed or gone < rule.absent_seconds or not rule.ready(now):
@@ -1817,7 +1821,8 @@ def _eval_timer(rule: Rule, wid: str, box, now: float,
     # Sprite matching first: measured 2516x faster than Tesseract on this
     # readout (0.066 ms vs 165.5 ms), with automatic fallback when the glyphs
     # do not match confidently.
-    text = ocr_numeric(wid, box, capture_array(wid, box, None, cycle))
+    text = ocr_numeric(wid, box, capture_array(wid, box, None, cycle),
+                       cycle=cycle)
     secs = parse_timer(text)
     if secs is None:
         return None
@@ -1929,21 +1934,15 @@ def _eval_loot(rule: Rule, wid: str, box, now: float,
     The item name is echoed back in the alert body, because 'you got something'
     is not useful when the table spans extra fine sand and a master clue.
     """
-    text = ocr_cached(wid, box, cycle)
     if not rule.item_pattern:
         return None
-    for line in text.splitlines():
-        line = line.strip()
-        key = norm_line(line)
-        if len(key) < 8 or key in rule._seen:
-            continue
+    for event in chat_events(rule.region, wid, box, cycle):
+        line = event.text
         if rule.ignore_pattern and re.search(rule.ignore_pattern, line, re.I):
-            rule._seen.add(key)
             continue
         m = re.search(rule.item_pattern, line, re.I)
         if not m:
             continue
-        rule._seen.add(key)
         if not rule._primed:
             continue
         item = (m.group(0) or "").strip(" .,;:")
@@ -1954,9 +1953,6 @@ def _eval_loot(rule: Rule, wid: str, box, now: float,
             return rule.fire(now, f"{item}{suffix}", source_text=line,
                              item=item, count=n)
     rule._primed = True
-    if len(rule._seen) > 400:
-        rule._seen.clear()
-        rule._primed = False
     return None
 
 
@@ -1973,20 +1969,15 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
     Milestones fire per `step` (1,000,000 by default), not per gain, so a
     target of a million coins produces one alert rather than ~2,200.
     """
-    text = ocr_cached(wid, box, cycle)
     if not rule.pattern:
         return None
     gained = 0
     source_line = None
-    for line in text.splitlines():
-        line = line.strip()
-        key = norm_line(line)
-        if len(key) < 8 or key in rule._seen:
-            continue
+    for event in chat_events(rule.region, wid, box, cycle):
+        line = event.text
         m = re.search(rule.pattern, line, re.I)
         if not m:
             continue
-        rule._seen.add(key)
         if not rule._primed:
             continue
         try:
@@ -1994,9 +1985,6 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
             source_line = line
         except (ValueError, IndexError):
             continue
-    if len(rule._seen) > 400:
-        rule._seen.clear()
-        rule._primed = False
     if not rule._primed:
         rule._primed = True
         return None
@@ -2036,28 +2024,18 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
     if rule.kind == "item_count":
         return _eval_item_count(rule, wid, region, box, now, cycle)
     if rule.kind == "ocr":
-        text = ocr_cached(wid, box, cycle)
         if not rule.pattern:
             return
-        for line in text.splitlines():
-            line = line.strip()
-            key = norm_line(line)
-            if len(key) < 8 or key in rule._seen:
-                continue
+        for event in chat_events(rule.region, wid, box, cycle):
+            line = event.text
             if re.search(rule.pattern, line, re.I):
-                rule._seen.add(key)
-                # The chat tail is full of scrollback on startup. Record what
-                # is already on screen without alerting, so the first poll
-                # cannot fire on an event from before the watcher existed.
+                # The chat tail is full of scrollback on startup. The reader
+                # records it once and every rule sees the same event list, but
+                # each rule still owns its own priming/cooldown semantics.
                 if rule._primed and rule.ready(now):
                     return rule.fire(now, line[:120], source_text=line,
                                      line=line, text=line)
         rule._primed = True
-        if len(rule._seen) > 400:
-            # Dropping the whole set would let lines still on screen re-fire,
-            # so re-prime on the next pass instead of alerting again.
-            rule._seen.clear()
-            rule._primed = False
         return
 
     frame = capture_array(wid, box, rule.mask, cycle)
@@ -2319,6 +2297,8 @@ class ChatReader(InterfaceReader):
         self.lines_read = 0
         self.events_emitted = 0
         self.variants_suppressed = 0
+        self._cycle: int | None = None
+        self._cycle_events: list[ChatLine] = []
 
     def _is_variant(self, key: str) -> bool:
         """Whether `key` is an OCR variant of a line already emitted.
@@ -2349,10 +2329,16 @@ class ChatReader(InterfaceReader):
                 return True
         return False
 
-    def read(self, sched: "FrameScheduler", psm: int = 6) -> list[ChatLine]:
-        """New lines visible this cycle, oldest first."""
-        box = sched.box_for(self.region)
-        text = ocr_cached(sched.game.handle, box, sched.cycle, psm)
+    def consume(self, text: str, cycle: int) -> list[ChatLine]:
+        """Normalize one OCR result into events shared by every rule.
+
+        Re-reading in the same cycle returns the exact same event list. This is
+        what lets several rules consume one authoritative dedup stream without
+        the first rule accidentally stealing events from the others.
+        """
+        if self._cycle == cycle:
+            return list(self._cycle_events)
+
         fresh: list[ChatLine] = []
         for raw in text.splitlines():
             line = raw.strip()
@@ -2367,7 +2353,7 @@ class ChatReader(InterfaceReader):
             self._recent.append(key)
             if len(self._recent) > 60:
                 del self._recent[:30]
-            fresh.append(ChatLine(line, key, sched.cycle))
+            fresh.append(ChatLine(line, key, cycle))
         if len(self._seen) > self.max_seen:
             # Dropping the whole set would let lines still on screen re-fire,
             # so callers re-prime rather than alert on the next pass.
@@ -2375,7 +2361,15 @@ class ChatReader(InterfaceReader):
             self._recent.clear()
             self.primed = False
         self.events_emitted += len(fresh)
+        self._cycle = cycle
+        self._cycle_events = list(fresh)
         return fresh
+
+    def read(self, sched: "FrameScheduler", psm: int = 6) -> list[ChatLine]:
+        """New lines visible this cycle, oldest first."""
+        box = sched.box_for(self.region)
+        text = ocr_cached(sched.game.handle, box, sched.cycle, psm)
+        return self.consume(text, sched.cycle)
 
     def forget(self, key: str) -> None:
         """Allow a key to be emitted again; used by replay and tests."""
@@ -2412,6 +2406,24 @@ class ReaderRegistry:
                         getattr(reader, "lines_read", 0),
                         getattr(reader, "events_emitted", 0)))
         return out
+
+
+ACTIVE_READERS = ReaderRegistry()
+
+
+def set_active_readers(registry: ReaderRegistry | None = None) -> ReaderRegistry:
+    """Replace the process-wide reader registry and return the new instance."""
+    global ACTIVE_READERS
+    ACTIVE_READERS = registry if registry is not None else ReaderRegistry()
+    return ACTIVE_READERS
+
+
+def chat_events(region: str, wid: str, box, cycle: int,
+                psm: int = 6) -> list[ChatLine]:
+    """Return one shared, deduplicated chat event stream for a region/cycle."""
+    reader = ACTIVE_READERS.chat(region)
+    text = ocr_cached(wid, box, cycle, psm)
+    return reader.consume(text, cycle)
 
 
 # --------------------------------------------------------------------------
@@ -2625,7 +2637,10 @@ def _check_ocr(cfg: dict, game: GameInstance) -> list[Check]:
     for name in text_regions:
         box = cfg["_regions"][name].resolve(game.size)
         try:
-            text = ocr(game.handle, box)
+            # Exercise the backend selected by doctor, not the legacy
+            # ImageMagick capture path. A clean XCB-only installation should
+            # not fail diagnostics merely because the fallback is absent.
+            text = ocr(game.handle, box, cycle=1, game=game)
         except Exception as e:
             out.append(Check(f"ocr:{name}", FAIL, f"{type(e).__name__}: {e}"))
             continue
@@ -3014,16 +3029,23 @@ def cmd_watch(args) -> None:
     claim_singleton()
     cfg = load_config(args.config)
     ACTIVE_SKILL = cfg.get("skill", "unnamed")
-    wid, size = resolve_window(cfg)
-    # Bind the capture stack built in steps 1-3 so every rule inherits the
-    # selected backend instead of spawning ImageMagick per region.
-    backend = make_backend(getattr(args, "backend", None))
+
+    # A live session must have a usable backend before entering the loop.
+    # Automatic selection may fall back; an explicitly requested backend
+    # fails fast with the reason instead of breaking every rule later.
+    try:
+        backend = make_runtime_backend(getattr(args, "backend", None))
+    except CaptureError as e:
+        sys.exit(str(e))
+
     game = GameInstance(cfg["window"]["wm_class"], backend=backend)
-    if game.acquire():
-        wid, size = game.handle, game.size
-        set_active_game(game)
-    else:
-        game = None
+    if not game.acquire():
+        sys.exit(f"window not found (class={cfg['window']['wm_class']!r}) - "
+                 "is the game running?")
+    wid, size = game.handle, game.size
+    set_active_game(game)
+    set_active_readers(ReaderRegistry())
+
     regs = cfg["_regions"]
     rules = [Rule(**{k: v for k, v in r.items() if not k.startswith("_")})
              for r in cfg["rules"] if r.get("enabled", True)]
@@ -3040,7 +3062,7 @@ def cmd_watch(args) -> None:
     wm_class = cfg["window"]["wm_class"]
     print(f"watching skill={ACTIVE_SKILL!r} profile={args.config} "
           f"{wid} ({wm_class}) {size[0]}x{size[1]} every {interval}s "
-          f"backend={backend.name if game else 'imagemagick (no window)'}")
+          f"backend={backend.name}")
     for r in rules:
         print(f"  {r.name:<18} {r.kind:<7} -> {r.region}")
     print("ctrl-c to stop", flush=True)
@@ -3051,13 +3073,13 @@ def cmd_watch(args) -> None:
     while True:
         cycle += 1
         now = time.monotonic()
-        cur = window_size(wid)
+        cur = game.refresh_size()
         if cur and cur != size:
             print(f"window resized {size} -> {cur}, regions re-anchored", flush=True)
             size = cur
-            if game is not None:
-                # Drops frames captured at the old geometry.
-                game.refresh_size()
+            # Geometry changes invalidate both pixel frames and the text-reader
+            # baseline; rules are re-primed against the newly resolved regions.
+            set_active_readers(ReaderRegistry())
             for r in rules:
                 r.reset()
         try:
@@ -3086,14 +3108,12 @@ def cmd_watch(args) -> None:
         except CaptureError as e:
             misses += 1
             if misses >= 3:
-                new = find_window(wm_class)
-                if new:
-                    print(f"reacquired window {wid} -> {new}", flush=True)
-                    wid, size, misses = new, window_size(new), 0
-                    if game is not None and game.acquire():
-                        # Re-point the bound instance, or capture would keep
-                        # asking the old, now-dead window id for pixels.
-                        wid, size = game.handle, game.size
+                old = wid
+                if game.acquire():
+                    wid, size, misses = game.handle, game.size, 0
+                    print(f"reacquired window {old} -> {wid}", flush=True)
+                    set_active_game(game)
+                    set_active_readers(ReaderRegistry())
                     for r in rules:
                         r.reset()
                 else:
