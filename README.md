@@ -21,8 +21,10 @@ profiles are included today; most other skills, quests, bosses, and minigames
 still need researched profiles, calibration, and fixtures.
 
 For the longer-term architecture and roadmap, see
-[docs/application-outline.md](docs/application-outline.md). The dedicated
-Linux/Windows GUI and platform plan is in
+[docs/application-outline.md](docs/application-outline.md). Practical testing of
+the current executable version is an explicit development priority; its matrix
+is in [docs/practical-validation-plan.md](docs/practical-validation-plan.md).
+The dedicated Linux/Windows GUI and platform plan is in
 [docs/cross-platform-gui-roadmap.md](docs/cross-platform-gui-roadmap.md).
 
 ## Current status
@@ -408,6 +410,18 @@ treated as potentially account-specific captures.
 
 Do not commit runtime screenshots, logs, or account-specific captures unless
 they have been deliberately sanitized and added as test fixtures.
+
+## Validation priority
+
+Screen Watcher is a screen-reading application, so green CI cannot prove that
+the real game window, OCR, notifications, lifecycle, and long-running state all
+behave correctly together. Runtime changes should be followed by practical
+CachyOS testing of the affected commands/profiles.
+
+Confirmed defects in existing functionality take priority over speculative
+roadmap work of comparable importance. See
+[docs/practical-validation-plan.md](docs/practical-validation-plan.md) for the
+smoke/session/soak matrix and validation-report template.
 
 ## Development
 

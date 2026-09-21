@@ -9,6 +9,20 @@ instead of leaking into profiles or detector logic.
 This document defines the two major desktop targets and the cross-platform
 requirements that should influence development before the first GUI ships.
 
+## Validation prerequisite
+
+The cross-platform GUI is a major target, but it must not become an excuse to
+stop testing the current headless Linux implementation.
+
+Before substantial GUI/platform work begins, and again before each major GUI
+milestone, run the relevant portions of
+[practical-validation-plan.md](practical-validation-plan.md). Any critical/high
+defect in existing capture, OCR, rule behavior, persistence, or lifecycle should
+normally be fixed and regression-tested before adding more UI/platform surface.
+
+The GUI roadmap must therefore be built on measured current behavior, not only
+on architectural plans.
+
 ## Product targets
 
 ### Major target A — Linux desktop GUI
