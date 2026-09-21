@@ -2433,8 +2433,10 @@ def test_evaluating_a_counter_never_writes_the_real_state_dir(isolate_state):
     # The write landed in the per-test directory, not the repository.
     assert watcher.COUNTER_LOG.parent == isolate_state
     assert watcher.COUNTER_LOG.exists()
-    assert not (Path(__file__).resolve().parents[1]
-                / "state" / "counters.jsonl").samefile(watcher.COUNTER_LOG)
+    real_counter_log = (Path(__file__).resolve().parents[1]
+                        / "state" / "counters.jsonl")
+    assert not real_counter_log.exists()
+    assert real_counter_log.resolve() != watcher.COUNTER_LOG.resolve()
 
 
 # --------------------------------------------------------------------------
