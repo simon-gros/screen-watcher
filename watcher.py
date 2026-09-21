@@ -563,6 +563,186 @@ class X11XcbBackend(CaptureBackend):
         return out
 
 
+#: Where the ScreenCast restore token is kept. It lets a later run reuse a
+#: granted capture without showing the picker again, which is the difference
+#: between a watcher that can restart unattended and one that needs a human.
+PORTAL_TOKEN_FILE = STATE_DIR / "portal-token"
+
+
+def _portal_screencast_available() -> bool:
+    """Whether the ScreenCast portal answers on the session bus.
+
+    The main loop is installed first, deliberately. python-dbus caches the
+    session connection, so the FIRST SessionBus created in a process fixes
+    whether asynchronous calls work for every later user of it. Probing
+    without the loop attached poisoned the connection, and the portal then
+    refused with "D-Bus connections must be attached to a main loop" -
+    diagnosed only because the failure was reported rather than swallowed.
+    """
+    try:
+        import dbus
+        import dbus.mainloop.glib
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        bus = dbus.SessionBus()
+        obj = bus.get_object("org.freedesktop.portal.Desktop",
+                             "/org/freedesktop/portal/desktop")
+        dbus.Interface(obj, "org.freedesktop.DBus.Properties").Get(
+            "org.freedesktop.portal.ScreenCast", "version")
+        return True
+    except Exception:                                # noqa: BLE001
+        return False
+
+
+class WaylandPortalBackend(CaptureBackend):
+    """Capture through the XDG ScreenCast portal and PipeWire.
+
+    Native Wayland has no `XGetImage` equivalent - a client cannot capture a
+    window it does not own - so the portal, which asks the user to grant a
+    source, is the supported route.
+
+    The shape mismatch is the interesting part. `CaptureBackend` asks for a
+    rectangle on demand; PipeWire pushes a continuous stream. This holds the
+    newest frame and crops from it, which is not a workaround but the
+    cheaper design: measured at step 8, the portal delivered a full
+    3840x2107 frame in 16.8 ms against 35.0 ms for XCB's six separate region
+    requests. Area stops dominating once the compositor is compositing those
+    pixels anyway.
+
+    Consent cannot be bypassed, and that is the point - it is what makes
+    arbitrary window capture safe on Wayland. A restore token is persisted
+    so a later run can reuse the grant; the portal may decline to issue one,
+    so its absence is normal rather than an error.
+    """
+
+    name = "wayland-portal"
+
+    #: Reported as the handle. The portal identifies a stream, not a window.
+    HANDLE = "portal:0"
+
+    def __init__(self) -> None:
+        self._session = None
+        self._reader = None
+        self._size: tuple[int, int] | None = None
+        self._frame: np.ndarray | None = None
+        self._failed = ""
+
+    def available(self) -> tuple[bool, str]:
+        if self._failed:
+            return False, self._failed
+        if not _session_is_wayland():
+            return False, "not a Wayland session"
+        try:
+            import gi
+            gi.require_version("Gst", "1.0")
+            from gi.repository import Gst            # noqa: F401
+            import dbus                              # noqa: F401
+        except (ImportError, ValueError) as e:
+            return False, f"missing dependency: {e}"
+        if not _portal_screencast_available():
+            return False, "ScreenCast portal not on the session bus"
+        return True, "ok"
+
+    def _ensure_session(self) -> bool:
+        """Open a portal session, reusing a stored grant when possible."""
+        if self._reader is not None:
+            return True
+        ok, why = self.available()
+        if not ok:
+            self._failed = why
+            return False
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            from tools.portal_poc import PipeWireReader, PortalSession
+        except ImportError as e:
+            self._failed = f"portal helper unavailable: {e}"
+            return False
+
+        token = None
+        if PORTAL_TOKEN_FILE.exists():
+            try:
+                token = PORTAL_TOKEN_FILE.read_text().strip() or None
+            except OSError:
+                token = None
+
+        session = PortalSession()
+        try:
+            session.create()
+            session.select(restore_token=token)
+            node = session.start()
+        except Exception as e:                       # noqa: BLE001
+            # A cancelled picker is a refusal, not a crash: report it once
+            # so the caller can fall back to another backend.
+            self._failed = f"portal session refused: {e}"
+            return False
+
+        if session.restore_token:
+            self._store_token(session.restore_token)
+        self._session = session
+        self._reader = PipeWireReader(node)
+        return True
+
+    @staticmethod
+    def _store_token(token: str) -> None:
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            PORTAL_TOKEN_FILE.write_text(token)
+            # The token grants screen capture until revoked, so keep it to
+            # the owner rather than world-readable inside a repository.
+            PORTAL_TOKEN_FILE.chmod(0o600)
+        except OSError:
+            pass
+
+    def find(self, wm_class: str) -> str | None:
+        return self.HANDLE if self._ensure_session() else None
+
+    def size(self, handle: str) -> tuple[int, int] | None:
+        if self._size is None:
+            frame = self._latest()
+            if frame is not None:
+                self._size = (frame.shape[1], frame.shape[0])
+        return self._size
+
+    def _latest(self, timeout: float = 5.0) -> np.ndarray | None:
+        """Newest frame, or the previous one when none has arrived.
+
+        A momentary gap is not a capture failure - the compositor sends a
+        frame when something changes - so the last frame is reused rather
+        than raising. `RegionHealth` is what notices a genuinely frozen
+        source.
+        """
+        if not self._ensure_session():
+            return None
+        frame = self._reader.frame(timeout=timeout)
+        if frame is not None:
+            self._frame = frame
+        return self._frame
+
+    def grab_array(self, handle: str, box) -> np.ndarray:
+        frame = self._latest()
+        if frame is None:
+            raise CaptureError("portal stream produced no frame")
+        x, y, w, h = box
+        crop = frame[y:y + h, x:x + w]
+        if crop.size == 0:
+            raise CaptureError(
+                f"region {box} lies outside the {frame.shape[1]}x"
+                f"{frame.shape[0]} portal frame")
+        return crop
+
+    def grab_file(self, handle: str, box, out: Path,
+                  resize: str | None = None) -> Path:
+        Image.fromarray(self.grab_array(handle, box)).save(out)
+        return out
+
+    def close(self) -> None:
+        reader, self._reader = self._reader, None
+        if reader is not None:
+            try:
+                reader.close()
+            except Exception:                        # noqa: BLE001
+                pass
+
+
 class ReplayBackend(CaptureBackend):
     """Replay recorded full-window frames instead of capturing live ones.
 
@@ -666,6 +846,7 @@ BACKENDS: dict[str, type[CaptureBackend]] = {
     X11ImageMagickBackend.name: X11ImageMagickBackend,
     X11XcbBackend.name: X11XcbBackend,
     ReplayBackend.name: ReplayBackend,
+    WaylandPortalBackend.name: WaylandPortalBackend,
 }
 DEFAULT_BACKEND = X11XcbBackend.name
 
