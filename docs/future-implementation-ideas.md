@@ -1,11 +1,17 @@
 # Future implementation ideas
 
-This document is primarily an **idea backlog**, but it begins with two promoted
-roadmap tracks: the **Priority 0 Linux technical foundation** and the subsequent
-**Windows + Linux desktop/GUI target**. Priority 0 remains the immediate
-implementation gate; the cross-platform desktop target is the next major product
-track and must influence architecture now so Linux-specific assumptions do not
-spread into the core.
+This document is primarily an **idea backlog**, but three tracks are promoted
+above ordinary wishlist work:
+
+1. **Immediate practical validation of the current implementation**;
+2. the **Priority 0 Linux technical foundation**;
+3. the subsequent **Windows + Linux desktop/GUI target**.
+
+Practical validation is the first priority whenever recent runtime changes have
+not yet been exercised in real use or when known defects remain unresolved.
+Priority 0 remains the architectural implementation gate; the cross-platform
+desktop target is the next major product track and must influence architecture
+now so Linux-specific assumptions do not spread into the core.
 
 All later sections remain research/backlog material unless promoted. Some ideas
 may never be implemented because they depend on equipment, activities, UI
@@ -18,6 +24,30 @@ items are different: they are infrastructure required to make later detectors,
 profiles, overlays, diagnostics, and Linux support reliable. The promoted
 cross-platform desktop items are likewise architectural commitments rather than
 optional feature ideas.
+
+## IMMEDIATE PRIORITY — validate the working version in practice
+
+Do not allow the size of this research backlog to create the impression that
+future architecture is more important than the executable program.
+
+The current Linux implementation must be tested on the real CachyOS desktop in
+ordinary Fishing and Thieving sessions, including capture, OCR, profile rules,
+window lifecycle, persistence, notifications, performance, and long-running
+behavior. Confirmed failures in existing functionality outrank new speculative
+features of comparable severity.
+
+Use [practical-validation-plan.md](practical-validation-plan.md) as the
+repeatable test matrix. The required pattern is:
+
+**observe -> reproduce -> record -> regression-test -> fix -> retest**.
+
+A green unit-test/CI run is only Level A evidence. Runtime-affecting changes
+should also receive real desktop smoke/session/soak validation appropriate to
+their risk.
+
+This priority remains continuous through later phases: every major backend, GUI,
+reader, storage, or profile change must revalidate the behavior that already
+exists before more surface area is added.
 
 ## PRIORITY 0 — Linux/CachyOS technical foundation
 
