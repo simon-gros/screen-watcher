@@ -1380,3 +1380,109 @@ def test_parsed_sprite_timer_matches_parse_timer():
     frame = _render_digits("01:00:02")
     text = watcher.read_numeric(frame)
     assert watcher.parse_timer(text) == 3602
+
+
+# --------------------------------------------------------------------------
+# Priority 0, step 10: rules consume the capture stack
+# --------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _clear_active_game():
+    """No test may leak a bound GameInstance into another."""
+    watcher.set_active_game(None)
+    yield
+    watcher.set_active_game(None)
+
+
+def test_capture_array_uses_bound_game_instance():
+    backend = RecordingBackend(size=(100, 100))
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    watcher.set_active_game(game)
+
+    watcher.capture_array(game.handle, (0, 0, 10, 10), None, cycle=1)
+
+    assert backend.grabs == [(0, 0, 10, 10)]
+
+
+def test_capture_array_shares_frames_across_rules():
+    """Two rules on one region in one cycle must cost one capture."""
+    backend = RecordingBackend(size=(100, 100))
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    watcher.set_active_game(game)
+
+    for _ in range(3):
+        watcher.capture_array(game.handle, (0, 0, 10, 10), None, cycle=7)
+
+    assert len(backend.grabs) == 1
+
+
+def test_capture_array_falls_back_without_a_bound_game():
+    calls = []
+    original = watcher._capture_array_uncached
+    try:
+        watcher._capture_array_uncached = lambda wid, box: (
+            calls.append(wid) or np.zeros((box[3], box[2], 3), dtype=np.int16))
+        watcher.capture_array("legacy-id", (0, 0, 10, 10), None, cycle=1)
+    finally:
+        watcher._capture_array_uncached = original
+
+    assert calls == ["legacy-id"]
+
+
+def test_capture_array_ignores_a_mismatched_handle():
+    """A bound instance must not serve pixels for a different window."""
+    backend = RecordingBackend(size=(100, 100))
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    watcher.set_active_game(game)
+
+    calls = []
+    original = watcher._capture_array_uncached
+    try:
+        watcher._capture_array_uncached = lambda wid, box: (
+            calls.append(wid) or np.zeros((box[3], box[2], 3), dtype=np.int16))
+        watcher.capture_array("a-different-window", (0, 0, 10, 10), None,
+                              cycle=1)
+    finally:
+        watcher._capture_array_uncached = original
+
+    assert calls == ["a-different-window"]
+    assert backend.grabs == []
+
+
+def test_pixel_rules_route_through_the_bound_backend():
+    """The point of step 10: no rule reaches ImageMagick any more."""
+    backend = RecordingBackend(size=(2505, 1986))
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    watcher.set_active_game(game)
+
+    cfg = load_config(Path("profiles/thieving.json"))
+    rules = [Rule(**{k: v for k, v in r.items() if not k.startswith("_")})
+             for r in cfg["rules"]
+             if r.get("enabled", True) and r["kind"] in ("inventory", "stack")]
+    assert rules, "profile should contain pixel rules"
+
+    for cycle in (1, 2):
+        for rule in rules:
+            watcher.evaluate(rule, game.handle, cfg["_regions"][rule.region],
+                             game.size, 1000.0 + cycle, cycle)
+
+    # every rule here watches `backpack`, so one grab per cycle
+    assert len(backend.grabs) == 2
+
+
+def test_resize_clears_frames_for_bound_instance():
+    backend = RecordingBackend(size=(100, 100))
+    game = watcher.GameInstance("game", backend=backend)
+    game.acquire()
+    watcher.set_active_game(game)
+
+    watcher.capture_array(game.handle, (0, 0, 10, 10), None, cycle=1)
+    backend._size = (200, 200)
+    game.refresh_size()
+    watcher.capture_array(game.handle, (0, 0, 10, 10), None, cycle=1)
+
+    assert len(backend.grabs) == 2

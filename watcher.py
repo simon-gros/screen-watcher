@@ -679,14 +679,37 @@ def _capture_array_uncached(wid: str, box) -> np.ndarray:
             raise CaptureError(f"unreadable capture: {e}") from e
 
 
+ACTIVE_GAME: "GameInstance | None" = None
+
+
+def set_active_game(game: "GameInstance | None") -> None:
+    """Route capture through a `GameInstance` for the rest of the process.
+
+    Priority 0, step 10. The rule evaluators each take a raw window id and
+    call `capture_array`, so migrating them individually would mean changing
+    fourteen signatures and every caller at once. Binding the active game
+    here instead means one change reaches all of them, and behaviour is
+    identical because `GameInstance.frame` owns the same per-cycle cache.
+
+    The win is that rules stop depending on the ImageMagick path: with an
+    active instance they inherit whichever backend it holds, which is the
+    XCB one by default.
+    """
+    global ACTIVE_GAME
+    ACTIVE_GAME = game
+
+
 def capture_array(wid: str, box, mask: str | None = None,
                   cycle: int | None = None) -> np.ndarray:
     """Capture a region once per cycle and return its RGB array.
 
-    Retained for call sites that still pass a raw window id. New code should
-    go through `GameInstance.frame`, which owns the same cache keyed on an
-    explicit cycle.
+    Delegates to the active `GameInstance` when one is bound, so existing
+    call sites get the selected backend without changing their signature.
     """
+    game = ACTIVE_GAME
+    if game is not None and game.handle == wid and cycle is not None:
+        game.begin_cycle(cycle)
+        return game.frame(box, mask)
     key = (wid, tuple(box), mask)
     if cycle is not None:
         hit = _FRAME_CACHE.get(key)
@@ -942,8 +965,18 @@ def ocr_cached(wid: str, box, cycle: int, psm: int = 6) -> str:
 
 
 def ocr(wid: str, box, psm: int = 6) -> str:
+    """Tesseract over one region.
+
+    The capture goes through the active `GameInstance` when one is bound, so
+    OCR rules inherit the selected backend instead of always paying for an
+    ImageMagick subprocess.
+    """
     with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
-        capture(wid, box, Path(tmp.name))
+        game = ACTIVE_GAME
+        if game is not None and game.handle == wid:
+            game.save(box, Path(tmp.name))
+        else:
+            capture(wid, box, Path(tmp.name))
         r = subprocess.run(["tesseract", tmp.name, "stdout", "--psm", str(psm)],
                            capture_output=True, text=True, timeout=30)
         return r.stdout.strip()
@@ -2982,6 +3015,15 @@ def cmd_watch(args) -> None:
     cfg = load_config(args.config)
     ACTIVE_SKILL = cfg.get("skill", "unnamed")
     wid, size = resolve_window(cfg)
+    # Bind the capture stack built in steps 1-3 so every rule inherits the
+    # selected backend instead of spawning ImageMagick per region.
+    backend = make_backend(getattr(args, "backend", None))
+    game = GameInstance(cfg["window"]["wm_class"], backend=backend)
+    if game.acquire():
+        wid, size = game.handle, game.size
+        set_active_game(game)
+    else:
+        game = None
     regs = cfg["_regions"]
     rules = [Rule(**{k: v for k, v in r.items() if not k.startswith("_")})
              for r in cfg["rules"] if r.get("enabled", True)]
@@ -2997,7 +3039,8 @@ def cmd_watch(args) -> None:
     interval = cfg.get("interval", 1.0)
     wm_class = cfg["window"]["wm_class"]
     print(f"watching skill={ACTIVE_SKILL!r} profile={args.config} "
-          f"{wid} ({wm_class}) {size[0]}x{size[1]} every {interval}s")
+          f"{wid} ({wm_class}) {size[0]}x{size[1]} every {interval}s "
+          f"backend={backend.name if game else 'imagemagick (no window)'}")
     for r in rules:
         print(f"  {r.name:<18} {r.kind:<7} -> {r.region}")
     print("ctrl-c to stop", flush=True)
@@ -3012,6 +3055,9 @@ def cmd_watch(args) -> None:
         if cur and cur != size:
             print(f"window resized {size} -> {cur}, regions re-anchored", flush=True)
             size = cur
+            if game is not None:
+                # Drops frames captured at the old geometry.
+                game.refresh_size()
             for r in rules:
                 r.reset()
         try:
@@ -3044,6 +3090,10 @@ def cmd_watch(args) -> None:
                 if new:
                     print(f"reacquired window {wid} -> {new}", flush=True)
                     wid, size, misses = new, window_size(new), 0
+                    if game is not None and game.acquire():
+                        # Re-point the bound instance, or capture would keep
+                        # asking the old, now-dead window id for pixels.
+                        wid, size = game.handle, game.size
                     for r in rules:
                         r.reset()
                 else:
