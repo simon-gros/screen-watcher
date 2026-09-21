@@ -95,14 +95,23 @@ def _xdo(*args: str) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
-def find_window(wm_class: str, min_area: int = 100_000) -> str | None:
-    """Largest viewable window matching WM_CLASS.
+def find_window(wm_class: str, min_area: int = 100_000,
+                visible_only: bool = True) -> str | None:
+    """Largest window matching WM_CLASS.
 
     WM_CLASS beats title matching: it survives title changes and skips
     launcher windows that share the game's name.
+
+    `visible_only=False` also returns unmapped windows. A minimised client,
+    or one on another virtual desktop, is invisible to `--onlyvisible` but
+    is very much still running - and the two cases need opposite responses.
+    Losing the window means stop; losing focus means wait.
     """
+    args = ["search", "--class", wm_class]
+    if visible_only:
+        args.insert(1, "--onlyvisible")
     best, best_area = None, 0
-    for wid in _xdo("search", "--onlyvisible", "--class", wm_class).splitlines():
+    for wid in _xdo(*args).splitlines():
         wid = wid.strip()
         if not wid:
             continue
@@ -1059,6 +1068,16 @@ def segment_glyphs(frame: np.ndarray, threshold: float = 140.0
             glyphs.append(None)
             continue
         cell = mask[top:bottom, a:b]
+        # Crop each glyph to its OWN ink rather than the whole readout's
+        # vertical extent. A window resize changes the UI scale, so glyphs
+        # render a pixel taller and every one shifts inside a fixed box -
+        # observed as a 14px readout against 13px templates, which dropped
+        # the second digit of each pair to 0.75-0.78 and silently disabled
+        # the fast path. Per-glyph cropping makes matching scale-tolerant.
+        own = cell.any(axis=1)
+        ink = np.where(own)[0]
+        if len(ink):
+            cell = cell[int(ink.min()):int(ink.max()) + 1]
         box = np.zeros((_GLYPH_H, _GLYPH_W), dtype=bool)
         h = min(_GLYPH_H, cell.shape[0])
         w = min(_GLYPH_W, cell.shape[1])
@@ -1067,15 +1086,35 @@ def segment_glyphs(frame: np.ndarray, threshold: float = 140.0
     return glyphs
 
 
+def _best_template_score(glyph: np.ndarray) -> tuple[str | None, float]:
+    """Best digit and score over small alignment offsets.
+
+    A window resize changes the UI scale, so the same digit renders a pixel
+    taller or shifted inside its cell. Measured on a live resize, the second
+    digit of each pair fell to 0.75-0.78 and silently disabled the fast
+    path - a one-pixel shift recovered it to 0.80+. Trying a +/-1 offset
+    costs nine comparisons against a 117-pixel bitmap and removes a whole
+    class of scale-dependent failures.
+    """
+    best, best_score = None, 0.0
+    for dy in (0, -1, 1):
+        for dx in (0, -1, 1):
+            shifted = glyph
+            if dy:
+                shifted = np.roll(shifted, dy, axis=0)
+            if dx:
+                shifted = np.roll(shifted, dx, axis=1)
+            for digit, template in DIGIT_TEMPLATES.items():
+                score = float((shifted == template).sum()) / template.size
+                if score > best_score:
+                    best, best_score = digit, score
+    return best, best_score
+
+
 def match_digit(glyph: np.ndarray, min_score: float = 0.80
                 ) -> tuple[str | None, float]:
     """Best-matching digit for a glyph bitmap, with its agreement score."""
-    best, best_score = None, 0.0
-    size = glyph.size
-    for digit, template in DIGIT_TEMPLATES.items():
-        score = float((glyph == template).sum()) / size
-        if score > best_score:
-            best, best_score = digit, score
+    best, best_score = _best_template_score(glyph)
     return (best, best_score) if best_score >= min_score else (None, best_score)
 
 
@@ -2976,6 +3015,117 @@ def cmd_alerts(args) -> None:
             print(f"  {stamp}  {r['rule']:<18} {r['body'][:70]}")
 
 
+class WindowTracker:
+    """Keeps a watch loop pointed at the live game window.
+
+    Extracted from `cmd_watch` because the interesting behaviour only shows
+    up in states that are awkward to produce by hand: a client that is
+    minimised, moved to another virtual desktop, restarted under a new
+    window id, or caught mid-resize between the geometry call and the
+    capture. Inline, none of that could be tested.
+
+    The rule it encodes: **a window that is merely unmapped is not a window
+    that is gone.** Previously three consecutive capture failures ran
+    `find_window`, which passes `--onlyvisible` and therefore reports
+    nothing for a minimised client - so alt-tabbing away for three seconds
+    made the watcher exit with "game window gone", permanently, mid-session.
+    Distinguishing the two costs one extra xdotool call on the failure path
+    and is the difference between pausing and dying.
+    """
+
+    #: Consecutive capture failures tolerated before reacquiring.
+    MISS_LIMIT = 3
+    #: Cycles to wait between reacquire attempts while hidden, and the cap.
+    #: Backoff keeps a long alt-tab from spawning an xdotool call per second.
+    BACKOFF_START = 1
+    BACKOFF_MAX = 30
+
+    def __init__(self, wm_class: str, wid: str, size: tuple[int, int],
+                 game: "GameInstance | None" = None):
+        self.wm_class = wm_class
+        self.wid = wid
+        self.size = size
+        self.game = game
+        self.misses = 0
+        self.hidden = False
+        self._wait = 0
+        self._backoff = self.BACKOFF_START
+
+    # -- state transitions -------------------------------------------------
+
+    def note_success(self) -> None:
+        self.misses = 0
+
+    def poll_size(self) -> tuple[int, int] | None:
+        """Current geometry, or None when the window is not answering.
+
+        Returns None rather than a stale value so callers never compare
+        against a size that was never read; `size` itself is only ever
+        replaced by a real measurement.
+        """
+        return window_size(self.wid)
+
+    def note_resize(self, cur: tuple[int, int]) -> bool:
+        """Adopt a new geometry. True when it actually changed."""
+        if not cur or cur == self.size:
+            return False
+        self.size = cur
+        if self.game is not None:
+            self.game.refresh_size()
+        return True
+
+    def note_miss(self) -> bool:
+        """Record a capture failure. True once reacquisition is due."""
+        self.misses += 1
+        return self.misses >= self.MISS_LIMIT
+
+    # -- reacquisition -----------------------------------------------------
+
+    def reacquire(self) -> tuple[str, str | None]:
+        """Try to re-point at the game.
+
+        Returns `(status, detail)` where status is one of:
+
+        - ``"ok"``     - pointing at a live, visible window;
+        - ``"hidden"`` - the window exists but is unmapped; wait, do not exit;
+        - ``"gone"``   - no window under this WM_CLASS at all; stop.
+        """
+        if self._wait > 0:
+            self._wait -= 1
+            return "hidden", None
+
+        new = find_window(self.wm_class)
+        if not new:
+            # Not visible. Before declaring it gone, ask again including
+            # unmapped windows - that is the minimised/other-desktop case.
+            if find_window(self.wm_class, visible_only=False):
+                self.hidden = True
+                self._wait = self._backoff
+                self._backoff = min(self._backoff * 2, self.BACKOFF_MAX)
+                return "hidden", None
+            return "gone", None
+
+        size = window_size(new)
+        if self.game is not None and self.game.acquire():
+            new, size = self.game.handle, self.game.size
+        if not size:
+            # Found it, but it vanished again before geometry could be read.
+            # Treat as still hidden rather than adopting size=None, which
+            # would make every later resize check compare against nothing
+            # and report a phantom resize on each cycle.
+            self.hidden = True
+            self._wait = self._backoff
+            self._backoff = min(self._backoff * 2, self.BACKOFF_MAX)
+            return "hidden", None
+
+        was, self.wid, self.size = self.wid, new, size
+        self.misses = 0
+        self.hidden = False
+        self._wait = 0
+        self._backoff = self.BACKOFF_START
+        return "ok", (was if was != new else None)
+
+
 PID_FILE = STATE_DIR / "watcher.pid"
 
 
@@ -3045,19 +3195,32 @@ def cmd_watch(args) -> None:
         print(f"  {r.name:<18} {r.kind:<7} -> {r.region}")
     print("ctrl-c to stop", flush=True)
 
-    misses = 0
+    tracker = WindowTracker(wm_class, wid, size, game)
     cycle = 0
     next_poll = time.monotonic()
     while True:
         cycle += 1
         now = time.monotonic()
-        cur = window_size(wid)
-        if cur and cur != size:
+        if tracker.hidden:
+            # The window is unmapped (minimised, or on another desktop).
+            # Capturing it would fail every cycle, so skip the rules
+            # entirely and spend the cycle trying to get it back.
+            status, _ = tracker.reacquire()
+            if status == "ok":
+                wid, size = tracker.wid, tracker.size
+                print(f"window back {wid} {size[0]}x{size[1]}", flush=True)
+                for r in rules:
+                    r.reset()
+            elif status == "gone":
+                notify("Screen Watcher", "game window gone - stopping", "critical")
+                sys.exit("window gone")
+            next_poll += interval
+            time.sleep(max(0.0, next_poll - time.monotonic()))
+            continue
+        cur = tracker.poll_size()
+        if cur and tracker.note_resize(cur):
             print(f"window resized {size} -> {cur}, regions re-anchored", flush=True)
             size = cur
-            if game is not None:
-                # Drops frames captured at the old geometry.
-                game.refresh_size()
             for r in rules:
                 r.reset()
         try:
@@ -3082,25 +3245,24 @@ def cmd_watch(args) -> None:
                     # looks identical to "it was never running".
                     print(f"rule {rule.name!r} failed: {type(e).__name__}: {e}",
                           flush=True)
-            misses = 0
+            tracker.note_success()
         except CaptureError as e:
-            misses += 1
-            if misses >= 3:
-                new = find_window(wm_class)
-                if new:
-                    print(f"reacquired window {wid} -> {new}", flush=True)
-                    wid, size, misses = new, window_size(new), 0
-                    if game is not None and game.acquire():
-                        # Re-point the bound instance, or capture would keep
-                        # asking the old, now-dead window id for pixels.
-                        wid, size = game.handle, game.size
+            if not tracker.note_miss():
+                print(f"capture miss: {e}", flush=True)
+            else:
+                status, was = tracker.reacquire()
+                if status == "ok":
+                    wid, size = tracker.wid, tracker.size
+                    if was:
+                        print(f"reacquired window {was} -> {wid}", flush=True)
                     for r in rules:
                         r.reset()
+                elif status == "hidden":
+                    print("window hidden (minimised or off-desktop), waiting",
+                          flush=True)
                 else:
                     notify("Screen Watcher", "game window gone - stopping", "critical")
                     sys.exit("window gone")
-            else:
-                print(f"capture miss: {e}", flush=True)
         next_poll += interval
         time.sleep(max(0.0, next_poll - time.monotonic()))
 

@@ -1486,3 +1486,133 @@ def test_resize_clears_frames_for_bound_instance():
     watcher.capture_array(game.handle, (0, 0, 10, 10), None, cycle=1)
 
     assert len(backend.grabs) == 2
+
+
+# --------------------------------------------------------------------------
+# WindowTracker - focus loss must not be mistaken for the game closing
+# --------------------------------------------------------------------------
+
+class FakeWindows:
+    """Stands in for xdotool, with controllable visibility and identity."""
+
+    def __init__(self, wid="0x100", size=(800, 600)):
+        self.wid, self.size = wid, size
+        self.visible = True
+        self.exists = True
+        self.lookups = 0
+
+    def install(self, monkeypatch):
+        def find(cls, min_area=100_000, visible_only=True):
+            self.lookups += 1
+            if not self.exists:
+                return None
+            if visible_only and not self.visible:
+                return None
+            return self.wid
+
+        def size(wid):
+            return self.size if self.exists and wid == self.wid else None
+
+        monkeypatch.setattr(watcher, "find_window", find)
+        monkeypatch.setattr(watcher, "window_size", size)
+        return self
+
+
+@pytest.fixture
+def windows(monkeypatch):
+    return FakeWindows().install(monkeypatch)
+
+
+def test_minimised_window_reports_hidden_not_gone(windows):
+    """Alt-tabbing away used to kill the watcher permanently.
+
+    `find_window` passes --onlyvisible, so an unmapped window looked
+    identical to a closed one and three capture misses called sys.exit.
+    """
+    windows.visible = False
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600))
+
+    for _ in range(watcher.WindowTracker.MISS_LIMIT):
+        due = tracker.note_miss()
+    assert due
+
+    status, _ = tracker.reacquire()
+    assert status == "hidden"
+    assert tracker.hidden
+
+
+def test_closed_window_still_reports_gone(windows):
+    """The hidden case must not mask a real exit."""
+    windows.exists = False
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600))
+
+    assert tracker.reacquire()[0] == "gone"
+
+
+def test_restored_window_is_reacquired_under_a_new_id(windows):
+    """A client restart gives the game a different window id."""
+    windows.visible = False
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600))
+    assert tracker.reacquire()[0] == "hidden"
+
+    windows.visible = True
+    windows.wid, windows.size = "0x200", (1024, 768)
+    tracker._wait = 0
+
+    status, was = tracker.reacquire()
+    assert (status, was) == ("ok", "0x100")
+    assert (tracker.wid, tracker.size) == ("0x200", (1024, 768))
+    assert not tracker.hidden
+    assert tracker.misses == 0
+
+
+def test_hidden_reacquire_backs_off(windows):
+    """A long alt-tab must not spawn an xdotool pair every cycle."""
+    windows.visible = False
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600))
+
+    for _ in range(120):
+        tracker.reacquire()
+
+    # Without backoff this would be 240 - two lookups on every cycle.
+    assert windows.lookups < 40
+
+
+def test_reacquire_never_adopts_a_missing_size(windows):
+    """Geometry can vanish between find and size on a racing resize.
+
+    Adopting size=None made every later resize check compare against
+    nothing, reporting a phantom resize on every single cycle.
+    """
+    windows.visible = True
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600))
+    windows.exists = False          # find succeeds, size returns None
+
+    def find(cls, min_area=100_000, visible_only=True):
+        return "0x100"
+
+    watcher.find_window = find
+    status, _ = tracker.reacquire()
+
+    assert status == "hidden"
+    assert tracker.size == (800, 600)
+
+
+def test_note_resize_ignores_unchanged_and_missing_geometry(windows):
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600))
+
+    assert tracker.note_resize((800, 600)) is False
+    assert tracker.note_resize(None) is False
+    assert tracker.note_resize((1024, 768)) is True
+    assert tracker.size == (1024, 768)
+
+
+def test_successful_cycle_clears_the_miss_counter(windows):
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600))
+
+    tracker.note_miss()
+    tracker.note_miss()
+    tracker.note_success()
+
+    assert tracker.misses == 0
+    assert tracker.note_miss() is False
