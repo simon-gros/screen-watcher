@@ -314,9 +314,9 @@ The thieving profile's four live regions total **0.69 MPx** against a
 encode/decode cost tracks that ratio exactly (11.4x slower).
 
 Capture strategy therefore stays per-region. The scheduler's value is
-coherence and accounting, not fewer pixels. This is worth remembering before
-the native XCB/XShm backend lands in step 3: shared memory changes the
-constant factor, not the pixel ratio.
+coherence and accounting, not fewer pixels. The shipped XCB `GetImage` backend
+changes the constant factor substantially; any future XShm work still does not
+change the underlying pixel-ratio trade-off.
 
 ### Failure isolation
 
@@ -462,7 +462,10 @@ words. Digit groups count as readable tokens too.
 
 Running it against the thieving profile immediately surfaced two real issues:
 
-- `metrics_xp` and `orbs` are captured but used by no enabled rule;
+- the original profiles carried unused `orbs` regions and disabled-only
+  `metrics_xp` regions; obsolete `orbs` entries were removed, while
+  `metrics_xp` remains because the bundled disabled `xp_stalled` rule still
+  references it;
 - `coin_milestone` and `session_hour` shared `complete-media-burn`, so a coin
   milestone and an hour milestone were indistinguishable by ear - which
   defeats the purpose of per-rule sounds. `session_hour` now uses
