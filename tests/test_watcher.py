@@ -2539,6 +2539,16 @@ def test_evaluating_a_counter_never_writes_the_real_state_dir(isolate_state):
     rule._primed = True
     region = Region("top-left", 0, 0, 10, 10)
 
+    # Snapshot the real log first. It normally DOES exist on a machine the
+    # watcher has run on, holding the player's genuine coin total, so
+    # asserting its absence only passes on a clean checkout - which is how
+    # this test failed locally while passing in CI. What matters is that
+    # the test does not disturb it, not that it is missing.
+    real_counter_log = (Path(__file__).resolve().parents[1]
+                        / "state" / "counters.jsonl")
+    before = (real_counter_log.read_bytes()
+              if real_counter_log.exists() else None)
+
     original = watcher.ocr_cached
     watcher.ocr_cached = (
         lambda *a, **k: "[10:00:00] 455 coins have been added to your money pouch.")
@@ -2550,10 +2560,10 @@ def test_evaluating_a_counter_never_writes_the_real_state_dir(isolate_state):
     # The write landed in the per-test directory, not the repository.
     assert watcher.COUNTER_LOG.parent == isolate_state
     assert watcher.COUNTER_LOG.exists()
-    real_counter_log = (Path(__file__).resolve().parents[1]
-                        / "state" / "counters.jsonl")
-    assert not real_counter_log.exists()
     assert real_counter_log.resolve() != watcher.COUNTER_LOG.resolve()
+    after = (real_counter_log.read_bytes()
+             if real_counter_log.exists() else None)
+    assert after == before, "the test wrote to the real state directory"
 
 
 # --------------------------------------------------------------------------
