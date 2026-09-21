@@ -1155,6 +1155,123 @@ def test_doctor_reports_missing_required_tool(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# missing external tools
+#
+# Every external binary is invoked through subprocess, and a machine that
+# does not have one raises FileNotFoundError at the call. Left unguarded
+# that turns a diagnosable "install xdotool" into a traceback - and, for
+# notify-send, loses an alert hours into a session. Each tool degrades on
+# the channel its caller already handles.
+# --------------------------------------------------------------------------
+
+def _no_tools(monkeypatch):
+    """A machine where none of the external binaries exist."""
+    def missing(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", a[0][0])
+
+    monkeypatch.setattr(watcher.shutil, "which", lambda t: None)
+    monkeypatch.setattr(watcher.subprocess, "run", missing)
+    monkeypatch.setattr(watcher.subprocess, "Popen", missing)
+
+
+def test_doctor_runs_on_a_machine_with_no_tools_installed(monkeypatch):
+    """The one command that exists to name missing tools must not die on them.
+
+    Reproduced on a bare container: `doctor` raised FileNotFoundError out of
+    `_xdo` inside `_check_window`, and because the report is printed only
+    after every check has run, the operator saw a traceback and not one of
+    the diagnostic lines - including the `xdotool FAIL` line that was
+    already computed and waiting.
+    """
+    _no_tools(monkeypatch)
+
+    checks = watcher.run_doctor(_thieving(), Path("profiles/thieving.json"))
+
+    areas = {c.area: c for c in checks}
+    assert areas["xdotool"].verdict == "FAIL"
+    assert areas["xdotool"].remedy == "install xdotool"
+    assert areas["window"].verdict == "FAIL"
+
+
+def test_window_discovery_without_xdotool_reads_as_no_window(monkeypatch):
+    """Same answer as a search that matched nothing, so callers are unchanged."""
+    _no_tools(monkeypatch)
+
+    assert watcher._xdo("search", "--class", "RuneScape") == ""
+    assert watcher.find_window("RuneScape") is None
+
+
+def test_missing_imagemagick_raises_a_capture_error(monkeypatch, tmp_path):
+    """ImageMagick is the optional fallback, so its absence is a capture miss.
+
+    CaptureError is the channel the poll loop already counts and recovers
+    from; an OSError escaping here would instead kill the run.
+    """
+    _no_tools(monkeypatch)
+
+    with pytest.raises(watcher.CaptureError) as e:
+        watcher.capture("0x1", None, tmp_path / "shot.png")
+    assert "not installed" in str(e.value)
+
+
+def test_missing_tesseract_raises_an_ocr_error(monkeypatch):
+    """OCR failure must not read as a lost window.
+
+    CaptureError would send the watcher into window reacquisition, which is
+    wrong and unrecoverable here: the pixels arrived, tesseract did not.
+    OcrError is caught by the per-rule guard instead, dropping one rule for
+    the cycle and leaving the rest of the profile running.
+    """
+    _no_tools(monkeypatch)
+
+    with pytest.raises(watcher.OcrError):
+        watcher.ocr_array(np.zeros((8, 8), dtype=np.uint8))
+    assert not issubclass(watcher.OcrError, watcher.CaptureError)
+
+
+def test_a_stuck_tesseract_raises_an_ocr_error(monkeypatch):
+    """The 30s timeout was set but never caught."""
+    def stall(*a, **k):
+        raise watcher.subprocess.TimeoutExpired(a[0], 30)
+
+    monkeypatch.setattr(watcher.subprocess, "run", stall)
+
+    with pytest.raises(watcher.OcrError) as e:
+        watcher.ocr_array(np.zeros((8, 8), dtype=np.uint8))
+    assert "timed out" in str(e.value)
+
+
+def test_an_alert_is_still_recorded_without_notify_send(monkeypatch, tmp_path):
+    """Losing the banner is degraded; losing the alert is a silent watcher."""
+    _no_tools(monkeypatch)
+    monkeypatch.setattr(watcher, "ALERT_LOG", tmp_path / "alerts.jsonl")
+
+    watcher.notify("Pack full", "Bank now", rule_name="pack_filling")
+
+    rows = [json.loads(line)
+            for line in (tmp_path / "alerts.jsonl").read_text().splitlines()]
+    assert [r["rule"] for r in rows] == ["pack_filling"]
+
+
+def test_session_detection_without_pgrep_falls_back_to_x11(monkeypatch):
+    """No pgrep means no evidence of Wayland, not a crash."""
+    _no_tools(monkeypatch)
+    monkeypatch.delenv("XDG_SESSION_TYPE", raising=False)
+
+    assert watcher._session_is_wayland() is False
+
+
+def test_x_env_recovery_without_pgrep_keeps_the_callers_env(monkeypatch):
+    _no_tools(monkeypatch)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("XAUTHORITY", raising=False)
+
+    watcher.ensure_x_env()
+
+    assert "DISPLAY" not in os.environ
+
+
+# --------------------------------------------------------------------------
 # Priority 0, step 5: interface readers
 # --------------------------------------------------------------------------
 
