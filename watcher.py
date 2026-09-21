@@ -1148,11 +1148,13 @@ def ocr_numeric(wid: str, box, frame: np.ndarray | None = None,
         try:
             frame = capture_array(wid, box, cycle=cycle)
         except CaptureError:
-            return ocr(wid, box, psm, cycle=cycle)
+            return (ocr(wid, box, psm, cycle=cycle)
+                    if cycle is not None else ocr(wid, box, psm))
     text = read_numeric(frame)
     if text is not None:
         return text
-    return ocr(wid, box, psm, cycle=cycle)
+    return (ocr(wid, box, psm, cycle=cycle)
+            if cycle is not None else ocr(wid, box, psm))
 
 
 # --------------------------------------------------------------------------
