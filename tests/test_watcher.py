@@ -24,6 +24,33 @@ def test_canonical_version_file_is_semver():
     assert semver.fullmatch(value)
 
 
+def test_docs_current_version_mentions_match_canonical_version():
+    canonical = (watcher.ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+    checks = [
+        ("README.md", r"\*\*Current software version:\*\*\s*`([0-9][^`]*)`"),
+        ("docs/application-outline.md", r"The project remains on `([0-9][^`]*)`"),
+        ("docs/future-implementation-ideas.md",
+         r"The current product version is \*\*([0-9][^*]*)\*\*"),
+        ("docs/priority-0-status.md",
+         r"Screen Watcher is currently \*\*([0-9][^*]*)\*\*"),
+        ("docs/versioning-policy.md",
+         r"Current version:\s*```text\s*([0-9][^\s]*)\s*```"),
+        ("docs/versioning-policy.md", r"## Current ([0-9][^\s]*) status"),
+        ("docs/versioning-policy.md",
+         r"`([0-9][^`]*)` is the current initial-development version"),
+    ]
+
+    for relative_path, pattern in checks:
+        text = (watcher.ROOT / relative_path).read_text(encoding="utf-8")
+        match = re.search(pattern, text)
+        assert match, f"expected to find {pattern!r} in {relative_path}"
+        assert match.group(1) == canonical, (
+            f"{relative_path} claims current version {match.group(1)!r} "
+            f"but VERSION file says {canonical!r}"
+        )
+
+
 def test_cli_version_uses_canonical_version_without_desktop_setup(
         monkeypatch, capsys):
     monkeypatch.setattr(watcher.sys, "argv", ["watcher.py", "--version"])
