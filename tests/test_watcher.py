@@ -15,9 +15,9 @@ from watcher import (Region, Rule, _FRAME_CACHE, capture_array, load_config,
 def test_canonical_version_file_is_semver():
     value = (watcher.ROOT / "VERSION").read_text(encoding="utf-8").strip()
     semver = re.compile(
-        r"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"
-        r"(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?"
-        r"(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+        r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+        r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+        r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
     )
 
     assert value == watcher.__version__
