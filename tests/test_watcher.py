@@ -4324,3 +4324,34 @@ def test_capture_array_stayed_with_its_callers():
     """
     import inspect
     assert inspect.getmodule(watcher.capture_array).__name__ == "watcher"
+
+
+def test_diagnostics_resolve_watcher_names_at_call_time(monkeypatch):
+    """The lazy import is what keeps `watcher.ocr` patchable.
+
+    Diagnostics cannot import `watcher` at module scope - that is
+    circular, since watcher re-exports the checks - and binding the names
+    at import time would make a patch reach nothing.
+    """
+    from screen_watcher import diagnostics
+
+    monkeypatch.setattr(watcher, "ocr", lambda *a, **k: "PATCHED")
+    assert diagnostics._w().ocr("x", (0, 0, 1, 1)) == "PATCHED"
+
+
+def test_diagnostics_are_reexported():
+    from screen_watcher import diagnostics
+
+    for name in ("run_doctor", "cmd_doctor", "Check", "_check_window",
+                 "_check_kwin", "_check_ocr", "PASS", "WARN", "FAIL"):
+        assert getattr(watcher, name) is getattr(diagnostics, name), name
+
+
+def test_watcher_keeps_shutil_for_test_patching():
+    """`_no_tools` patches watcher.shutil, so the import must stay.
+
+    Flake8 flags it as unused after the diagnostics moved out; removing
+    it would break eleven tests that simulate a machine with no external
+    binaries installed.
+    """
+    assert watcher.shutil is not None
