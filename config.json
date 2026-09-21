@@ -40,14 +40,6 @@
       },
       "_note": "full backpack panel. grid is relative to the region's top-left; verified against a hand count of 24 occupied slots"
     },
-    "orbs": {
-      "anchor": "bottom-center",
-      "dx": -29,
-      "dy": -132,
-      "w": 825,
-      "h": 60,
-      "_note": "hp / prayer / summoning / adrenaline readouts"
-    },
     "session_timer": {
       "anchor": "top-left",
       "dx": 150,
@@ -95,7 +87,7 @@
       "message": "Pack full",
       "alert_body": "Pack full for {stuck:.0f}s. Thieving has stopped, with admirable efficiency.",
       "sound": "battery-low",
-      "_note": "Overflow mode, not lead-time. Measured over 12 cycles with `watcher.py stats`: mean cycle 73s, mean peak 27.0/28. A predictive warning therefore fired once per bank trip - ~50 alerts an hour - while the stats showed the trips were already being banked correctly without it. Overflow only fires once the pack has been full for overflow_seconds, which is the point where catches are genuinely being lost. Set mode to 'lead' with lead_seconds to go back to predictive warning; that suits a slow grind (mining, woodcutting) where the walk to the bank is long relative to the fill.",
+      "_note": "Overflow mode, not lead-time. Measured over 12 cycles with `watcher.py stats`: mean cycle 73s, mean peak 27.0/28. A predictive warning therefore fired once per bank trip - ~50 alerts an hour - while the stats showed the trips were already being banked correctly without it. Overflow only fires once the pack has been full for overflow_seconds, which is the point where inventory-producing activity is genuinely being lost. Set mode to 'lead' with lead_seconds to go back to predictive warning; that suits a slow grind (mining, woodcutting) where the walk to the bank is long relative to the fill.",
       "enabled": true,
       "urgency": "normal",
       "timeout_ms": 12000
@@ -111,7 +103,7 @@
       "message": "XP stalled",
       "alert_body": "No XP for {still:.0f}s. The grind has entered its contemplative phase.",
       "sound": "dialog-error-serious",
-      "_disabled_note": "Superseded by fishing_stopped, which detects the same event from chat in 30s instead of 60s. Two rules firing for one spot move is just double beeping. Metrics XP is also the weaker signal: it stalls identically whether the spot moved, the client was minimised, or the panel was closed. Re-enable for a grind with no per-action chat message, where XP is the only evidence of progress.",
+      "_disabled_note": "Superseded in the current Thieving profile by activity_icon_gone, with thieving_stopped retained as the chat-only fallback. Metrics XP is a weaker signal because it stalls identically when activity stops, the client is minimised, or the panel is closed. Re-enable only for a layout or activity where the stronger activity signals are unavailable.",
       "enabled": false,
       "urgency": "normal",
       "timeout_ms": 30000

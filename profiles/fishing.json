@@ -39,14 +39,6 @@
         "rows": 6
       },
       "_note": "full backpack panel. grid is relative to the region's top-left; verified against a hand count of 24 occupied slots"
-    },
-    "orbs": {
-      "anchor": "bottom-center",
-      "dx": -29,
-      "dy": -132,
-      "w": 825,
-      "h": 60,
-      "_note": "hp / prayer / summoning / adrenaline readouts"
     }
   },
   "rules": [

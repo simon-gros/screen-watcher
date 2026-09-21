@@ -40,7 +40,6 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
-REGION_DIR = ROOT / "regions"
 STATE_DIR = ROOT / "state"
 ACTIVE_SKILL = ""
 
@@ -312,16 +311,32 @@ class X11XcbBackend(CaptureBackend):
 
     def grab_file(self, handle: str, box, out: Path,
                   resize: str | None = None) -> Path:
-        """Write a capture to disk.
+        """Write a capture without introducing an ImageMagick dependency.
 
-        Delegates to ImageMagick when a resize is requested, because that is
-        a one-off calibration path where correctness matters more than the
-        few milliseconds saved.
+        XCB's array path requires an explicit rectangle, so a full-window shot
+        resolves the current geometry first. Calibration percentage resizing
+        is then handled by Pillow; an XCB-only installation can therefore use
+        `calibrate` and `shot` just like `watch`.
         """
-        if resize:
-            return capture(handle, box, out, resize)
+        if box is None:
+            size = self.size(handle)
+            if not size:
+                raise CaptureError(f"could not determine geometry for window {handle}")
+            box = (0, 0, size[0], size[1])
         arr = self.grab_array(handle, box)
-        Image.fromarray(arr.astype(np.uint8)).save(out)
+        image = Image.fromarray(arr.astype(np.uint8))
+        if resize:
+            m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)%\s*", str(resize))
+            if not m:
+                raise CaptureError(
+                    f"XCB calibration resize expects a percentage, got {resize!r}")
+            scale = float(m.group(1)) / 100.0
+            if scale <= 0:
+                raise CaptureError("resize percentage must be positive")
+            target = (max(1, round(image.width * scale)),
+                      max(1, round(image.height * scale)))
+            image = image.resize(target, Image.Resampling.LANCZOS)
+        image.save(out)
         return out
 
 
@@ -627,8 +642,8 @@ class Region:
         grid = (g["x0"], g["y0"], g["cell_w"], g["cell_h"], g["cols"], g["rows"]) if g else None
         return Region(a, spec["dx"], spec["dy"], spec["w"], spec["h"], grid)
 
-    def resolve(self, win: tuple[int, int]) -> tuple[int, int, int, int]:
-        """Absolute (x, y, w, h) for a window of size `win`, clamped in-bounds."""
+    def unclamped(self, win: tuple[int, int]) -> tuple[int, int, int, int]:
+        """Configured absolute rectangle before window-boundary clamping."""
         W, H = win
         if self.anchor.startswith("top"):
             y = self.dy
@@ -643,9 +658,14 @@ class Region:
             x = W + self.dx - self.w
         else:
             x = (W - self.w) // 2 + self.dx
+        return (x, y, self.w, self.h)
 
-        w = max(1, min(self.w, W))
-        h = max(1, min(self.h, H))
+    def resolve(self, win: tuple[int, int]) -> tuple[int, int, int, int]:
+        """Absolute (x, y, w, h) for a window of size `win`, clamped in-bounds."""
+        W, H = win
+        x, y, configured_w, configured_h = self.unclamped(win)
+        w = max(1, min(configured_w, W))
+        h = max(1, min(configured_h, H))
         x = max(0, min(x, W - w))
         y = max(0, min(y, H - h))
         return (x, y, w, h)
@@ -656,6 +676,11 @@ class Region:
 # --------------------------------------------------------------------------
 
 class CaptureError(RuntimeError):
+    pass
+
+
+class OCRReadError(RuntimeError):
+    """Tesseract failed rather than legitimately reading no text."""
     pass
 
 
@@ -833,28 +858,28 @@ OCCUPANCY_LOG = STATE_DIR / "occupancy.jsonl"
 COUNTER_LOG = STATE_DIR / "counters.jsonl"
 
 
-def log_counter(name: str, ts: float, total: int) -> None:
-    """Persist a running counter so a restart does not reset progress.
-
-    A milestone like 'one million coins' takes hours of pickpocketing. Holding
-    the total only in memory would mean a watcher restart - or the game window
-    briefly disappearing - silently rewinds it to zero and the alert never
-    arrives.
-    """
+def log_counter(name: str, total: int, skill: str | None = None,
+                wall_time: float | None = None) -> None:
+    """Persist a running counter with a cross-process wall-clock timestamp."""
     try:
         STATE_DIR.mkdir(exist_ok=True)
+        record = {
+            "t": round(time.time() if wall_time is None else wall_time, 1),
+            "skill": skill or ACTIVE_SKILL or "unknown",
+            "name": name,
+            "total": total,
+        }
         with COUNTER_LOG.open("a") as f:
-            f.write(json.dumps({"t": round(ts, 1), "name": name,
-                                "total": total}) + "\n")
+            f.write(json.dumps(record) + "\n")
     except OSError:
         pass
 
 
-def load_counter(name: str) -> int:
-    """Last recorded total for a counter, or 0 if it has never run."""
+def load_counter(name: str, skill: str | None = None) -> int:
+    """Last recorded total for one profile counter, with legacy fallback."""
     if not COUNTER_LOG.exists():
         return 0
-    total = 0
+    rows = []
     try:
         for line in COUNTER_LOG.read_text().splitlines():
             try:
@@ -862,24 +887,33 @@ def load_counter(name: str) -> int:
             except ValueError:
                 continue
             if row.get("name") == name:
-                total = int(row.get("total", 0))
+                rows.append(row)
     except OSError:
         return 0
-    return total
+    if skill:
+        scoped = [row for row in rows if row.get("skill") == skill]
+        rows = scoped if scoped else [row for row in rows if "skill" not in row]
+    return int(rows[-1].get("total", 0)) if rows else 0
 
 
-def log_occupancy(ts: float, occ: int) -> None:
-    """Append an occupancy change. Only transitions are recorded, so an hour
-    of fishing costs a few hundred bytes rather than thousands of samples."""
+def log_occupancy(occ: int, skill: str | None = None,
+                  wall_time: float | None = None) -> None:
+    """Append one profile-scoped occupancy transition using Unix wall time."""
     try:
         STATE_DIR.mkdir(exist_ok=True)
+        record = {
+            "t": round(time.time() if wall_time is None else wall_time, 1),
+            "skill": skill or ACTIVE_SKILL or "unknown",
+            "occ": occ,
+        }
         with OCCUPANCY_LOG.open("a") as f:
-            f.write(json.dumps({"t": round(ts, 1), "occ": occ}) + "\n")
+            f.write(json.dumps(record) + "\n")
     except OSError:
         pass
 
 
-def load_cycles(capacity: int, gap: float = 300.0) -> list[dict]:
+def load_cycles(capacity: int, gap: float = 300.0,
+                skill: str | None = None) -> list[dict]:
     """Segment the occupancy log into fill/bank cycles.
 
     A cycle runs from the first gain after a bank to the next bank. That
@@ -895,6 +929,11 @@ def load_cycles(capacity: int, gap: float = 300.0) -> list[dict]:
             rows.append(json.loads(line))
         except ValueError:
             continue
+    if skill:
+        scoped = [row for row in rows if row.get("skill") == skill]
+        # Existing pre-migration logs have no skill field. Use them only when
+        # no scoped records exist, rather than mixing old and new histories.
+        rows = scoped if scoped else [row for row in rows if "skill" not in row]
     cycles, cur = [], None
     for i, r in enumerate(rows):
         t, occ = r["t"], r["occ"]
@@ -1011,6 +1050,11 @@ def ocr(wid: str, box, psm: int = 6, cycle: int | None = None,
             capture(wid, box, Path(tmp.name))
         r = subprocess.run(["tesseract", tmp.name, "stdout", "--psm", str(psm)],
                            capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            detail = (r.stderr or "").strip().replace("\n", " ")[:200]
+            raise OCRReadError(
+                f"tesseract failed with exit {r.returncode}"
+                + (f": {detail}" if detail else ""))
         return r.stdout.strip()
 
 
@@ -1317,7 +1361,6 @@ class Rule:
     _last_change: float = field(default=0.0, repr=False)
     _last_fired: float = field(default=0.0, repr=False)
     _armed: bool = field(default=True, repr=False)
-    _seen: set = field(default_factory=set, repr=False)
     _primed: bool = field(default=False, repr=False)
     _history: list = field(default_factory=list, repr=False)
     _full_since: float = field(default=0.0, repr=False)
@@ -1327,9 +1370,11 @@ class Rule:
     _level: str = field(default="", repr=False)
     _counts: dict = field(default_factory=dict, repr=False)
     _stacks: list = field(default_factory=list, repr=False)
+    _slot_occupancy: list = field(default_factory=list, repr=False)
     _pending_slots: set = field(default_factory=set, repr=False)
     _pending_since: float = field(default=0.0, repr=False)
     _pending_base: list = field(default_factory=list, repr=False)
+    _pending_occupancy_base: list = field(default_factory=list, repr=False)
     _elapsed: int = field(default=0, repr=False)
     _absent_since: float = field(default=0.0, repr=False)
     _corroborate_box: tuple | None = field(default=None, repr=False)
@@ -1381,7 +1426,9 @@ class Rule:
         self._level_since = 0.0
         self._absent_since = 0.0
         self._stacks.clear()
+        self._slot_occupancy.clear()
         self._pending_slots = set()
+        self._pending_occupancy_base.clear()
 
 
 def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float,
@@ -1414,7 +1461,7 @@ def _eval_inventory(rule: Rule, wid: str, region: "Region", box, now: float,
     # otherwise double every transition, which silently corrupts `stats` -
     # duplicate rows inflate the cycle count and halve the apparent fill rate.
     if (prev is None or occ != prev) and rule.log_occupancy:
-        log_occupancy(now, occ)
+        log_occupancy(occ, skill=ACTIVE_SKILL)
     # Banking empties the pack; drop the old trend and re-arm for the next run.
     if prev is not None and occ < prev - 2:
         rule._history.clear()
@@ -1499,24 +1546,24 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
     noise the inventory rule was retuned to avoid. Seeing that message means the
     stop is explained, so stay quiet until fishing actually resumes.
     """
-    for event in chat_events(rule.region, wid, box, cycle):
+    events = chat_events(rule.region, wid, box, cycle)
+    if not rule._primed:
+        # The first read is pre-existing scrollback. Record it in ChatReader,
+        # but do not let an old catch fabricate a new activity timestamp.
+        rule._primed = True
+        return
+
+    for event in events:
         line = event.text
         if rule.suppress_pattern and re.search(rule.suppress_pattern, line, re.I):
             # An explained stop. Disarm rather than touch the activity clock, so
             # resuming still needs a real catch to re-arm.
-            if rule._primed:
-                rule._armed = False
+            rule._armed = False
             continue
         if re.search(rule.pattern, line, re.I):
             rule._last_activity = now
             rule._armed = True
             rule._last_activity_source = line
-
-    if not rule._primed:
-        # Prime the visible scrollback, but do not invent an activity timestamp.
-        # A watcher started while idle must remain silent indefinitely.
-        rule._primed = True
-        return
 
     # Never seen activity at all: nothing to report stopping.
     if rule._last_activity == 0.0:
@@ -1753,7 +1800,6 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
         rule._absent_since = 0.0
         rule._last_activity = now
         rule._armed = True
-        rule._seen.clear()
         return None
 
     corroborates = bool(rule._corroborate_box and rule.corroborate_pattern)
@@ -1870,7 +1916,10 @@ def _eval_stack(rule: Rule, wid: str, region: "Region", box, now: float,
     frame = capture_array(wid, box, None, cycle)
     cols, rows = region.grid[4], region.grid[5]
     cur = [stack_signature(frame, region.grid, i) for i in range(cols * rows)]
-    occ, _cells = count_occupied(frame, region.grid, threshold=rule.cell_threshold)
+    signatures = slot_signatures(
+        frame, region.grid, threshold=rule.cell_threshold)
+    cur_occ = [slot["occ"] for slot in signatures]
+    occ = sum(cur_occ)
 
     # An interface drawn over the backpack makes covered cells read as
     # occupied; above capacity is the reliable tell, so drop the frame.
@@ -1878,19 +1927,33 @@ def _eval_stack(rule: Rule, wid: str, region: "Region", box, now: float,
         return None
 
     prev = rule._stacks
+    prev_occ = rule._slot_occupancy
     rule._stacks = cur
-    if not prev or len(prev) != len(cur):
+    rule._slot_occupancy = cur_occ
+    if (not prev or len(prev) != len(cur)
+            or not prev_occ or len(prev_occ) != len(cur_occ)):
+        # This frame is the startup baseline. The next sustained change is a
+        # real post-start event and must not be swallowed as another "prime".
+        rule._primed = True
         return None
 
-    changed = [i for i, (a, b) in enumerate(zip(prev, cur))
-               if abs(b - a) > rule.stack_tolerance]
+    stack_changed = {
+        i for i, (a, b) in enumerate(zip(prev, cur))
+        if abs(b - a) > rule.stack_tolerance
+    }
+    occupancy_gained = {
+        i for i, (a, b) in enumerate(zip(prev_occ, cur_occ))
+        if not a and b
+    }
+    changed = stack_changed | occupancy_gained
     if changed:
         # Restart confirmation whenever the set of moving slots changes, so a
         # tooltip sweeping across cells cannot accumulate toward a report.
-        if set(changed) != rule._pending_slots:
+        if changed != rule._pending_slots:
             rule._pending_slots = set(changed)
             rule._pending_since = now
-            rule._pending_base = prev
+            rule._pending_base = list(prev)
+            rule._pending_occupancy_base = list(prev_occ)
         return None
 
     if not rule._pending_slots:
@@ -1900,24 +1963,30 @@ def _eval_stack(rule: Rule, wid: str, region: "Region", box, now: float,
     # has persisted since then, not how long it was still changing - a tooltip
     # reverts within a frame or two, while a real drop stays put.
     base = rule._pending_base or prev
+    base_occ = rule._pending_occupancy_base or prev_occ
     slots = sorted(rule._pending_slots)
     if now - rule._pending_since < rule.confirm_seconds:
         return None
     rule._pending_slots = set()
-    if not rule._primed:
-        rule._primed = True
-        return None
-    grew = [i for i in slots
-            if i < len(cur) and cur[i] - base[i] > rule.stack_tolerance]
+
+    grew = {
+        i for i in slots
+        if i < len(cur) and cur[i] - base[i] > rule.stack_tolerance
+    }
+    newly_occupied = {
+        i for i in slots
+        if i < len(cur_occ) and not base_occ[i] and cur_occ[i]
+    }
     if rule.new_slot_only:
-        # A stack that was already present growing is a routine top-up - at a
-        # 10% drop rate that happens every ~20s. An item appearing in a slot
-        # that held nothing is the first of its kind, which is the event worth
-        # interrupting for.
-        grew = [i for i in grew if base[i] == 0]
-    if not grew or not rule.ready(now):
+        # "New slot" is an occupancy transition, not "stack digit count used
+        # to be zero". That distinction catches quantity-1/unstackable drops
+        # and rejects an existing stack changing from one item to two.
+        gained = sorted(newly_occupied)
+    else:
+        gained = sorted(grew | newly_occupied)
+    if not gained or not rule.ready(now):
         return None
-    where = ", ".join(f"slot {i + 1}" for i in grew[:4])
+    where = ", ".join(f"slot {i + 1}" for i in gained[:4])
     return rule.fire(now, f"Item gained in {where}. Check the backpack.",
                      where=where)
 
@@ -1992,7 +2061,7 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
         return None
     if gained:
         rule._total += gained
-        log_counter(rule.name, now, rule._total)
+        log_counter(rule.name, rule._total, skill=ACTIVE_SKILL)
     step = max(1, int(rule.step))
     reached = rule._total // step
     if reached > rule._milestone:
@@ -2120,10 +2189,19 @@ def validate_config(cfg: object) -> None:
             region = Region.parse(spec)
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"region {name!r}: {exc}") from exc
+        for field_name, value in (
+                ("dx", region.dx), ("dy", region.dy),
+                ("w", region.w), ("h", region.h)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(
+                    f"region {name!r} {field_name} must be an integer")
         if region.w <= 0 or region.h <= 0:
             raise ValueError(f"region {name!r} dimensions must be positive")
         if region.grid:
             x0, y0, cw, ch, cols, rows = region.grid
+            if any(not isinstance(v, int) or isinstance(v, bool)
+                   for v in region.grid):
+                raise ValueError(f"region {name!r} grid values must be integers")
             if x0 < 0 or y0 < 0 or min(cw, ch, cols, rows) <= 0:
                 raise ValueError(f"region {name!r} grid values must be positive")
             if x0 + cw * cols > region.w or y0 + ch * rows > region.h:
@@ -2168,6 +2246,35 @@ def validate_config(cfg: object) -> None:
         if kind == "inventory" and rule.get("mode", "lead") not in {"lead", "overflow"}:
             raise ValueError(
                 f"rule {name!r}: mode must be 'lead' or 'overflow'")
+        for key in ("enabled", "log_occupancy", "new_slot_only"):
+            if key in rule and not isinstance(rule[key], bool):
+                raise ValueError(f"rule {name!r}: {key} must be boolean")
+        for key in ("message", "sound", "item", "out_message",
+                    "milestone_message"):
+            if key in rule and rule[key] is not None and not isinstance(rule[key], str):
+                raise ValueError(f"rule {name!r}: {key} must be a string")
+        if "urgency" in rule and rule["urgency"] not in {"low", "normal", "critical"}:
+            raise ValueError(
+                f"rule {name!r}: urgency must be low, normal, or critical")
+        for key in ("capacity", "warn_free", "warn_streak", "timeout_ms",
+                    "warn_below", "out_below"):
+            if key in rule and (
+                    not isinstance(rule[key], int) or isinstance(rule[key], bool)):
+                raise ValueError(f"rule {name!r}: {key} must be an integer")
+        if rule.get("capacity", 1) <= 0:
+            raise ValueError(f"rule {name!r}: capacity must be positive")
+        if rule.get("warn_streak", 1) <= 0:
+            raise ValueError(f"rule {name!r}: warn_streak must be positive")
+        if rule.get("timeout_ms", 0) < 0:
+            raise ValueError(f"rule {name!r}: timeout_ms must be non-negative")
+        for key in ("colour_lo", "colour_hi"):
+            if key in rule:
+                value = rule[key]
+                if (not isinstance(value, (list, tuple)) or len(value) != 3
+                        or any(not isinstance(v, (int, float)) or isinstance(v, bool)
+                               or v < 0 or v > 255 for v in value)):
+                    raise ValueError(
+                        f"rule {name!r}: {key} must contain three values 0..255")
         corroborate_region = rule.get("corroborate_region")
         corroborate_pattern = rule.get("corroborate_pattern")
         if (corroborate_region is None) != (corroborate_pattern is None):
@@ -2202,9 +2309,12 @@ def validate_config(cfg: object) -> None:
                     not isinstance(value, (int, float)) or isinstance(value, bool)
                     or value < 0):
                 raise ValueError(f"rule {name!r}: {key} must be non-negative")
+        if rule.get("step") is not None and rule["step"] <= 0:
+            raise ValueError(f"rule {name!r}: step must be positive")
 
 
 def resolve_window(cfg: dict) -> tuple[str, tuple[int, int]]:
+    """Legacy xdotool resolver retained for compatibility tests."""
     wid = find_window(cfg["window"]["wm_class"])
     if not wid:
         sys.exit(f"window not found (class={cfg['window']['wm_class']!r}) - is the game running?")
@@ -2212,6 +2322,19 @@ def resolve_window(cfg: dict) -> tuple[str, tuple[int, int]]:
     if not size:
         sys.exit(f"could not determine geometry for window {wid}")
     return wid, size
+
+
+def acquire_game(cfg: dict, requested_backend: str | None = None) -> GameInstance:
+    """Acquire the configured game through the same backend used by `watch`."""
+    try:
+        backend = make_runtime_backend(requested_backend)
+    except CaptureError as e:
+        sys.exit(str(e))
+    game = GameInstance(cfg["window"]["wm_class"], backend=backend)
+    if not game.acquire():
+        sys.exit(f"window not found (class={cfg['window']['wm_class']!r}) - "
+                 "is the game running?")
+    return game
 
 
 # --------------------------------------------------------------------------
@@ -2295,12 +2418,12 @@ class ChatReader(InterfaceReader):
         self.similarity = similarity
         self._seen: set[str] = set()
         self._recent: list[str] = []
-        self.primed = False
         self.lines_read = 0
         self.events_emitted = 0
         self.variants_suppressed = 0
         self._cycle: int | None = None
         self._cycle_events: list[ChatLine] = []
+        self._visible_unstamped: dict[str, int] = {}
 
     def _is_variant(self, key: str) -> bool:
         """Whether `key` is an OCR variant of a line already emitted.
@@ -2317,13 +2440,15 @@ class ChatReader(InterfaceReader):
         if self.similarity >= 1.0:
             return False
         stamp, body = _split_stamp(key)
+        if not stamp:
+            # Without a source timestamp there is no safe way to distinguish
+            # "same event, OCR changed" from "same wording happened again".
+            # Exact viewport overlap is handled separately; fuzzy suppression
+            # is reserved for timestamped lines.
+            return False
         for prev in self._recent:
             prev_stamp, prev_body = _split_stamp(prev)
-            # A different in-game timestamp means a different event, however
-            # similar the wording. Repeated catches a second apart differ
-            # only by their stamp, and collapsing those would break every
-            # rule that counts occurrences.
-            if stamp and prev_stamp and stamp != prev_stamp:
+            if not prev_stamp or stamp != prev_stamp:
                 continue
             if abs(len(prev_body) - len(body)) > max(4, len(body) // 4):
                 continue          # cheap length gate before the real compare
@@ -2343,12 +2468,22 @@ class ChatReader(InterfaceReader):
 
         fresh: list[ChatLine] = []
         visible: set[str] = set()
+        visible_unstamped: dict[str, int] = {}
         for raw in text.splitlines():
             line = raw.strip()
             key = norm_line(line)
             self.lines_read += 1
             if len(key) < self.min_key_len:
                 continue
+            stamp, _body = _split_stamp(key)
+            if not stamp:
+                occurrence = visible_unstamped.get(key, 0) + 1
+                visible_unstamped[key] = occurrence
+                if occurrence <= self._visible_unstamped.get(key, 0):
+                    continue
+                fresh.append(ChatLine(line, key, cycle))
+                continue
+
             visible.add(key)
             if key in self._seen:
                 continue
@@ -2360,9 +2495,9 @@ class ChatReader(InterfaceReader):
             if len(self._recent) > 60:
                 del self._recent[:30]
             fresh.append(ChatLine(line, key, cycle))
+        self._visible_unstamped = visible_unstamped
         if len(self._seen) > self.max_seen:
-            # Keep the current viewport as the new baseline. Clearing the set
-            # outright would make old scrollback look fresh on the next poll.
+            # Keep the current timestamped viewport as the new baseline.
             self._seen = visible
             self._recent = [key for key in self._recent if key in visible][-60:]
         self.events_emitted += len(fresh)
@@ -2546,19 +2681,18 @@ def _check_regions(cfg: dict, game: GameInstance) -> list[Check]:
     W, H = game.size
     out = []
     for name, region in cfg["_regions"].items():
+        raw = region.unclamped(game.size)
         x, y, w, h = region.resolve(game.size)
         if w <= 0 or h <= 0:
             out.append(Check(f"region:{name}", FAIL,
                              f"degenerate box {(x, y, w, h)}",
                              "fix the region's w/h in the profile"))
-        elif (w, h) != (region.w, region.h):
-            # `resolve` clamps to the window rather than returning an
-            # out-of-bounds box, so a size mismatch is the only visible sign
-            # that the region no longer fits where it was calibrated.
-            out.append(Check(f"region:{name}", WARN,
-                             f"clamped to {w}x{h} from configured "
-                             f"{region.w}x{region.h} in a {W}x{H} window",
-                             "re-run calibrate at this window size"))
+        elif (x, y, w, h) != raw:
+            out.append(Check(
+                f"region:{name}", WARN,
+                f"configured {raw} was clamped to {(x, y, w, h)} "
+                f"in a {W}x{H} window",
+                "re-run calibrate at this window size"))
         else:
             out.append(Check(f"region:{name}", PASS, f"{(x, y, w, h)}"))
     return out
@@ -2593,7 +2727,7 @@ def _check_capture(cfg: dict, game: GameInstance) -> list[Check]:
         return [Check("capture", WARN, "skipped (no window)")]
     sched = FrameScheduler(game, cfg["_regions"])
     out = []
-    for _ in range(2):                    # two passes to detect frozen frames
+    for _ in range(2):                    # two passes for capture/timing sanity
         sched.begin()
         sched.prefetch(list(cfg["_regions"]))
     for name in sorted(cfg["_regions"]):
@@ -2713,12 +2847,12 @@ def _check_profile(cfg: dict, path: Path) -> list[Check]:
     else:
         out.append(Check("rules", PASS,
                          f"{len(enabled)} enabled, {disabled} disabled"))
-    unused = sorted(set(cfg["_regions"])
-                    - {r["region"] for r in enabled})
+    referenced = {r["region"] for r in cfg["rules"]}
+    unused = sorted(set(cfg["_regions"]) - referenced)
     if unused:
         out.append(Check("regions unused", WARN,
-                         f"captured by no enabled rule: {', '.join(unused)}",
-                         "harmless, but they cost nothing to remove"))
+                         f"referenced by no rule: {', '.join(unused)}",
+                         "remove obsolete regions or add the intended rule"))
     sounds = [r.get("sound") for r in enabled if r.get("sound")]
     if len(sounds) != len(set(sounds)):
         dupes = sorted({s for s in sounds if sounds.count(s) > 1})
@@ -2779,19 +2913,21 @@ def cmd_backends(args) -> None:
 
 def cmd_calibrate(args) -> None:
     cfg = load_config(args.config)
-    wid, size = resolve_window(cfg)
+    game = acquire_game(cfg, getattr(args, "backend", None))
+    wid, size = game.handle, game.size
     out = ROOT / "calibrate.png"
-    capture(wid, None, out, resize=args.scale)
+    game.save(None, out, resize=args.scale)
     with Image.open(out) as im:
         shot = im.size
-    print(f"window {wid}  actual {size[0]}x{size[1]}")
+    print(f"window {wid}  actual {size[0]}x{size[1]} backend={game.backend.name}")
     print(f"wrote {out}  ({shot[0]}x{shot[1]})")
     print(f"multiply coords read off that image by {size[0]/shot[0]:.4f}")
 
 
 def cmd_shot(args) -> None:
     cfg = load_config(args.config)
-    wid, size = resolve_window(cfg)
+    game = acquire_game(cfg, getattr(args, "backend", None))
+    size = game.size
     if args.box:
         parts = args.box.split(",")
         if len(parts) == 5:
@@ -2815,13 +2951,15 @@ def cmd_shot(args) -> None:
         reg, label = cfg["_regions"][args.region], args.region
     box = reg.resolve(size)
     out = Path(args.out) if args.out else ROOT / f"shot_{label}.png"
-    capture(wid, box, out)
-    print(f"wrote {out}  {label} anchor={reg.anchor} -> box={box} (window {size[0]}x{size[1]})")
+    game.save(box, out)
+    print(f"wrote {out}  {label} anchor={reg.anchor} -> box={box} "
+          f"(window {size[0]}x{size[1]}, backend={game.backend.name})")
 
 
 def cmd_regions(args) -> None:
     cfg = load_config(args.config)
-    wid, size = resolve_window(cfg)
+    game = acquire_game(cfg, getattr(args, "backend", None))
+    wid, size = game.handle, game.size
     print(f"window {wid}  {size[0]}x{size[1]}\n")
     print(f"{'region':<16} {'anchor':<14} {'resolved x,y,w,h'}")
     for n, r in cfg["_regions"].items():
@@ -2836,18 +2974,21 @@ def cmd_regions(args) -> None:
 
 def cmd_probe(args) -> None:
     cfg = load_config(args.config)
-    wid, size = resolve_window(cfg)
+    game = acquire_game(cfg, getattr(args, "backend", None))
+    wid, size = game.handle, game.size
     regs = cfg["_regions"]
     masks = {r["region"]: r.get("mask") for r in cfg["rules"]}
     prev = {k: None for k in regs}
-    print(f"window {wid} {size[0]}x{size[1]} - {args.count} samples @ {args.interval}s")
+    print(f"window {wid} {size[0]}x{size[1]} backend={game.backend.name} - "
+          f"{args.count} samples @ {args.interval}s")
     print("frame-to-frame mean abs diff; pick a threshold above the idle floor\n")
     print(f"{'t':>6}  " + "  ".join(f"{k:>14}" for k in regs))
     for i in range(args.count):
+        game.begin_cycle(i + 1)
         row = []
         for k, r in regs.items():
             try:
-                a = capture_array(wid, r.resolve(size), masks.get(k))
+                a = game.frame(r.resolve(size), masks.get(k))
                 d = mean_abs_diff(a, prev[k])
                 prev[k] = a
                 row.append(f"{d:14.2f}" if d == d else f"{'--':>14}")
@@ -2860,7 +3001,8 @@ def cmd_probe(args) -> None:
 def cmd_inv(args) -> None:
     """Live per-slot inventory change feed."""
     cfg = load_config(args.config)
-    wid, size = resolve_window(cfg)
+    game = acquire_game(cfg, getattr(args, "backend", None))
+    size = game.size
     reg = cfg["_regions"][args.region]
     if not reg.grid:
         sys.exit(f"region {args.region!r} has no grid defined")
@@ -2874,8 +3016,11 @@ def cmd_inv(args) -> None:
     warmup = 8
     print(f"watching {args.region} every {args.interval}s - ctrl-c to stop")
     t0 = time.monotonic()
+    cycle = 0
     while time.monotonic() - t0 < args.duration:
-        frame = capture_array(wid, reg.resolve(size))
+        cycle += 1
+        game.begin_cycle(cycle)
+        frame = game.frame(reg.resolve(size))
         cur = slot_signatures(frame, reg.grid)
         occ = sum(1 for s in cur if s["occ"])
         # An interface (bank, loot, level-up) drawn over the backpack makes
@@ -2916,7 +3061,7 @@ def cmd_stats(args) -> None:
     cfg = load_config(args.config)
     cap = next((r.get("capacity", 28) for r in cfg["rules"]
                 if r["kind"] == "inventory"), 28)
-    cycles = load_cycles(cap)
+    cycles = load_cycles(cap, skill=cfg.get("skill"))
     if not cycles:
         sys.exit("no complete cycles logged yet - run `watch` through a bank trip first")
 
@@ -3035,18 +3180,8 @@ def cmd_watch(args) -> None:
     cfg = load_config(args.config)
     ACTIVE_SKILL = cfg.get("skill", "unnamed")
 
-    # A live session must have a usable backend before entering the loop.
-    # Automatic selection may fall back; an explicitly requested backend
-    # fails fast with the reason instead of breaking every rule later.
-    try:
-        backend = make_runtime_backend(getattr(args, "backend", None))
-    except CaptureError as e:
-        sys.exit(str(e))
-
-    game = GameInstance(cfg["window"]["wm_class"], backend=backend)
-    if not game.acquire():
-        sys.exit(f"window not found (class={cfg['window']['wm_class']!r}) - "
-                 "is the game running?")
+    game = acquire_game(cfg, getattr(args, "backend", None))
+    backend = game.backend
     wid, size = game.handle, game.size
     set_active_game(game)
     set_active_readers(ReaderRegistry())
@@ -3058,7 +3193,7 @@ def cmd_watch(args) -> None:
         sys.exit("no enabled rules")
     for r in rules:
         if r.kind == "counter":
-            r._total = load_counter(r.name)
+            r._total = load_counter(r.name, skill=ACTIVE_SKILL)
             r._milestone = int(r._total // max(1, int(r.step)))
             if r._total:
                 print(f"  {r.name}: resuming from {r._total:,}", flush=True)
@@ -3073,10 +3208,16 @@ def cmd_watch(args) -> None:
     print("ctrl-c to stop", flush=True)
 
     misses = 0
-    cycle = 0
+    scheduler = FrameScheduler(game, regs)
+    needed_regions = sorted({
+        name
+        for rule in rules
+        for name in (rule.region, rule.corroborate_region)
+        if name
+    })
     next_poll = time.monotonic()
     while True:
-        cycle += 1
+        cycle = scheduler.begin()
         now = time.monotonic()
         cur = game.refresh_size()
         if cur and cur != size:
@@ -3084,56 +3225,72 @@ def cmd_watch(args) -> None:
             size = cur
             # Geometry changes invalidate both pixel frames and the text-reader
             # baseline; rules are re-primed against the newly resolved regions.
+            scheduler = FrameScheduler(game, regs)
             set_active_readers(ReaderRegistry())
             for r in rules:
                 r.reset()
-        try:
-            for rule in rules:
-                try:
-                    if rule.corroborate_region:
-                        # Resolved here because only the loop knows the current
-                        # window size and the full region table.
-                        rule._corroborate_box = regs[
-                            rule.corroborate_region].resolve(size)
-                    alert = evaluate(rule, wid, regs[rule.region], size, now, cycle)
-                    if alert is not None:
-                        notify(alert.title, alert.body, alert.urgency,
-                               alert.sound, alert.timeout_ms, alert.rule_name,
-                               alert.source_text)
-                except CaptureError:
-                    raise            # handled below: miss counter / reacquire
-                except Exception as e:
-                    # One malformed rule must not take the watcher down with it.
-                    # Losing every alert because a single regex or grid is wrong
-                    # is far worse than losing that one rule, and a silent death
-                    # looks identical to "it was never running".
-                    print(f"rule {rule.name!r} failed: {type(e).__name__}: {e}",
-                          flush=True)
-            misses = 0
-        except CaptureError as e:
+        failed_regions = set(scheduler.prefetch(needed_regions))
+        if failed_regions:
             misses += 1
-            if misses >= 3:
-                old = wid
-                if game.acquire():
-                    wid, size, misses = game.handle, game.size, 0
-                    print(f"reacquired window {old} -> {wid}", flush=True)
-                    set_active_game(game)
-                    set_active_readers(ReaderRegistry())
-                    for r in rules:
-                        r.reset()
-                else:
-                    notify("Screen Watcher", "game window gone - stopping", "critical")
-                    sys.exit("window gone")
+            details = []
+            for name in sorted(failed_regions):
+                stat = scheduler.stats.get(name)
+                details.append(
+                    f"{name}: {stat.last_error if stat else 'capture failed'}")
+            print("capture miss: " + "; ".join(details), flush=True)
+        else:
+            misses = 0
+
+        for rule in rules:
+            dependencies = {rule.region}
+            if rule.corroborate_region:
+                dependencies.add(rule.corroborate_region)
+            if dependencies & failed_regions:
+                continue
+            try:
+                if rule.corroborate_region:
+                    # Resolved here because only the loop knows the current
+                    # window size and the full region table.
+                    rule._corroborate_box = regs[
+                        rule.corroborate_region].resolve(size)
+                alert = evaluate(rule, wid, regs[rule.region], size, now, cycle)
+                if alert is not None:
+                    notify(alert.title, alert.body, alert.urgency,
+                           alert.sound, alert.timeout_ms, alert.rule_name,
+                           alert.source_text)
+            except (CaptureError, OCRReadError) as e:
+                print(f"rule {rule.name!r} observation failed: {e}", flush=True)
+            except Exception as e:
+                # One malformed rule must not take the watcher down with it.
+                print(f"rule {rule.name!r} failed: {type(e).__name__}: {e}",
+                      flush=True)
+
+        if misses >= 3:
+            old = wid
+            if game.acquire():
+                wid, size, misses = game.handle, game.size, 0
+                print(f"reacquired window {old} -> {wid}", flush=True)
+                scheduler = FrameScheduler(game, regs)
+                set_active_game(game)
+                set_active_readers(ReaderRegistry())
+                for r in rules:
+                    r.reset()
             else:
-                print(f"capture miss: {e}", flush=True)
+                notify("Screen Watcher", "game window gone - stopping", "critical")
+                sys.exit("window gone")
+
         next_poll += interval
+        current = time.monotonic()
+        if next_poll <= current:
+            # Do not run back-to-back catch-up polls after a slow OCR cycle.
+            missed = int((current - next_poll) // interval) + 1
+            next_poll += missed * interval
         time.sleep(max(0.0, next_poll - time.monotonic()))
 
 
 def main() -> None:
     ensure_x_env()
     STATE_DIR.mkdir(exist_ok=True)
-    REGION_DIR.mkdir(exist_ok=True)
     p = argparse.ArgumentParser(prog="watcher", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", type=Path, default=CONFIG_PATH,

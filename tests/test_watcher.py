@@ -1,4 +1,5 @@
 import builtins
+import json
 import os
 import re
 from pathlib import Path
@@ -275,6 +276,32 @@ def test_validate_config_rejects_non_string_out_alert_body():
         validate_config(config)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("enabled", 1, "enabled must be boolean"),
+        ("timeout_ms", 1.5, "timeout_ms must be an integer"),
+        ("capacity", 0, "capacity must be positive"),
+        ("urgency", "urgent", "urgency must be"),
+        ("step", 0, "step must be positive"),
+    ],
+)
+def test_validate_config_rejects_invalid_rule_field_types(field, value, message):
+    config = valid_config()
+    config["rules"][0][field] = value
+
+    with pytest.raises(ValueError, match=message):
+        validate_config(config)
+
+
+def test_validate_config_rejects_non_integer_region_geometry():
+    config = valid_config()
+    config["regions"]["panel"]["dx"] = 1.5
+
+    with pytest.raises(ValueError, match="dx must be an integer"):
+        validate_config(config)
+
+
 def test_profiles_have_configured_copy_for_representative_rules():
     fishing = load_config(Path("profiles/fishing.json"))
     thieving = load_config(Path("profiles/thieving.json"))
@@ -334,6 +361,25 @@ def test_activity_started_idle_never_reports_stopped(monkeypatch):
     assert rule._last_activity == 0.0
 
 
+def test_activity_ignores_matching_startup_scrollback(monkeypatch):
+    """An old visible catch must not start a new post-launch stop timer."""
+    pages = {
+        1: "[12:00:00] You catch a trout.",
+        2: "[12:00:00] You catch a trout.",
+    }
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda wid, box, cycle, psm=6: pages.get(cycle, ""),
+    )
+    rule = _rule(kind="activity", pattern=r"you catch a", stop_seconds=5,
+                 cooldown=0)
+
+    assert watcher._eval_activity(rule, "w", (0, 0, 1, 1), 100.0, 1) is None
+    assert rule._last_activity == 0.0
+    assert watcher._eval_activity(rule, "w", (0, 0, 1, 1), 110.0, 2) is None
+    assert rule._last_activity == 0.0
+
+
 def test_activity_reports_stop_only_after_matching_activity(monkeypatch):
     """A stop clock starts only after a matching activity line is observed."""
     text_by_cycle = {
@@ -357,28 +403,29 @@ def test_activity_reports_stop_only_after_matching_activity(monkeypatch):
     assert "No matching activity" in alert.body
 
 
-def test_loot_ignores_currency_and_reports_item():
-    """Coins arrive ~76% of successes; only named drops should alert."""
+def test_loot_ignores_currency_and_reports_item(monkeypatch):
+    """Exercise the production evaluator instead of copying its regex loop."""
+    pages = {
+        1: "[20:49:08] 455 coins have been added to your money pouch.",
+        2: ("[20:49:09] You pick the target's pocket.\n"
+            "[20:50:01] You steal Extra fine sand."),
+    }
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda wid, box, cycle, psm=6: pages.get(cycle, ""),
+    )
+    watcher.set_active_readers()
     rule = _rule(
         item_pattern=r"extra fine sand|sealed clue scroll \(elite\)",
         ignore_pattern=r"coins have been added|you pick the target",
+        cooldown=0,
     )
-    rule._primed = True
-    lines = [
-        "[20:49:08] 455 coins have been added to your money pouch.",
-        "[20:49:09] You pick the target's pocket.",
-        "[20:50:01] You steal Extra fine sand.",
-    ]
-    hits = []
-    for line in lines:
-        key = watcher.norm_line(line)
-        if re.search(rule.ignore_pattern, line, re.I):
-            rule._seen.add(key)
-            continue
-        m = re.search(rule.item_pattern, line, re.I)
-        if m:
-            hits.append(m.group(0))
-    assert hits == ["Extra fine sand"]
+
+    assert watcher._eval_loot(rule, "w", (0, 0, 1, 1), 100.0, 1) is None
+    alert = watcher._eval_loot(rule, "w", (0, 0, 1, 1), 101.0, 2)
+
+    assert alert is not None
+    assert "Extra fine sand" in alert.body
 
 
 def test_counter_fires_once_per_milestone():
@@ -396,12 +443,49 @@ def test_counter_fires_once_per_milestone():
 
 
 def test_counter_persists_across_restart(tmp_path, monkeypatch):
-    """A milestone takes hours; an in-memory total would be rewound."""
+    """Counters use wall time and remain isolated by profile."""
     monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
     monkeypatch.setattr(watcher, "COUNTER_LOG", tmp_path / "counters.jsonl")
-    watcher.log_counter("coin_milestone", 1.0, 987_654)
-    assert watcher.load_counter("coin_milestone") == 987_654
-    assert watcher.load_counter("never_ran") == 0
+    watcher.log_counter("coin_milestone", 987_654, skill="thieving",
+                        wall_time=1_700_000_000.0)
+    watcher.log_counter("coin_milestone", 123, skill="fishing",
+                        wall_time=1_700_000_001.0)
+
+    assert watcher.load_counter("coin_milestone", skill="thieving") == 987_654
+    assert watcher.load_counter("coin_milestone", skill="fishing") == 123
+    assert watcher.load_counter("never_ran", skill="thieving") == 0
+
+    row = json.loads((tmp_path / "counters.jsonl").read_text().splitlines()[0])
+    assert row["t"] == 1_700_000_000.0
+    assert row["skill"] == "thieving"
+
+
+def test_occupancy_history_uses_wall_time_and_profile_scope(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(watcher, "OCCUPANCY_LOG", tmp_path / "occupancy.jsonl")
+
+    # Two complete cycles with overlapping timestamps for different profiles.
+    rows = [
+        {"t": 1000.0, "skill": "fishing", "occ": 1},
+        {"t": 1001.0, "skill": "fishing", "occ": 2},
+        {"t": 1002.0, "skill": "fishing", "occ": 3},
+        {"t": 1003.0, "skill": "fishing", "occ": 0},
+        {"t": 1000.0, "skill": "thieving", "occ": 10},
+        {"t": 1001.0, "skill": "thieving", "occ": 11},
+        {"t": 1002.0, "skill": "thieving", "occ": 12},
+        {"t": 1003.0, "skill": "thieving", "occ": 0},
+    ]
+    watcher.OCCUPANCY_LOG.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n")
+
+    fishing = watcher.load_cycles(28, skill="fishing")
+    thieving = watcher.load_cycles(28, skill="thieving")
+    assert len(fishing) == 1 and fishing[0]["peak"] == 3
+    assert len(thieving) == 1 and thieving[0]["peak"] == 12
+
+    watcher.log_occupancy(7, skill="fishing", wall_time=1_700_000_010.5)
+    last = json.loads(watcher.OCCUPANCY_LOG.read_text().splitlines()[-1])
+    assert last == {"t": 1700000010.5, "skill": "fishing", "occ": 7}
 
 
 def test_stun_pattern_matches_real_contraction():
@@ -484,6 +568,49 @@ def test_stack_rule_ignores_transient_overlay():
                         fired.append(now)
         now += 1.5
     assert fired == []
+
+
+def test_stack_new_slot_uses_real_occupancy_not_digit_pixels(monkeypatch):
+    """A quantity-1 drop has no stack digits but still occupies a new slot."""
+    region = watcher.Region("top-left", 0, 0, 20, 20,
+                            (0, 0, 20, 20, 1, 1))
+    empty = np.zeros((20, 20, 3), dtype=np.int16)
+    occupied = empty.copy()
+    occupied[5:15, 5:10] = [220, 20, 20]
+
+    frames = iter([empty, occupied, occupied])
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: next(frames))
+    rule = _rule(kind="stack", new_slot_only=True, confirm_seconds=1,
+                 cooldown=0, capacity=1)
+
+    assert watcher._eval_stack(rule, "w", region, (0, 0, 20, 20), 0.0, 1) is None
+    assert rule._primed is True
+    assert watcher._eval_stack(rule, "w", region, (0, 0, 20, 20), 1.0, 2) is None
+    alert = watcher._eval_stack(rule, "w", region, (0, 0, 20, 20), 2.1, 3)
+
+    assert alert is not None
+    assert "slot 1" in alert.body
+
+
+def test_stack_new_slot_rejects_existing_stack_one_to_two(monkeypatch):
+    region = watcher.Region("top-left", 0, 0, 20, 20,
+                            (0, 0, 20, 20, 1, 1))
+    frame = np.zeros((20, 20, 3), dtype=np.int16)
+    frame[5:15, 5:10] = [220, 20, 20]
+    frames = iter([frame, frame, frame])
+    signatures = iter([0, 20, 20])
+
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: next(frames))
+    monkeypatch.setattr(watcher, "stack_signature",
+                        lambda *a, **k: next(signatures))
+    rule = _rule(kind="stack", new_slot_only=True, confirm_seconds=1,
+                 cooldown=0, capacity=1)
+
+    assert watcher._eval_stack(rule, "w", region, (0, 0, 20, 20), 0.0, 1) is None
+    assert watcher._eval_stack(rule, "w", region, (0, 0, 20, 20), 1.0, 2) is None
+    assert watcher._eval_stack(rule, "w", region, (0, 0, 20, 20), 2.1, 3) is None
 
 
 def test_parse_timer_rejects_impossible_readings():
@@ -996,6 +1123,63 @@ def test_runtime_backend_rejects_explicit_unavailable_backend(monkeypatch):
         watcher.make_runtime_backend("x11-xcb")
 
 
+def test_acquire_game_honors_requested_backend(monkeypatch):
+    class Requested(RecordingBackend):
+        name = "requested"
+
+        def available(self):
+            return True, "ok"
+
+    monkeypatch.setattr(watcher, "make_runtime_backend",
+                        lambda name=None: Requested(size=(800, 600)))
+    cfg = {"window": {"wm_class": "game"}}
+
+    game = watcher.acquire_game(cfg, "requested")
+
+    assert game.backend.name == "requested"
+    assert game.handle == "handle-for-game"
+    assert game.size == (800, 600)
+
+
+def test_xcb_backend_decodes_successful_getimage(monkeypatch):
+    """Exercise the default backend's successful BGRX -> RGB path in CI."""
+    parent = type(watcher)("xcffib")
+    parent.__path__ = []
+    xproto = type(watcher)("xcffib.xproto")
+
+    class ImageFormat:
+        ZPixmap = 2
+
+    xproto.ImageFormat = ImageFormat
+    parent.xproto = xproto
+    monkeypatch.setitem(watcher.sys.modules, "xcffib", parent)
+    monkeypatch.setitem(watcher.sys.modules, "xcffib.xproto", xproto)
+
+    class Reply:
+        data = bytes([30, 20, 10, 0, 60, 50, 40, 0])
+
+    class Request:
+        def reply(self):
+            return Reply()
+
+    class Core:
+        def GetImage(self, fmt, drawable, x, y, w, h, mask):
+            assert (fmt, drawable, x, y, w, h) == (2, 0x10, 0, 0, 2, 1)
+            return Request()
+
+    class Conn:
+        core = Core()
+
+    backend = watcher.X11XcbBackend()
+    backend._conn = Conn()
+
+    frame = backend.grab_array("16", (0, 0, 2, 1))
+
+    assert frame.dtype == np.int16
+    assert frame.shape == (1, 2, 3)
+    assert frame.tolist() == [[[10, 20, 30], [40, 50, 60]]]
+
+
 def test_xcb_backend_rejects_degenerate_boxes():
     backend = watcher.X11XcbBackend()
     for box in ((0, 0, 0, 10), (0, 0, 10, 0)):
@@ -1025,6 +1209,22 @@ def test_xcb_backend_reports_missing_binding(monkeypatch):
     ok, reason = backend.available()
     assert ok is False
     assert "xcffib" in reason
+
+
+def test_xcb_grab_file_supports_full_window_and_percentage_resize(tmp_path):
+    class FakeXcb(watcher.X11XcbBackend):
+        def size(self, handle):
+            return (20, 10)
+
+        def grab_array(self, handle, box):
+            assert box == (0, 0, 20, 10)
+            return np.zeros((10, 20, 3), dtype=np.int16)
+
+    out = tmp_path / "calibrate.png"
+    FakeXcb().grab_file("42", None, out, resize="50%")
+
+    with watcher.Image.open(out) as image:
+        assert image.size == (10, 5)
 
 
 # --------------------------------------------------------------------------
@@ -1061,6 +1261,22 @@ def test_doctor_flags_grid_larger_than_its_region():
 
     assert checks[0].verdict == "FAIL"
     assert "spans 500x500" in checks[0].detail
+
+
+def test_doctor_warns_when_region_position_is_clamped():
+    cfg = _thieving()
+    cfg = dict(cfg)
+    cfg["_regions"] = {
+        "bad": watcher.Region("top-left", -50, 10, 100, 100),
+    }
+    game = watcher.GameInstance(
+        "game", backend=RecordingBackend(size=(800, 600)))
+    game.acquire()
+
+    checks = watcher._check_regions(cfg, game)
+
+    assert checks[0].verdict == "WARN"
+    assert "clamped" in checks[0].detail
 
 
 def test_doctor_flags_region_clamped_by_a_small_window():
@@ -1290,12 +1506,35 @@ def test_ocr_variants_of_one_line_are_collapsed():
         assert reader._is_variant(norm_line(variant)) is True
 
 
-def test_unstamped_variants_are_collapsed():
+def test_unstamped_lines_are_not_fuzzy_collapsed():
+    """Without timestamps, similar wording may be a genuine repeated event."""
     reader = watcher.ChatReader("chat_tail", similarity=0.90)
     reader._recent = [norm_line("Your camouflage outfit keeps you hidden")]
 
     assert reader._is_variant(
-        norm_line("Your camoufiage outfit kesps you hidden")) is True
+        norm_line("Your camoufiage outfit kesps you hidden")) is False
+
+
+def test_unstamped_lines_dedup_only_while_still_visible():
+    reader = watcher.ChatReader("chat_tail")
+
+    first = reader.consume("You catch a trout.", 1)
+    same_view = reader.consume("You catch a trout.", 2)
+    reader.consume("", 3)
+    later = reader.consume("You catch a trout.", 4)
+
+    assert len(first) == 1
+    assert same_view == []
+    assert len(later) == 1
+
+
+def test_unstamped_duplicate_count_can_emit_new_visible_occurrence():
+    reader = watcher.ChatReader("chat_tail")
+    reader.consume("You catch a trout.", 1)
+
+    events = reader.consume("You catch a trout.\nYou catch a trout.", 2)
+
+    assert len(events) == 1
 
 
 def test_distinct_messages_stay_distinct():
@@ -1449,6 +1688,19 @@ def test_ocr_numeric_falls_back_to_tesseract(monkeypatch):
     blank = np.zeros((20, 60, 3), dtype=np.int16)
     assert watcher.ocr_numeric("w", (0, 0, 60, 20), blank) == "fallback"
     assert calls == [7]
+
+
+def test_ocr_raises_on_tesseract_process_failure(monkeypatch):
+    class Result:
+        stdout = ""
+        stderr = "language data missing"
+        returncode = 1
+
+    monkeypatch.setattr(watcher, "capture", lambda *a, **k: a[2])
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *a, **k: Result())
+
+    with pytest.raises(watcher.OCRReadError, match="language data missing"):
+        watcher.ocr("w", (0, 0, 10, 10))
 
 
 def test_ocr_numeric_skips_tesseract_when_sprites_match(monkeypatch):

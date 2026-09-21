@@ -28,13 +28,19 @@ desktops.
 
 ### Priority 0 implementation order
 
+This is the design order, **not** a completion checklist. Current completion is
+tracked in [priority-0-status.md](priority-0-status.md); steps 7–9 are still not
+implemented, and step 10 remains partial.
+
 Implement in this order unless live testing proves a dependency must move:
 
 1. Split capture/platform code behind a `GameInstance` / `CaptureBackend`
    interface.
 2. Add a central shared-frame scheduler and frame cache.
-3. Implement/benchmark a native X11/XComposite/XShm backend against the current
-   ImageMagick subprocess capture.
+3. Implement/benchmark native X11 capture against the ImageMagick fallback.
+   The shipped implementation now uses persistent XCB/xcffib `GetImage`;
+   XComposite/XShm remain optional optimizations if later measurement justifies
+   them.
 4. Add backend/frame health diagnostics and make them part of
    `screen-watcher doctor`.
 5. Introduce a reusable interface-reader registry, beginning with `ChatReader`
@@ -157,19 +163,22 @@ References:
 
 ### X11/XWayland foundation
 
-Replace the current repeated ImageMagick hot path with a direct backend after
-the abstraction exists.
+The repeated ImageMagick hot path has been replaced in live operation by the
+default `X11XcbBackend`, which keeps a persistent XCB connection and captures
+the required regions with `GetImage`. ImageMagick remains the compatibility
+fallback.
 
-Preferred design:
+Current design:
 - discover and own the RuneScape window identity;
-- capture through XComposite/XShm;
-- cache the latest full-game frame;
-- expose NumPy region views;
-- listen for configure/geometry changes;
-- invalidate/reacquire backing resources on resize/recreation;
-- maintain a backend minimum refresh interval;
-- benchmark CPU time, frame latency, allocations, and missed captures against
-  the existing implementation.
+- capture required regions through XCB/xcffib `GetImage`;
+- cache each region for one scheduler cycle;
+- expose NumPy arrays to readers/rules;
+- invalidate/reacquire cached resources on resize/recreation;
+- benchmark CPU time and capture latency against the fallback.
+
+Future XComposite/XShm work should be measurement-driven rather than treated as
+unfinished correctness work. A full-window cache was measured and rejected for
+the current 4K layout because it moved far more pixels than the live regions.
 
 RuneKit provides a particularly useful reference architecture: platform-specific
 code is isolated inside its game layer, it caches recent captures, uses
@@ -425,7 +434,9 @@ This prevents the final application from inheriting the entire research stack.
 
 ### Priority 0 acceptance criteria
 
-Do not call the Linux foundation complete until all of these are true:
+Do not call the Linux foundation complete until all of these are true. The
+current pass/fail/partial state is maintained in
+[priority-0-status.md](priority-0-status.md):
 
 - existing Fishing and Thieving behaviour still works through the new backend
   abstraction;
@@ -1220,10 +1231,12 @@ References:
 - https://github.com/skillbert/alt1
 - https://github.com/Jcapehart2/RuneKit-Reforged
 
-### Direct X11/XComposite/XShm backend
+### Direct X11 backend and possible XComposite/XShm optimization
 
-The current ImageMagick `import` subprocess is practical for the first version
-but should not remain the long-term hot path.
+The ImageMagick `import` subprocess is now the fallback rather than the live
+hot path. Screen Watcher's current native implementation uses XCB `GetImage`.
+XComposite/XShm remain useful reference techniques if later profiling shows a
+clear benefit.
 
 RuneKit's Linux backend provides a useful architectural reference:
 - platform-specific code is isolated behind a `GameInstance`;
@@ -1233,9 +1246,10 @@ RuneKit's Linux backend provides a useful architectural reference:
 - the last image is cached;
 - callers receive a platform-independent image object.
 
-Screen Watcher should eventually implement a native X11 backend with the same
-separation of concerns. A later Wayland backend can use PipeWire/portal capture
-without changing detectors.
+Screen Watcher already has the native X11 separation of concerns through
+`CaptureBackend`/`GameInstance`. A later Wayland backend can use
+PipeWire/portal capture without changing detectors. Any XComposite/XShm work
+should preserve that interface rather than create a parallel capture path.
 
 Do not copy GPL implementation code unless licensing compatibility has been
 deliberately reviewed; use the architecture and public protocol concepts as

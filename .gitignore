@@ -15,5 +15,6 @@ Thumbs.db
 
 # Local calibration and runtime data
 calibrate.png
+shot_*.png
 state/*
 !state/.gitkeep
