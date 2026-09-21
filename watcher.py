@@ -1362,7 +1362,6 @@ class Rule:
     _last_change: float = field(default=0.0, repr=False)
     _last_fired: float = field(default=0.0, repr=False)
     _armed: bool = field(default=True, repr=False)
-    _seen: set = field(default_factory=set, repr=False)
     _primed: bool = field(default=False, repr=False)
     _history: list = field(default_factory=list, repr=False)
     _full_since: float = field(default=0.0, repr=False)
@@ -1802,7 +1801,6 @@ def _eval_presence(rule: Rule, wid: str, box, now: float,
         rule._absent_since = 0.0
         rule._last_activity = now
         rule._armed = True
-        rule._seen.clear()
         return None
 
     corroborates = bool(rule._corroborate_box and rule.corroborate_pattern)
@@ -2421,7 +2419,6 @@ class ChatReader(InterfaceReader):
         self.similarity = similarity
         self._seen: set[str] = set()
         self._recent: list[str] = []
-        self.primed = False
         self.lines_read = 0
         self.events_emitted = 0
         self.variants_suppressed = 0
@@ -2731,7 +2728,7 @@ def _check_capture(cfg: dict, game: GameInstance) -> list[Check]:
         return [Check("capture", WARN, "skipped (no window)")]
     sched = FrameScheduler(game, cfg["_regions"])
     out = []
-    for _ in range(2):                    # two passes to detect frozen frames
+    for _ in range(2):                    # two passes for capture/timing sanity
         sched.begin()
         sched.prefetch(list(cfg["_regions"]))
     for name in sorted(cfg["_regions"]):
@@ -2851,12 +2848,12 @@ def _check_profile(cfg: dict, path: Path) -> list[Check]:
     else:
         out.append(Check("rules", PASS,
                          f"{len(enabled)} enabled, {disabled} disabled"))
-    unused = sorted(set(cfg["_regions"])
-                    - {r["region"] for r in enabled})
+    referenced = {r["region"] for r in cfg["rules"]}
+    unused = sorted(set(cfg["_regions"]) - referenced)
     if unused:
         out.append(Check("regions unused", WARN,
-                         f"captured by no enabled rule: {', '.join(unused)}",
-                         "harmless, but they cost nothing to remove"))
+                         f"referenced by no rule: {', '.join(unused)}",
+                         "remove obsolete regions or add the intended rule"))
     sounds = [r.get("sound") for r in enabled if r.get("sound")]
     if len(sounds) != len(set(sounds)):
         dupes = sorted({s for s in sounds if sounds.count(s) > 1})
