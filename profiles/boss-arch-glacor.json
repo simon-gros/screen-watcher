@@ -40,6 +40,22 @@
       "w": 200,
       "h": 60,
       "_note": "The encounter timer shown top-left of centre during an instanced fight. OCR returns '0036' for 00:36 - the colon is lost to the decorative frame, so the parser accepts digits with optional separators."
+    },
+    "backpack": {
+      "anchor": "bottom-right",
+      "dx": -13,
+      "dy": -38,
+      "w": 330,
+      "h": 560,
+      "grid": {
+        "x0": 17,
+        "y0": 86,
+        "cell_w": 61,
+        "cell_h": 55,
+        "cols": 5,
+        "rows": 6
+      },
+      "_note": "Backpack panel in the bossing layout. Same geometry as the skilling profiles - the panel is pinned bottom-right at a fixed size - and verified here by a hand count of 13 desert sole."
     }
   },
   "rules": [
@@ -93,6 +109,29 @@
       "enabled": true,
       "_note": "Fires when prayer actually empties, which is the event that matters AFK: RS3 prints no chat line when a protection prayer deactivates, so the orb is the only evidence. Confirmed live - prayer sat at 0/780 while health fell to 30%, taking unmitigated magic damage with nothing on screen saying so. warn_at=3 is an absolute point count, not a percentage - 3 points or fewer rather than exactly zero: the orb can read 1-2 points for a tick while draining, and the distinction does not matter once protection has lapsed. Deliberately separate from low_prayer so the two have different sounds and different urgencies - 'about to run out' and 'already gone' need different reactions. cooldown=60 stops a continuous zero from repeating every minute.",
       "warn_at": 3
+    },
+    {
+      "name": "food_left",
+      "kind": "item_count",
+      "region": "backpack",
+      "item": "desert sole",
+      "min_blue": 0,
+      "min_red": 70,
+      "min_cover": 0.2,
+      "warn_below": 3,
+      "out_below": 0,
+      "confirm_seconds": 6,
+      "repeat_seconds": 120,
+      "cooldown": 45,
+      "message": "Food low",
+      "alert_body": "{n} {noun} left. Bank or leave before the next big hit.",
+      "out_message": "Out of food",
+      "out_alert_body": "No desert sole left. Nothing to eat at Arch-Glacor.",
+      "sound": "battery-low",
+      "urgency": "critical",
+      "timeout_ms": 25000,
+      "enabled": true,
+      "_note": "Counts desert sole by icon colour rather than reading stack digits, for the reason the urn rule documents: digits are small, anti-aliased and drawn over the icon, and OCR of an unchanging stack was measured flickering between 6, 13 and 1. MEASURED on this pack: desert sole scores +64 to +66 red-minus-blue on the icon's bright pixels (+87 at the stricter luminance floor the counter actually uses), against -48 to +54 for every other item carried - potions, runes, scrolls. min_red=70 sits in that gap, and the count held at exactly 13 across thresholds from 60 to 80. min_cover=0.2 is required: a desert sole fills only 0.22 of its cell where a bulky urn fills 0.4, so the 0.30 default rejected all thirteen and counted one. confirm_seconds=6 rejects the overlay case, where a bank or loot window covering the backpack briefly reads as zero food."
     },
     {
       "name": "encounter_started",

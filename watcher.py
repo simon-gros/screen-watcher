@@ -1853,6 +1853,8 @@ class Rule:
     milestone_message: str = "{total} reached."
     # item_count
     min_blue: float = 40.0
+    min_red: float = 0.0
+    min_cover: float = 0.30
     warn_below: int = 2
     out_below: int = 0
     confirm_seconds: float = 6.0
@@ -2087,8 +2089,16 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
 
 def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
                     lum_floor: float = 90.0, pad: float = 0.22,
-                    min_cover: float = 0.30) -> int:
-    """Count backpack slots whose icon matches a blue colour signature.
+                    min_cover: float = 0.30, min_red: float = 0.0) -> int:
+    """Count backpack slots whose icon matches a colour signature.
+
+    `min_blue` selects blue-dominant icons (blue minus red); `min_red`
+    selects red/brown-dominant ones (red minus blue). They are opposite ends
+    of the same axis, so a rule sets one or the other.
+
+    Desert sole - the food carried at Arch-Glacor - measured +64 to +66 on
+    the red axis across thirteen slots, against -48 to +54 for every other
+    item in the same pack, so a threshold near +60 separates them cleanly.
 
     Reading the stack digits was tried first and abandoned: they are small,
     anti-aliased and drawn over the icon, and OCR of an unchanging stack was
@@ -2104,7 +2114,9 @@ def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
 
     A threshold near +40 therefore sits ~60 away from both populations.
     `min_cover` rejects slots whose icon barely fills the cell, which is what a
-    part-drawn panel or a tooltip edge looks like.
+    part-drawn panel or a tooltip edge looks like. It is configurable because
+    icon bulk varies: an urn fills ~0.4 of its cell, while a desert sole - a
+    slim fish - fills only 0.22 and was rejected outright by the 0.30 default.
     """
     x0, y0, cw, ch, cols, rows = grid
     n = 0
@@ -2120,7 +2132,11 @@ def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
             if icon.mean() < min_cover:
                 continue
             red, _green, blue = patch[icon].mean(axis=0)
-            if float(blue) - float(red) >= min_blue:
+            if min_red > 0.0:
+                matched = float(red) - float(blue) >= min_red
+            else:
+                matched = float(blue) - float(red) >= min_blue
+            if matched:
                 n += 1
     return n
 
@@ -2150,7 +2166,9 @@ def _eval_item_count(rule: Rule, wid: str, region: "Region", box,
     if not region.grid:
         return
     frame = capture_array(wid, box, cycle=cycle)
-    n = count_by_colour(frame, region.grid, rule.min_blue)
+    n = count_by_colour(frame, region.grid, rule.min_blue,
+                        min_red=rule.min_red,
+                        min_cover=rule.min_cover)
 
     # Track how long the count has been at or under each threshold.
     if n <= rule.out_below:

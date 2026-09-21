@@ -2612,3 +2612,71 @@ def test_prayer_rules_fire_at_different_points():
     # different reactions.
     assert rules["prayer_out"]["urgency"] == "critical"
     assert rules["low_prayer"]["sound"] != rules["prayer_out"]["sound"] or True
+
+
+# --------------------------------------------------------------------------
+# Food counting by icon colour (Arch-Glacor desert sole)
+# --------------------------------------------------------------------------
+
+def _colour_grid(colours, cols=5, rows=6, cell=40):
+    """Backpack-shaped frame where each cell is a flat colour or empty."""
+    frame = np.full((rows * cell, cols * cell, 3), 20, dtype=np.uint8)
+    for i, rgb in enumerate(colours):
+        if rgb is None:
+            continue
+        r, c = divmod(i, cols)
+        frame[r * cell + 4:(r + 1) * cell - 4,
+              c * cell + 4:(c + 1) * cell - 4] = rgb
+    return frame, (0, 0, cell, cell, cols, rows)
+
+
+def test_count_by_colour_selects_the_red_axis():
+    """Desert sole is brown: red-dominant, the opposite of a blue urn."""
+    sole = (180, 120, 95)          # red-blue = +85
+    potion = (90, 110, 200)        # red-blue = -110
+    frame, grid = _colour_grid([sole, sole, sole, potion, potion])
+
+    assert watcher.count_by_colour(frame, grid, min_blue=0, min_red=70,
+                                   min_cover=0.2) == 3
+
+
+def test_count_by_colour_still_selects_the_blue_axis():
+    """Adding min_red must not disturb the existing urn rule."""
+    urn = (90, 140, 200)           # blue-red = +110
+    sole = (180, 120, 95)
+    frame, grid = _colour_grid([urn, urn, sole, sole, sole])
+
+    assert watcher.count_by_colour(frame, grid, min_blue=40,
+                                   min_cover=0.2) == 2
+
+
+def test_count_by_colour_min_cover_is_configurable():
+    """A slim fish fills 0.22 of its cell; the 0.30 default rejected it.
+
+    Measured live: thirteen desert sole counted as one until min_cover
+    was lowered.
+    """
+    sole = (180, 120, 95)
+    cell = 40
+    frame = np.full((cell, cell, 3), 20, dtype=np.uint8)
+    # A small icon covering well under a third of the sampled area.
+    frame[17:23, 17:23] = sole
+    grid = (0, 0, cell, cell, 1, 1)
+
+    assert watcher.count_by_colour(frame, grid, min_blue=0, min_red=70) == 0
+    assert watcher.count_by_colour(frame, grid, min_blue=0, min_red=70,
+                                   min_cover=0.01) == 1
+
+
+def test_boss_profile_counts_food():
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    rules = {r["name"]: r for r in cfg["rules"]}
+    food = rules["food_left"]
+
+    assert food["kind"] == "item_count"
+    assert food["region"] == "backpack"
+    # The red axis, with a cover threshold low enough for a slim fish.
+    assert food["min_red"] >= 60 and food["min_blue"] == 0
+    assert food["min_cover"] <= 0.25
+    assert food["out_below"] == 0
+    assert cfg["_regions"]["backpack"].grid is not None
