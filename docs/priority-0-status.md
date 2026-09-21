@@ -36,8 +36,9 @@ A green CI run is a baseline, **not** sufficient evidence that the current
 application works correctly in practice.
 
 See the "Immediate practical validation stage" in
-[application-outline.md](application-outline.md) and the dedicated testing
-tracking issue.
+[application-outline.md](application-outline.md), the detailed
+[practical validation plan](practical-validation-plan.md), and tracking issue
+[#13](https://github.com/simon-gros/screen-watcher/issues/13).
 
 ## Ordered foundation
 
