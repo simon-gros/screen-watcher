@@ -4407,3 +4407,41 @@ def test_patching_ocr_cached_still_reaches_chatreader(monkeypatch):
     reader = readers.ChatReader("chat_tail")
     lines = reader.read(sched)
     assert any("catch a fish" in line.text for line in lines)
+
+
+def test_runtime_reads_pid_file_through_watcher(monkeypatch, tmp_path):
+    """Redirecting `watcher.PID_FILE` must reach the singleton helpers.
+
+    The runtime module first bound `PID_FILE = _w().STATE_DIR / ...` at
+    import time, which froze the repository path before any test could
+    redirect it - the same import-time-binding mistake as the
+    `load_config` default argument. It reads the value through `watcher`
+    on each use instead.
+    """
+    from screen_watcher import runtime
+
+    pid_file = tmp_path / "watcher.pid"
+    monkeypatch.setattr(watcher, "PID_FILE", pid_file)
+    pid_file.write_text(str(os.getpid()))
+
+    with pytest.raises(SystemExit):
+        runtime._terminate(watcher.signal.SIGTERM, None)
+    assert not pid_file.exists()
+
+
+def test_runtime_is_reexported():
+    from screen_watcher import runtime
+
+    for name in ("WindowTracker", "RegionHealth", "next_deadline",
+                 "claim_singleton", "_release_singleton", "_terminate"):
+        assert getattr(watcher, name) is getattr(runtime, name), name
+
+
+def test_patching_find_window_reaches_the_extracted_tracker(monkeypatch):
+    """Six tests drive WindowTracker by patching `watcher.find_window`."""
+    monkeypatch.setattr(watcher, "kwin_available", lambda: (False, "test"))
+    monkeypatch.setattr(watcher, "find_window", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "window_size", lambda *a, **k: None)
+
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600))
+    assert tracker.reacquire()[0] == "gone"
