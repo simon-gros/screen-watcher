@@ -194,15 +194,15 @@
       "name": "loot_received",
       "kind": "ocr",
       "region": "chat_tail",
-      "pattern": "beam shines over one of your items|you receive:",
+      "pattern": "\\w*b\\w*m\\s+shines over|shines over\\W*one of your items|you receive[:;]|received a drop|dropped to the ground",
       "cooldown": 0,
-      "message": "Loot",
+      "message": "Drop",
       "alert_body": "{line}",
       "sound": "message-highlight",
       "urgency": "normal",
       "timeout_ms": 25000,
       "enabled": true,
-      "_note": "VERIFIED from live chat. Arch-Glacor rewards go to a reward chest rather than a ground drop, and each item is announced as 'A golden beam shines over one of your items, You receive: 12 x Glacor remnants.' The pattern deliberately matches the beam phrase OR the 'You receive:' prefix, because OCR mangles the first words badly - observed as 'A aolden beam' and 'A golden bieam' in the same session - and either half alone identifies the line. alert_body echoes the whole line so the item and quantity are visible without switching to the game. cooldown=0 because a kill can drop several items at once and each is worth reporting; deduplication by line already stops the same drop repeating while it sits on screen."
+      "_note": "Announces a drop, whether it lands on the ground or in the reward chest. CORRECTION: this rule was originally documented as a reward-chest rule, which was wrong. Per the wiki, a loot beam highlights a valuable drop ON THE GROUND and lists the item in the chatbox, so this line is the ground-drop announcement - the two were conflated. The pattern is deliberately tolerant. Across five logged captures of the same line, OCR mangled a different word each time: 'A aolden beam', 'A golden bieam', 'A golder BEam', 'over.one', 'You receive;'. Only 'shines over' survived all five, so the first alternative matches any b..m-shaped word before it and the 'You receive' half stands alone as a fallback - either fragment identifies the line. 'shines over' alone was tried and rejected: it also matches ordinary prose such as 'The sun shines over Menaphos', which is asserted in the tests. Note the beam only fires above a value threshold (50k minimum per the wiki), so ordinary low-value ground drops produce no chat line at all and cannot be detected this way."
     },
     {
       "name": "gold_milestone",

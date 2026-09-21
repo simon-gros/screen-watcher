@@ -3367,3 +3367,38 @@ def test_low_health_still_alerts_on_a_pre_existing_low(monkeypatch):
     fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
              for n in range(3)]
     assert sum(1 for a in fired if a is not None) == 1
+
+
+def test_drop_pattern_survives_every_observed_mangling():
+    """Five logged captures of one line, each mangling a different word.
+
+    'A aolden beam', 'A golden bieam', 'A golder BEam', 'over.one',
+    'You receive;' - only "shines over" survived all five.
+    """
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    pat = {r["name"]: r for r in cfg["rules"]}["loot_received"]["pattern"]
+    for line in (
+            "A aolden beam shines over one of your items, You receive: & x Runi",
+            "A golden bieam shines over one of your items, You receive: 1| X La",
+            "A golder BEam shines over.one of your items, You receive: 12/x",
+            "A golden beam shines over one of your items, You receive; 12",
+            "A g0lden b3am shines over one of your items",
+            "You receive: 3 x Glacor remnants."):
+        assert re.search(pat, line, re.I), line
+
+
+def test_drop_pattern_does_not_match_ordinary_prose():
+    """"shines over" alone was tried and rejected.
+
+    It matches lines like "The sun shines over Menaphos", so the beam
+    fragment has to sit next to a beam-shaped word or "one of your items".
+    """
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    pat = {r["name"]: r for r in cfg["rules"]}["loot_received"]["pattern"]
+    for line in ("The sun shines over Menaphos.",
+                 "You have killed 626 Arch-Glacor in normal mode.",
+                 "You eat the desert sole.",
+                 "It restores 1450 life points.",
+                 "455 coins have been added to your money pouch.",
+                 "You are awarded 25 Marks of War and now have a total of 2,090."):
+        assert not re.search(pat, line, re.I), line
