@@ -248,8 +248,8 @@
       "milestone_message": "You've been thieving for {label} ({elapsed}).",
       "message": "Session milestone",
       "alert_body": "Thieving for {label} ({elapsed}). Still technically a plan.",
-      "sound": "complete-media-burn",
-      "_note": "Reads the Metrics panel's own elapsed timer rather than tracking wall-clock time in the watcher. That is the better source: it is the number the player is already reading, it pauses when they pause it, and it survives a watcher restart because the game owns it. step=3600 fires once per hour. The parser anchors on [0-5] for the minute and second fields so a garbled frame like '00:82:09' is rejected rather than becoming a bogus elapsed time, and a timer reset rewinds the milestone counter so a fresh session starts clean.",
+      "sound": "completion-rotation",
+      "_note": "Reads the Metrics panel's own elapsed timer rather than tracking wall-clock time in the watcher. That is the better source: it is the number the player is already reading, it pauses when they pause it, and it survives a watcher restart because the game owns it. step=3600 fires once per hour. The parser anchors on [0-5] for the minute and second fields so a garbled frame like '00:82:09' is rejected rather than becoming a bogus elapsed time, and a timer reset rewinds the milestone counter so a fresh session starts clean. Sound is deliberately different from coin_milestone: both are milestone alerts, and sharing one tone meant a coin milestone and an hour milestone were indistinguishable without looking at the screen, which is the whole point of per-rule sounds.",
       "enabled": true,
       "urgency": "normal",
       "timeout_ms": 20000

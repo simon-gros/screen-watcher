@@ -170,6 +170,7 @@ nohup python3 watcher.py --config profiles/fishing.json watch \
 | `watch` | run the polling and notification loop |
 | `alerts` | show per-rule alert counts and rates |
 | `backends` | list capture backends and whether they work on this host |
+| `doctor` | PASS/WARN/FAIL diagnostics for capture, OCR, regions, and outputs |
 | `status` | report whether a watcher process is running |
 | `pause` | pause the running watcher |
 | `resume` | resume the paused watcher |
