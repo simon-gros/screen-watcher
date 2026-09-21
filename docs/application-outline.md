@@ -657,6 +657,8 @@ This stage is continuous: it does not disappear after one testing pass. Every
 major later roadmap phase must include validation of already-shipped behavior
 before adding more surface area.
 
+Tracking issue: [#13 — practical validation of the current Screen Watcher](https://github.com/simon-gros/screen-watcher/issues/13).
+
 ### Priority 0 engineering stage — implement before broad profile expansion
 
 This remains the gating engineering stage and should be read before the broader
