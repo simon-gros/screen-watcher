@@ -1141,6 +1141,45 @@ def test_acquire_game_honors_requested_backend(monkeypatch):
     assert game.size == (800, 600)
 
 
+def test_xcb_backend_decodes_successful_getimage(monkeypatch):
+    """Exercise the default backend's successful BGRX -> RGB path in CI."""
+    parent = type(watcher)("xcffib")
+    parent.__path__ = []
+    xproto = type(watcher)("xcffib.xproto")
+
+    class ImageFormat:
+        ZPixmap = 2
+
+    xproto.ImageFormat = ImageFormat
+    parent.xproto = xproto
+    monkeypatch.setitem(watcher.sys.modules, "xcffib", parent)
+    monkeypatch.setitem(watcher.sys.modules, "xcffib.xproto", xproto)
+
+    class Reply:
+        data = bytes([30, 20, 10, 0, 60, 50, 40, 0])
+
+    class Request:
+        def reply(self):
+            return Reply()
+
+    class Core:
+        def GetImage(self, fmt, drawable, x, y, w, h, mask):
+            assert (fmt, drawable, x, y, w, h) == (2, 0x10, 0, 0, 2, 1)
+            return Request()
+
+    class Conn:
+        core = Core()
+
+    backend = watcher.X11XcbBackend()
+    backend._conn = Conn()
+
+    frame = backend.grab_array("0x10", (0, 0, 2, 1))
+
+    assert frame.dtype == np.int16
+    assert frame.shape == (1, 2, 3)
+    assert frame.tolist() == [[[10, 20, 30], [40, 50, 60]]]
+
+
 def test_xcb_backend_rejects_degenerate_boxes():
     backend = watcher.X11XcbBackend()
     for box in ((0, 0, 0, 10), (0, 0, 10, 0)):
