@@ -2109,3 +2109,35 @@ def test_next_deadline_recovers_a_steady_cadence_after_a_stall():
 def test_next_deadline_handles_an_exactly_due_deadline():
     """`now` landing exactly on the deadline must still move forward."""
     assert watcher.next_deadline(10.0, 1.5, now=11.5) == pytest.approx(13.0)
+
+
+def test_terminate_releases_the_singleton(tmp_path, monkeypatch):
+    """SIGTERM/SIGINT must not leave a stale pid file behind.
+
+    atexit alone was not enough: measured in isolation, catching
+    KeyboardInterrupt in __main__ did not reliably run atexit handlers when
+    the signal arrived via `kill` rather than from a terminal.
+    """
+    pid_file = tmp_path / "watcher.pid"
+    pid_file.write_text(str(os.getpid()))
+    monkeypatch.setattr(watcher, "PID_FILE", pid_file)
+
+    with pytest.raises(SystemExit):
+        watcher._terminate(watcher.signal.SIGTERM, None)
+
+    assert not pid_file.exists()
+
+
+def test_terminate_leaves_another_process_pid_file_alone():
+    """Only the owner removes it, or a restart could delete a live claim."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        pid_file = Path(d) / "watcher.pid"
+        pid_file.write_text(str(os.getpid() + 1))
+        original = watcher.PID_FILE
+        watcher.PID_FILE = pid_file
+        try:
+            watcher._release_singleton()
+            assert pid_file.exists()
+        finally:
+            watcher.PID_FILE = original

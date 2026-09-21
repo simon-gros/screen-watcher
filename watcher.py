@@ -3862,6 +3862,29 @@ def claim_singleton() -> None:
                          f"stop it first, or delete {PID_FILE}")
     PID_FILE.write_text(str(os.getpid()))
     atexit.register(_release_singleton)
+    # atexit does not run on SIGTERM - Python's default handler terminates
+    # immediately - so `systemctl stop`, `kill`, and `pkill` all left the
+    # pid file behind. Stale files are recovered from via /proc identity
+    # checks, but raising SystemExit here means the normal path cleans up
+    # and the recovery is a backstop rather than the usual case.
+    # SIGINT is included deliberately. Catching KeyboardInterrupt in
+    # __main__ looks like it covers Ctrl-C, but measured in isolation it
+    # does not reliably run atexit when the signal arrives by `kill` rather
+    # than from a terminal - the pid file survived. Handling the signal
+    # explicitly makes cleanup the same code path in every case.
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, _terminate)
+        except (OSError, ValueError):
+            # Not the main thread, or the signal is unavailable here.
+            pass
+
+
+def _terminate(signum, frame) -> None:
+    """Exit cleanly on a termination signal, running atexit handlers."""
+    _release_singleton()
+    name = signal.Signals(signum).name if hasattr(signal, "Signals") else signum
+    raise SystemExit(f"stopped ({name})")
 
 
 def _release_singleton() -> None:
