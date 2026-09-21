@@ -24,7 +24,8 @@ For the longer-term architecture and roadmap, see
 ## Current status
 
 - **Platform:** Linux desktop
-- **Display path:** X11/XWayland
+- **Display path:** X11/XWayland for pixels; KWin scripting for window state
+  on KDE Wayland (read-only, optional)
 - **Game window detection:** configurable through `window.wm_class`
 - **Included profiles:** fishing and thieving/pickpocketing
 - **Profile families supported by validation:** `skill`, `quest`, and `boss`
@@ -434,6 +435,14 @@ architectural limitations are documented in
   capture is the default and measured 42x faster than the ImageMagick path
   (648.6 ms -> 15.3 ms per four-region cycle); ImageMagick remains as an
   automatic fallback when `python-xcffib` is unavailable.
+- On KDE Wayland, window *state* is additionally read through KWin's scripting
+  API, which reports facts X11 cannot express: an explicitly minimised window
+  rather than an absent one, and true keyboard focus. This is read-only and
+  entirely optional - it needs `qdbus`, `python-dbus`, and PyGObject, and the
+  X11 path is used unchanged when any of them is missing. KWin geometry is
+  *logical*, not pixels (1.75x apart on a scaled display), so it is never fed
+  to capture directly. `doctor` reports discovery, window state, and the
+  detected scale factor.
 - Desktop notifications are the implemented notification backend.
 - Per-rule sound names currently resolve against KDE's Ocean sound theme under
   `/usr/share/sounds/ocean/stereo`; if a configured sound file or `paplay`

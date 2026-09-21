@@ -130,6 +130,223 @@ def window_size(wid: str) -> tuple[int, int] | None:
 
 
 # --------------------------------------------------------------------------
+# KWin read-only window discovery
+#
+# Priority 0, step 7. Native Wayland deliberately stops applications from
+# enumerating each other's windows the X11 way, so `xdotool` sees only what
+# XWayland exposes. KWin's scripting API is KDE's supported route to that
+# metadata, and it answers questions X11 cannot: whether the game is on the
+# current virtual desktop, whether it is genuinely active rather than merely
+# mapped, and its identity across a restart.
+#
+# Strictly read-only, per the architecture notes: discovery, identity,
+# geometry, focus, and health. Never input injection.
+# --------------------------------------------------------------------------
+
+#: Where the KWin script posts its findings back to.
+KWIN_BUS_NAME = "org.screenwatcher.KWin"
+KWIN_BUS_PATH = "/Discovery"
+
+#: Loaded into KWin, runs once, reports every window, and is then unloaded.
+#: `windowList` is Plasma 6; `clientList` is the Plasma 5 spelling.
+_KWIN_SCRIPT = """
+var out = [];
+var wins = workspace.windowList ? workspace.windowList() : workspace.clientList();
+for (var i = 0; i < wins.length; i++) {
+    var w = wins[i];
+    if (!w.resourceClass) continue;
+    out.push([w.resourceClass, w.caption,
+              Math.round(w.frameGeometry.x), Math.round(w.frameGeometry.y),
+              Math.round(w.frameGeometry.width),
+              Math.round(w.frameGeometry.height),
+              w.minimized, w.active, w.onAllDesktops,
+              w.internalId].join("\\t"));
+}
+callDBus("%(bus)s", "%(path)s", "%(bus)s", "Report", out.join("\\n"));
+"""
+
+
+@dataclass
+class KWinWindow:
+    """One window as KWin sees it.
+
+    `geometry` is in KWin's *logical* coordinates, which on a scaled display
+    are not the pixel coordinates XCB and ImageMagick use - measured 1.75x
+    apart on this machine (2194 logical against 3840 physical). Capture code
+    must never consume these numbers directly; `scale_to_pixels` converts.
+    """
+
+    wm_class: str
+    caption: str
+    x: int
+    y: int
+    width: int
+    height: int
+    minimized: bool
+    active: bool
+    on_all_desktops: bool
+    internal_id: str
+
+    @property
+    def geometry(self) -> tuple[int, int, int, int]:
+        return (self.x, self.y, self.width, self.height)
+
+    def scale_to_pixels(self, scale: float) -> tuple[int, int, int, int]:
+        """Logical geometry converted to physical pixels."""
+        return (round(self.x * scale), round(self.y * scale),
+                round(self.width * scale), round(self.height * scale))
+
+
+def kwin_available() -> tuple[bool, str]:
+    """Whether KWin scripting discovery can run here."""
+    if not _session_is_wayland():
+        return False, "not a Wayland session"
+    if not shutil.which("qdbus6") and not shutil.which("qdbus"):
+        return False, "missing qdbus (install qt6-tools)"
+    try:
+        import dbus  # noqa: F401
+    except ImportError:
+        return False, "missing python-dbus"
+    if _qdbus("org.kde.KWin", "/Scripting",
+              "org.kde.kwin.Scripting.isScriptLoaded", "probe") is None:
+        return False, "KWin scripting not reachable on the session bus"
+    return True, "ok"
+
+
+def _session_is_wayland() -> bool:
+    """True when the desktop session is Wayland, not X11.
+
+    `XDG_SESSION_TYPE` is empty for processes started outside the session
+    (a service, an agent shell), which is exactly where this runs, so fall
+    back to reading it out of the live compositor like `ensure_x_env` does.
+    """
+    if os.environ.get("XDG_SESSION_TYPE") == "wayland":
+        return True
+    r = subprocess.run(["pgrep", "-u", str(os.getuid()), "kwin_wayland"],
+                       capture_output=True, text=True)
+    return bool(r.stdout.split())
+
+
+def _qdbus(*args: str) -> str | None:
+    """One qdbus call, or None when it fails."""
+    tool = shutil.which("qdbus6") or shutil.which("qdbus")
+    if not tool:
+        return None
+    try:
+        r = subprocess.run([tool, *args], capture_output=True, text=True,
+                           timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def kwin_windows(timeout: float = 5.0) -> list[KWinWindow]:
+    """Every window KWin knows about, via a one-shot script.
+
+    KWin scripts cannot return a value to their caller, so the script calls
+    back into a temporary D-Bus service we own. The alternative - scraping
+    `console.info` out of the journal - needs log access and races with log
+    rotation, so it is not used.
+    """
+    import dbus
+    import dbus.service
+    import dbus.mainloop.glib
+    from gi.repository import GLib
+
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    received: list[str] = []
+
+    class _Sink(dbus.service.Object):
+        @dbus.service.method(KWIN_BUS_NAME, in_signature="s")
+        def Report(self, payload):        # noqa: N802 - D-Bus method name
+            received.append(str(payload))
+            loop.quit()
+
+    bus = dbus.SessionBus()
+    name = dbus.service.BusName(KWIN_BUS_NAME, bus)
+    sink = _Sink(bus, KWIN_BUS_PATH)
+    loop = GLib.MainLoop()
+
+    # A unique plugin name, so concurrent runs cannot unload each other's
+    # script - KWin keys loaded scripts by that name alone.
+    plugin = f"screenwatcher{os.getpid()}"
+    body = _KWIN_SCRIPT % {"bus": KWIN_BUS_NAME, "path": KWIN_BUS_PATH}
+    path = STATE_DIR / f"{plugin}.js"
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+        loaded = _qdbus("org.kde.KWin", "/Scripting",
+                        "org.kde.kwin.Scripting.loadScript", str(path), plugin)
+        if loaded is None:
+            return []
+        _qdbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.start")
+        GLib.timeout_add(int(timeout * 1000), lambda: (loop.quit(), False)[1])
+        loop.run()
+    finally:
+        _qdbus("org.kde.KWin", "/Scripting",
+               "org.kde.kwin.Scripting.unloadScript", plugin)
+        path.unlink(missing_ok=True)
+        sink.remove_from_connection()
+        del name
+
+    return _parse_kwin_report(received[0]) if received else []
+
+
+def _parse_kwin_report(payload: str) -> list[KWinWindow]:
+    """Parse the script's tab-separated report.
+
+    Malformed rows are skipped rather than raising: this is diagnostic data
+    from another process, and one odd window must not break discovery.
+    """
+    out = []
+    for line in payload.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 10:
+            continue
+        try:
+            out.append(KWinWindow(
+                wm_class=parts[0], caption=parts[1],
+                x=int(float(parts[2])), y=int(float(parts[3])),
+                width=int(float(parts[4])), height=int(float(parts[5])),
+                minimized=parts[6] == "true", active=parts[7] == "true",
+                on_all_desktops=parts[8] == "true", internal_id=parts[9]))
+        except ValueError:
+            continue
+    return out
+
+
+def kwin_scale(win: KWinWindow, pixels: tuple[int, int]) -> float | None:
+    """Logical-to-physical scale factor, derived from a known pixel size.
+
+    Measured from width alone. Height disagrees: KWin reports *frame*
+    geometry including decoration, while the X11 client area excludes it -
+    observed as 2107 against 2058 on a window whose width matched exactly.
+    Width has no such decoration on a maximised game window, so it is the
+    reliable axis.
+
+    Returns None when the result is not close to a plausible scale, which
+    means the two sources are describing different windows.
+    """
+    if not win.width or not pixels or not pixels[0]:
+        return None
+    scale = pixels[0] / win.width
+    return scale if 0.5 <= scale <= 4.0 else None
+
+
+def kwin_find(wm_class: str, windows=None) -> KWinWindow | None:
+    """Largest window matching `wm_class`, as KWin sees it.
+
+    Matches the `find_window` rule - largest wins - so the two discovery
+    paths agree on which window is the game when a launcher shares its class.
+    """
+    wins = kwin_windows() if windows is None else windows
+    matching = [w for w in wins if w.wm_class == wm_class]
+    if not matching:
+        return None
+    return max(matching, key=lambda w: w.width * w.height)
+
+
+# --------------------------------------------------------------------------
 # capture backends
 #
 # Priority 0, step 1: separate "which window and how do we get pixels" from
@@ -2657,7 +2874,11 @@ def _check_session() -> list[Check]:
     ensure_x_env()
     display = os.environ.get("DISPLAY")
     xauth = os.environ.get("XAUTHORITY", "")
-    session = os.environ.get("XDG_SESSION_TYPE") or "unknown"
+    # XDG_SESSION_TYPE is empty outside the desktop session (a service, an
+    # agent shell), so fall back to detecting the compositor directly rather
+    # than reporting "unknown" for a perfectly identifiable session.
+    session = (os.environ.get("XDG_SESSION_TYPE")
+               or ("wayland" if _session_is_wayland() else "unknown"))
     wayland = os.environ.get("WAYLAND_DISPLAY")
     if display:
         out.append(Check("session", PASS,
@@ -2675,6 +2896,56 @@ def _check_session() -> list[Check]:
                          "automatically from the running session"))
     elif xauth:
         out.append(Check("xauthority", PASS, xauth))
+    return out
+
+
+def _check_kwin(cfg: dict) -> list[Check]:
+    """KWin read-only window discovery (Priority 0, step 7).
+
+    Advisory, never fatal: capture still runs through XWayland, so a session
+    without KWin scripting is fully supported. What KWin adds is state X11
+    cannot express - an explicitly minimised window rather than an absent
+    one, and real focus - which is why it is reported separately.
+    """
+    ok, why = kwin_available()
+    if not ok:
+        return [Check("kwin", WARN, why,
+                      "optional; X11 discovery is used instead")]
+
+    wm_class = cfg["window"]["wm_class"]
+    try:
+        windows = kwin_windows()
+    except Exception as e:                       # noqa: BLE001 - diagnostic
+        return [Check("kwin", WARN, f"{type(e).__name__}: {e}",
+                      "optional; X11 discovery is used instead")]
+    if not windows:
+        return [Check("kwin", WARN, "script returned no windows",
+                      "KWin scripting may be restricted on this session")]
+
+    out = [Check("kwin", PASS, f"{len(windows)} windows via KWin scripting")]
+    win = kwin_find(wm_class, windows)
+    if win is None:
+        out.append(Check("kwin:window", WARN,
+                         f"no window for class {wm_class!r}",
+                         "start RuneScape, or correct window.wm_class"))
+        return out
+
+    state = ("minimized" if win.minimized
+             else "active" if win.active else "mapped")
+    out.append(Check("kwin:window", PASS,
+                     f"{win.caption or wm_class} {win.width}x{win.height} "
+                     f"logical, {state}"))
+
+    pixels = window_size(find_window(wm_class, visible_only=False) or "")
+    scale = kwin_scale(win, pixels) if pixels else None
+    if scale is not None:
+        out.append(Check("kwin:scale", PASS,
+                         f"{scale:.2f}x logical -> pixels "
+                         f"({win.width} -> {pixels[0]})"))
+    elif pixels:
+        out.append(Check("kwin:scale", WARN,
+                         f"logical {win.width} vs pixels {pixels[0]}",
+                         "KWin and X11 may be describing different windows"))
     return out
 
 
@@ -2933,6 +3204,7 @@ def run_doctor(cfg: dict, path: Path, requested_backend: str | None = None
     backend_checks, backend = _check_backends(requested_backend)
     checks += backend_checks
     checks += _check_profile(cfg, path)
+    checks += _check_kwin(cfg)
     game = GameInstance(cfg["window"]["wm_class"], backend=backend)
     checks += _check_window(cfg, game)
     checks += _check_regions(cfg, game)
@@ -3217,11 +3489,16 @@ class WindowTracker:
     BACKOFF_MAX = 30
 
     def __init__(self, wm_class: str, wid: str, size: tuple[int, int],
-                 game: "GameInstance | None" = None):
+                 game: "GameInstance | None" = None,
+                 use_kwin: bool | None = None):
         self.wm_class = wm_class
         self.wid = wid
         self.size = size
         self.game = game
+        # Resolved once: the availability probe costs a D-Bus round trip,
+        # and the answer cannot change while the session is running.
+        self.use_kwin = (kwin_available()[0] if use_kwin is None
+                         else use_kwin)
         self.misses = 0
         self.hidden = False
         self._wait = 0
@@ -3257,6 +3534,31 @@ class WindowTracker:
 
     # -- reacquisition -----------------------------------------------------
 
+    def describe_hidden(self) -> str | None:
+        """Why the window is hidden, when KWin can say.
+
+        X11 conflates every unmapped state into one silence: minimised, on
+        another virtual desktop, and shaded all look identical through
+        `--onlyvisible`. KWin distinguishes them, which turns an opaque
+        "window hidden, waiting" log line into an actionable one.
+
+        Returns None when KWin is unavailable, so the caller keeps its
+        existing wording rather than inventing a reason.
+        """
+        if not self.use_kwin:
+            return None
+        try:
+            win = kwin_find(self.wm_class)
+        except Exception:                        # noqa: BLE001 - diagnostic
+            return None
+        if win is None:
+            return None
+        if win.minimized:
+            return "minimised"
+        # Mapped as far as KWin is concerned, yet invisible to X11: the
+        # usual cause is another virtual desktop.
+        return "on another desktop"
+
     def reacquire(self) -> tuple[str, str | None]:
         """Try to re-point at the game.
 
@@ -3278,7 +3580,7 @@ class WindowTracker:
                 self.hidden = True
                 self._wait = self._backoff
                 self._backoff = min(self._backoff * 2, self.BACKOFF_MAX)
-                return "hidden", None
+                return "hidden", self.describe_hidden()
             return "gone", None
 
         size = window_size(new)
@@ -3434,8 +3736,8 @@ def cmd_watch(args) -> None:
                     for r in rules:
                         r.reset()
                 elif status == "hidden":
-                    print("window hidden (minimised or off-desktop), waiting",
-                          flush=True)
+                    why = was or "minimised or off-desktop"
+                    print(f"window hidden ({why}), waiting", flush=True)
                 else:
                     notify("Screen Watcher", "game window gone - stopping", "critical")
                     sys.exit("window gone")

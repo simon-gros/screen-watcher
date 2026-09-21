@@ -799,3 +799,80 @@ whose drift from `profiles/fishing.json` the test suite caught immediately.
 This had been present the whole time and no test could have found it: every
 check asserted that OCR returned *lines*, and it did - the last one was
 simply always wrong. It took looking at the actual pixels.
+
+## Priority 0, step 7 — KWin read-only window discovery
+
+Native Wayland deliberately stops applications from enumerating each other's
+windows, so `xdotool` sees only what XWayland exposes. KWin's scripting API
+is KDE's supported route to that metadata.
+
+This session is genuinely Plasma 6 Wayland (`kwin_wayland` on the session
+bus) with the game running as an XWayland client inside it - which is why
+both discovery paths exist and why they disagree in useful ways.
+
+### Getting an answer back out of KWin
+
+KWin scripts cannot return a value to their caller. The documented options
+are `console.info` into the journal, or `callDBus` out to a service you own.
+This uses the latter: a temporary D-Bus service that the injected script
+calls back into. Journal scraping needs log access, races with rotation, and
+parses human-readable output - all avoidable.
+
+The script is loaded under a PID-unique plugin name, because KWin keys
+loaded scripts by name alone and concurrent runs would otherwise unload each
+other's script.
+
+### What KWin knows that X11 does not
+
+| state | X11 `--onlyvisible` | KWin |
+|---|---|---|
+| mapped | window id | `minimized=false active=false` |
+| minimised | **nothing** | `minimized=true` |
+| focused | window id | `active=true` |
+
+The middle row is the ambiguity behind the focus-loss bug fixed earlier: X11
+returns the same silence for "minimised" and "closed". KWin states it
+outright, so `window hidden (minimised or off-desktop), waiting` became
+`window hidden (minimised), waiting` - verified live.
+
+Focus is the other gap. X11 discovery cannot distinguish a window that has
+keyboard focus from one merely mapped; KWin reports `active` directly, which
+the acceptance criteria require `doctor` to surface.
+
+### Logical coordinates are not pixels
+
+KWin reports **logical** geometry. On this display that is 2194x1204 against
+a physical 3840x2058 - a factor of 1.75. Feeding KWin geometry to XCB would
+capture the wrong region entirely, so `KWinWindow.geometry` is deliberately
+never consumed by capture code; `scale_to_pixels` converts explicitly.
+
+Scale is derived from **width only**. Height disagrees by more than rounding
+(2107 computed against 2058 measured) because KWin reports *frame* geometry
+including decoration while the X11 client area excludes it. Averaging the
+two axes would have quietly encoded that error into the scale factor.
+
+### Deliberately advisory
+
+Capture still runs through XWayland. KWin discovery adds state, not pixels,
+so a session without it is fully supported: `kwin_available()` reports why,
+`doctor` records a WARN rather than a FAIL, and `WindowTracker` keeps its
+existing X11 wording instead of inventing a reason.
+
+Every D-Bus import is function-local behind that check. Verified by importing
+`watcher` with `dbus` and `gi` forced to fail: the module loads, discovery
+reports `missing python-dbus`, and the X11 path is unaffected - which is what
+CI and any non-KDE machine will do.
+
+Cost is 14-37 ms per query against 38 ms for the `xdotool` pair it
+supplements, and it runs only on the capture-failure path.
+
+### A test that was quietly wrong
+
+Adding this made seven existing `WindowTracker` tests start probing the real
+session bus, because the constructor resolves KWin availability. They passed
+locally and would have failed in CI. The `windows` fixture now stubs
+`kwin_available`, which is the correct place - the fixture already exists to
+isolate these tests from the desktop.
+
+Strictly read-only throughout, per the architecture notes: discovery,
+identity, geometry, focus, health. No input injection.

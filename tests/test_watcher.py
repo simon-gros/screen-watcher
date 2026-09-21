@@ -1520,6 +1520,10 @@ class FakeWindows:
 
 @pytest.fixture
 def windows(monkeypatch):
+    # Keep the tracker off the session bus. Without this, constructing a
+    # WindowTracker probes KWin over D-Bus for real, which makes these tests
+    # depend on the developer's desktop and fail outright in CI.
+    monkeypatch.setattr(watcher, "kwin_available", lambda: (False, "test"))
     return FakeWindows().install(monkeypatch)
 
 
@@ -1782,3 +1786,120 @@ def test_ocr_scrolling_falls_back_on_unrelated_frame(monkeypatch):
     watcher.ocr_scrolling("0x1", box, cycle=2)
 
     assert seen == [120, 120]                # both are full reads
+
+
+# --------------------------------------------------------------------------
+# KWin read-only window discovery (Priority 0, step 7)
+# --------------------------------------------------------------------------
+
+#: A verbatim report from the live compositor, minus unrelated windows.
+KWIN_REPORT = (
+    "plasmashell\t\t0\t0\t2194\t1234\tfalse\tfalse\tfalse\t{aaa}\n"
+    "firefox\tmain - Mozilla Firefox\t344\t341\t594\t733\tfalse\ttrue\t"
+    "false\t{bbb}\n"
+    "steam_app_1343400\tRuneScape\t0\t0\t2194\t1204\tfalse\tfalse\tfalse\t"
+    "{ccc}"
+)
+
+
+def test_parse_kwin_report_reads_live_output():
+    wins = watcher._parse_kwin_report(KWIN_REPORT)
+
+    assert [w.wm_class for w in wins] == [
+        "plasmashell", "firefox", "steam_app_1343400"]
+    game = wins[2]
+    assert game.caption == "RuneScape"
+    assert game.geometry == (0, 0, 2194, 1204)
+    assert game.active is False
+    assert wins[1].active is True
+    assert game.internal_id == "{ccc}"
+
+
+def test_parse_kwin_report_skips_malformed_rows():
+    """Diagnostic data from another process must not break discovery."""
+    payload = ("short\trow\n"
+               "bad\twidth\t0\t0\tNOTANUMBER\t10\tfalse\tfalse\tfalse\t{x}\n"
+               + KWIN_REPORT)
+    assert len(watcher._parse_kwin_report(payload)) == 3
+
+
+def test_kwin_find_prefers_the_largest_match():
+    """A launcher can share the game's class; the game is the big one."""
+    payload = (
+        "steam_app_1343400\tLauncher\t0\t0\t400\t300\tfalse\tfalse\tfalse\t{a}\n"
+        "steam_app_1343400\tRuneScape\t0\t0\t2194\t1204\tfalse\tfalse\tfalse\t{b}"
+    )
+    wins = watcher._parse_kwin_report(payload)
+    assert watcher.kwin_find("steam_app_1343400", wins).caption == "RuneScape"
+
+
+def test_kwin_find_returns_none_when_absent():
+    wins = watcher._parse_kwin_report(KWIN_REPORT)
+    assert watcher.kwin_find("no.such.class", wins) is None
+
+
+def test_kwin_scale_uses_width_only():
+    """Height disagrees: KWin reports frame geometry including decoration.
+
+    Measured live at 2107 against an X11 client area of 2058, while the
+    width matched exactly. Deriving scale from height would be wrong.
+    """
+    win = watcher.kwin_find("steam_app_1343400",
+                            watcher._parse_kwin_report(KWIN_REPORT))
+    assert watcher.kwin_scale(win, (3840, 2058)) == pytest.approx(1.75, abs=0.01)
+
+
+def test_kwin_scale_rejects_implausible_results():
+    """A mismatch means the two sources describe different windows."""
+    win = watcher.kwin_find("steam_app_1343400",
+                            watcher._parse_kwin_report(KWIN_REPORT))
+    assert watcher.kwin_scale(win, (100, 100)) is None
+
+
+def test_describe_hidden_distinguishes_minimised_from_other_desktop(
+        windows, monkeypatch):
+    """The whole reason to consult KWin: X11 conflates these two states."""
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600),
+                                    use_kwin=True)
+
+    def kwin(cls, wins=None, minimized=True):
+        return watcher.KWinWindow("game", "RuneScape", 0, 0, 800, 600,
+                                  minimized, False, False, "{id}")
+
+    monkeypatch.setattr(watcher, "kwin_find", kwin)
+    assert tracker.describe_hidden() == "minimised"
+
+    monkeypatch.setattr(watcher, "kwin_find",
+                        lambda c, w=None: kwin(c, minimized=False))
+    assert tracker.describe_hidden() == "on another desktop"
+
+
+def test_describe_hidden_is_silent_without_kwin(windows):
+    """No KWin means keep the caller's existing wording, not a guess."""
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600),
+                                    use_kwin=False)
+    assert tracker.describe_hidden() is None
+
+
+def test_describe_hidden_survives_a_broken_kwin(windows, monkeypatch):
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600),
+                                    use_kwin=True)
+
+    def boom(*a, **k):
+        raise RuntimeError("dbus exploded")
+
+    monkeypatch.setattr(watcher, "kwin_find", boom)
+    assert tracker.describe_hidden() is None
+
+
+def test_hidden_reacquire_reports_the_kwin_reason(windows, monkeypatch):
+    windows.visible = False
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600),
+                                    use_kwin=True)
+    monkeypatch.setattr(
+        watcher, "kwin_find",
+        lambda c, w=None: watcher.KWinWindow("game", "RuneScape", 0, 0,
+                                             800, 600, True, False, False,
+                                             "{id}"))
+
+    assert tracker.reacquire() == ("hidden", "minimised")
