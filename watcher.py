@@ -2340,11 +2340,15 @@ class ChatReader(InterfaceReader):
             return list(self._cycle_events)
 
         fresh: list[ChatLine] = []
+        visible: set[str] = set()
         for raw in text.splitlines():
             line = raw.strip()
             key = norm_line(line)
             self.lines_read += 1
-            if len(key) < self.min_key_len or key in self._seen:
+            if len(key) < self.min_key_len:
+                continue
+            visible.add(key)
+            if key in self._seen:
                 continue
             self._seen.add(key)
             if self._is_variant(key):
@@ -2355,11 +2359,10 @@ class ChatReader(InterfaceReader):
                 del self._recent[:30]
             fresh.append(ChatLine(line, key, cycle))
         if len(self._seen) > self.max_seen:
-            # Dropping the whole set would let lines still on screen re-fire,
-            # so callers re-prime rather than alert on the next pass.
-            self._seen.clear()
-            self._recent.clear()
-            self.primed = False
+            # Keep the current viewport as the new baseline. Clearing the set
+            # outright would make old scrollback look fresh on the next poll.
+            self._seen = visible
+            self._recent = [key for key in self._recent if key in visible][-60:]
         self.events_emitted += len(fresh)
         self._cycle = cycle
         self._cycle_events = list(fresh)
