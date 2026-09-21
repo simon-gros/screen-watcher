@@ -1,9 +1,11 @@
 # Future implementation ideas
 
-This document is primarily an **idea backlog**, but it now begins with one
-explicit exception: the **Priority 0 Linux technical foundation**. That section is
-the implementation gate for the next coding work and should be reviewed first
-whenever development resumes.
+This document is primarily an **idea backlog**, but it begins with two promoted
+roadmap tracks: the **Priority 0 Linux technical foundation** and the subsequent
+**Windows + Linux desktop/GUI target**. Priority 0 remains the immediate
+implementation gate; the cross-platform desktop target is the next major product
+track and must influence architecture now so Linux-specific assumptions do not
+spread into the core.
 
 All later sections remain research/backlog material unless promoted. Some ideas
 may never be implemented because they depend on equipment, activities, UI
@@ -13,7 +15,9 @@ An ordinary backlog item should move into active implementation only after it
 has a concrete use case, a reproducible in-game signal, and enough live
 measurements to tune it without creating noisy or unreliable alerts. Priority 0
 items are different: they are infrastructure required to make later detectors,
-profiles, overlays, diagnostics, and Linux support reliable.
+profiles, overlays, diagnostics, and Linux support reliable. The promoted
+cross-platform desktop items are likewise architectural commitments rather than
+optional feature ideas.
 
 ## PRIORITY 0 — Linux/CachyOS technical foundation
 
@@ -60,30 +64,36 @@ Implement in this order unless live testing proves a dependency must move:
 ### Architecture target
 
 ```text
-                         Screen Watcher
-                              |
-                     GameInstance / Backend
-                              |
-             +----------------+----------------+
-             |                                 |
-        X11/XWayland                      native Wayland
-     XCB/XComposite/XShm          XDG ScreenCast + PipeWire
-             |                                 |
-             +----------------+----------------+
-                              |
-                    Shared Frame Scheduler
-                              |
-          +-------------------+-------------------+
-          |                   |                   |
-      ChatReader       InventoryReader       BuffBarReader
-          |                   |                   |
-          +-------------------+-------------------+
-                              |
-                    Normalized Event Stream
-                              |
-              Profiles / Rules / State Machines
-                              |
-             Alerts / History / Analytics / UI
+                              Screen Watcher
+                                   |
+                    Shared profiles / readers / rules
+                    events / history / analytics
+                                   |
+                         Application services
+                                   |
+                 +-----------------+-----------------+
+                 |                                   |
+          Linux platform                      Windows platform
+                 |                                   |
+      XCB / Portal+PipeWire          Windows.Graphics.Capture
+      KWin/X11 window state              Win32 / DWM / DPI
+      D-Bus / layer-shell             native notify / Qt overlay
+                 |                                   |
+                 +-----------------+-----------------+
+                                   |
+                        Shared Frame Scheduler
+                                   |
+             +---------------------+---------------------+
+             |                     |                     |
+         ChatReader         InventoryReader         BuffBarReader
+             |                     |                     |
+             +---------------------+---------------------+
+                                   |
+                         Normalized Event Stream
+                                   |
+                       Profiles / State / Rules
+                                   |
+                CLI + shared PySide6/Qt desktop GUI
 ```
 
 The project should treat the RuneScape window as a continuously sampled data
@@ -456,6 +466,142 @@ current pass/fail/partial state is maintained in
 - profile/rule code is no longer coupled directly to ImageMagick capture.
 
 After these criteria are met, broader skill coverage becomes the main priority.
+
+
+## MAJOR TARGET — Windows + Linux desktop application and GUI
+
+After the core Linux observation foundation is sufficiently stable, the next
+major product track is a **shared PySide6/Qt 6 desktop application for both
+Linux and Windows**. This is not a request for two unrelated GUIs. Screen
+Watcher should have one shared UI/application-service layer and small
+platform-specific adapters.
+
+The detailed implementation target is maintained in
+[`cross-platform-gui-roadmap.md`](cross-platform-gui-roadmap.md).
+
+### Linux GUI target
+
+Build a complete ordinary desktop application around the current watcher:
+
+- dashboard with watcher/profile/backend/health state;
+- Start/Pause/Resume/Stop controls;
+- profile manager and readiness checks;
+- calibration wizard with live capture preview and named regions;
+- graphical `doctor`;
+- rule/notification/sound settings;
+- event/alert/session history;
+- export and sanitized diagnostics;
+- system tray operation;
+- optional status strip and click-through overlay;
+- accessibility, keyboard navigation, high-DPI and fractional-scaling support.
+
+The main GUI must work even when an overlay is unavailable.
+
+### Windows platform and GUI parity
+
+Windows is a first-class final platform. Required Windows-specific work:
+
+- HWND/process/window discovery and reacquisition;
+- per-window DPI and mixed-monitor coordinate handling;
+- native per-window capture through Windows Graphics Capture where available;
+- D3D11 frame-pool integration feeding the same `GameInstance`/scheduler
+  interfaces as Linux;
+- minimized/cloaked/visibility/focus diagnostics;
+- native Windows notifications;
+- shared Qt system-tray/application shell;
+- read-only desktop-level transparent/click-through overlay;
+- signed Windows packaging and native Windows CI.
+
+Do not introduce a Windows-only rule engine, profile format, event schema,
+history store, or GUI fork.
+
+### Cross-platform desktop requirements discovered in the research pass
+
+Treat these as architectural requirements:
+
+- **Do not block the GUI thread.** Capture, Tesseract, image analysis, replay,
+  database queries, exports and update checks should run in worker/service
+  contexts and report state through queued signals/events.
+- **Separate logical UI coordinates from capture pixels.** Qt uses
+  device-independent coordinates while Screen Watcher calibration targets
+  physical game pixels. Test Windows mixed-DPI and KDE fractional scaling
+  explicitly.
+- **Use platform-standard storage.** Move installed-app config/data/cache/state
+  to Qt `QStandardPaths` locations; bundled profiles/assets remain read-only
+  and user overrides/calibrations remain writable.
+- **Use a platform-independent preferences layer.** Ordinary GUI preferences
+  should be suitable for Qt `QSettings`; schema-bearing profiles and runtime
+  databases remain explicit files/databases.
+- **Make accessibility measurable.** Keyboard-complete navigation, screen-reader
+  labels/roles, non-color-only health states, scalable fonts, and reduced
+  motion should be GUI acceptance criteria.
+- **Internationalize UI separately from OCR/profile locale.** A translated GUI
+  must not silently change RuneScape chat regexes or OCR dictionaries.
+- **Treat the system tray as a primary surface.** Screen Watcher is a long-lived
+  companion, so start/stop/pause/profile/health/exit belong in the tray.
+- **Build on the target OS.** Desktop packagers are platform-sensitive; Linux
+  and Windows release artifacts should be generated and tested on their own
+  runners.
+- **Plan signed Windows distribution.** Evaluate MSIX or another native signed
+  installer path; release signing and SmartScreen reputation are release
+  engineering concerns, not last-minute polish.
+- **Do not assume Flatpak is automatically compatible.** Flatpak blocks
+  arbitrary host-process access by design. A portal-first Wayland capture path
+  is the better prerequisite for a sandboxed Linux build.
+- **Add GUI/platform test windows.** Real RuneScape must never be a CI
+  dependency. Build a deterministic test window that changes pixels, text,
+  geometry, DPI state and visibility for capture/calibration integration tests.
+
+### Additional improvements promoted by the research pass
+
+- change/dirty-line detection before expensive chat Tesseract calls;
+- periodic full OCR as a correctness backstop to incremental OCR;
+- capability flags instead of hard-coded platform assumptions
+  (`capture.window`, `capture.portal`, `window.dpi`,
+  `overlay.click_through`, `notify.native`, `tray`, etc.);
+- one-click privacy-aware diagnostic bundle with optional screenshot redaction
+  preview;
+- crash-safe session restoration and explicit last-clean-shutdown state;
+- stable/beta/development release channels;
+- transactional settings/database migrations and migration backups;
+- versioned application/profile/schema metadata in every release;
+- opt-in update/network/telemetry/crash-reporting features rather than hidden
+  network activity.
+
+### Current research references
+
+- Windows Graphics Capture HWND interop:
+  https://learn.microsoft.com/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow
+- Windows capture frame pools:
+  https://learn.microsoft.com/uwp/api/windows.graphics.capture.direct3d11captureframepool
+- Windows per-window DPI:
+  https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getdpiforwindow
+- Windows DWM window state:
+  https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
+- Windows desktop notifications:
+  https://learn.microsoft.com/windows/apps/develop/notifications/
+- Windows packaging/MSIX:
+  https://learn.microsoft.com/windows/apps/package-and-deploy/packaging/
+- Qt for Python:
+  https://doc.qt.io/qtforpython-6/
+- PySide deployment:
+  https://doc.qt.io/qtforpython-6.8/deployment/deployment-pyside6-deploy.html
+- Qt high DPI:
+  https://doc.qt.io/qt-6/highdpi.html
+- Qt accessibility:
+  https://doc.qt.io/qt-6/accessible.html
+- Qt system tray:
+  https://doc.qt.io/qt-6/qsystemtrayicon.html
+- Qt settings/paths:
+  https://doc.qt.io/qt-6/qsettings.html
+  https://doc.qt.io/qt-6/qstandardpaths.html
+- Qt threading:
+  https://doc.qt.io/qt-6/threads-qobject.html
+- XDG ScreenCast:
+  https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html
+- Flatpak sandbox model:
+  https://docs.flatpak.org/en/latest/basic-concepts.html
+
 
 ## September 2026 research pass: strategic implications
 
