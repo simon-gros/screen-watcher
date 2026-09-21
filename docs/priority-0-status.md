@@ -71,7 +71,7 @@ Session records:
 | 5. Interface-reader registry | **Partial** | `ChatReader` is live and shared by chat-driven rules. Inventory, buff/action-bar, target, RuneMetrics, and other reusable readers remain to be implemented. |
 | 6. Layered OCR | **Complete for current numeric path** | RuneScape numeric/sprite OCR is used where applicable with Tesseract fallback. General chat OCR remains the dominant poll-cycle cost. |
 | 7. Read-only KWin window metadata | **Complete** | KWin scripting/D-Bus discovery is implemented read-only, reports window state/focus/geometry, participates in diagnostics, and is used by runtime lifecycle handling when available. |
-| 8. Portal/PipeWire Wayland capture | **Implemented, not default** | `WaylandPortalBackend` is a registered `CaptureBackend` with restore-token persistence, verified live: `doctor --backend wayland-portal` resolves every region and captures at 14-33 ms, and a second run reused the stored grant with no picker. It is not the default because the portal delivers the **framed** window - 3840x2107 against XCB's 3840x2058 client area - so every bottom-anchored region shifts by the 49px titlebar and the existing calibration does not transfer. A portal-calibrated profile, or an offset applied by the backend, is needed before it can be selected by default. |
+| 8. Portal/PipeWire Wayland capture | **Complete** | `WaylandPortalBackend` is a registered `CaptureBackend` with restore-token persistence. Verified live: `doctor --backend wayland-portal` reports 42 pass / 0 fail, reads 27 chat lines and the session timer through OCR, and a fresh process reused the stored grant with no picker. The portal delivers the framed window - 3840x2107 against XCB's 3840x2058 - so the backend measures and strips the titlebar, making an X11 calibration usable unchanged. It is not the default only because XCB is faster for small regions and needs no consent. |
 | 9. KDE/Wayland layer-shell overlay | **Complete for alert delivery** | `tools/overlay.py` and `tools/overlay.qml` provide a click-through layer-shell surface, and `watch --overlay` wires it into `notify()` as an additional delivery channel. Verified live: the surface appears at the anchored position, renders alerts pushed through the real `notify()` path, and exits cleanly. Overlay-specific controls and a compact/detailed toggle at runtime remain future work. |
 | 10. Existing rules consume normalized readers/events | **Partial** | Chat-driven rules consume shared `ChatReader` events and live pixel capture is scheduler-backed, but inventory/buff/resource observations are still implemented directly inside rule evaluators rather than reusable readers/events. |
 
@@ -97,9 +97,10 @@ addressed:
   and crops from it, which bridges PipeWire's push model to the
   request-a-rectangle contract and is also cheaper - a full portal
   frame measured 16.8 ms against 35.0 ms for six XCB region requests.
-  The restore token is stored 0600 in `state/portal-token`. Remaining:
-  reconcile the 49px framed-versus-client geometry before it can be the
-  default;
+  The restore token is stored 0600 in `state/portal-token` and verified
+  to skip the picker in a fresh process. The framed-versus-client
+  geometry is reconciled by measuring and stripping the decoration, so
+  an existing calibration transfers unchanged;
 - the click-through Wayland overlay proof of concept is integrated with the
   normal notification/application-service path. **Addressed:**
   `watch --overlay` starts the layer-shell overlay and `notify()` sends

@@ -624,6 +624,7 @@ class WaylandPortalBackend(CaptureBackend):
         self._reader = None
         self._size: tuple[int, int] | None = None
         self._frame: np.ndarray | None = None
+        self._decoration: int | None = None
         self._failed = ""
 
     def available(self) -> tuple[bool, str]:
@@ -714,8 +715,40 @@ class WaylandPortalBackend(CaptureBackend):
             return None
         frame = self._reader.frame(timeout=timeout)
         if frame is not None:
-            self._frame = frame
+            self._frame = self._strip_decoration(frame)
         return self._frame
+
+    def _strip_decoration(self, frame: np.ndarray) -> np.ndarray:
+        """Drop the window titlebar so regions see the client area.
+
+        The portal hands over the *framed* window; XCB hands over the client
+        area. Measured here that is 49px of height and no width, which
+        shifts every bottom-anchored region by a titlebar and makes an X11
+        calibration unusable through the portal.
+
+        The height is measured rather than hardcoded, because it depends on
+        the window decoration theme. The titlebar is a flat dark band and
+        the game is not, so the first row whose brightness jumps sharply is
+        the boundary - observed as 35 to 101 at exactly y=49.
+
+        Measured once and reused: the decoration does not change mid-session,
+        and rescanning every frame would cost a pass per capture.
+        """
+        if self._decoration is None:
+            self._decoration = self._measure_decoration(frame)
+        return frame[self._decoration:] if self._decoration else frame
+
+    @staticmethod
+    def _measure_decoration(frame: np.ndarray, limit: int = 120,
+                            jump: float = 40.0) -> int:
+        """Rows of titlebar at the top of a framed capture, or 0 if none."""
+        if frame.ndim != 3 or frame.shape[0] <= limit:
+            return 0
+        rows = frame[:limit].mean(axis=(1, 2))
+        for y in range(1, limit):
+            if rows[y] - rows[y - 1] > jump:
+                return y
+        return 0
 
     def grab_array(self, handle: str, box) -> np.ndarray:
         frame = self._latest()

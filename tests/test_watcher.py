@@ -4158,3 +4158,53 @@ def test_portal_token_is_written_private(tmp_path, monkeypatch):
 
     assert token_file.read_text() == "abc123"
     assert token_file.stat().st_mode & 0o077 == 0, "must not be group/world readable"
+
+
+def test_portal_strips_the_window_decoration():
+    """The portal hands over the framed window; XCB the client area.
+
+    Measured live: 3840x2107 against 3840x2058. That 49px titlebar shifts
+    every bottom-anchored region, so an X11 calibration is unusable
+    through the portal until it is removed.
+    """
+    titlebar = np.full((49, 3840, 3), 35, dtype=np.uint8)
+    content = np.full((2058, 3840, 3), 101, dtype=np.uint8)
+    framed = np.vstack([titlebar, content])
+
+    backend = watcher.WaylandPortalBackend()
+    assert backend._measure_decoration(framed) == 49
+    assert backend._strip_decoration(framed).shape[0] == 2058
+
+
+def test_portal_leaves_an_undecorated_frame_alone():
+    """A frame with no titlebar must pass through untouched."""
+    plain = np.full((2058, 3840, 3), 101, dtype=np.uint8)
+    backend = watcher.WaylandPortalBackend()
+    assert backend._measure_decoration(plain) == 0
+    assert backend._strip_decoration(plain).shape[0] == 2058
+
+
+def test_portal_measures_the_decoration_once():
+    """Rescanning every frame would cost a pass per capture."""
+    titlebar = np.full((30, 100, 3), 20, dtype=np.uint8)
+    content = np.full((200, 100, 3), 90, dtype=np.uint8)
+    framed = np.vstack([titlebar, content])
+
+    backend = watcher.WaylandPortalBackend()
+    backend._strip_decoration(framed)
+    assert backend._decoration == 30
+
+    # A later frame that looks undecorated still uses the measured value,
+    # because the decoration cannot change mid-session.
+    plain = np.full((230, 100, 3), 90, dtype=np.uint8)
+    assert backend._strip_decoration(plain).shape[0] == 200
+
+
+def test_portal_decoration_height_is_not_hardcoded():
+    """It depends on the window decoration theme."""
+    for height in (24, 37, 49, 64):
+        framed = np.vstack([
+            np.full((height, 200, 3), 30, dtype=np.uint8),
+            np.full((300, 200, 3), 120, dtype=np.uint8)])
+        backend = watcher.WaylandPortalBackend()
+        assert backend._measure_decoration(framed) == height
