@@ -31,6 +31,19 @@ changes may be indistinguishable during a transition. Use `profile_type:
 quest` or `profile_type: boss` for those profiles; reserve `profile_type:
 skill` for the 29 skill profiles.
 
+## Cross-platform profile rule
+
+Profiles must remain platform-neutral. A Fishing, Thieving, boss, quest, or
+other activity profile should not care whether observations came from Linux
+XCB, Linux Portal/PipeWire, Windows Graphics Capture, replay fixtures, or a
+future sanctioned observation source.
+
+Platform-specific requirements belong in capability/compatibility metadata, not
+inside detector semantics. The future Linux and Windows GUIs must load the same
+profile schema and display equivalent rule/readiness state.
+
+See [cross-platform-gui-roadmap.md](cross-platform-gui-roadmap.md).
+
 ## Implementation gate before broad profile expansion
 
 The next development phase is **not** to create many more skill JSON files.
