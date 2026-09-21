@@ -152,9 +152,12 @@ that stale notifications outlive the process that made them.
 - `player_died` and `food_gone` wording remains unverified — neither
   event occurred.
 - `rare_drop` is wiki-verified but not live-verified.
-- `gold_row` and `metrics_panel` OCR is unverified at native resolution:
-  the only full-resolution capture was taken at session start, when every
-  figure read 0.
+- ~~`gold_row` and `metrics_panel` OCR unverified~~ — **closed.** Both
+  read correctly at native resolution once the game was running with
+  real figures: the gold row returns `& 855,446 0 1,505,183` and the
+  panel `71,148 877,167 5h52m`. The original `gold_row` offset was 80px
+  too low, estimated from a downscaled screenshot; measuring a panel
+  from a scaled capture is not reliable.
 - An independent check on the health reading was prototyped from the red
   fill bar and **discarded**: the track bounds cannot be established
   without the live game, and the prototype read 24.6% on a frame whose
