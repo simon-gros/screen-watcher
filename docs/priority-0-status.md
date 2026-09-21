@@ -72,7 +72,7 @@ Session records:
 | 6. Layered OCR | **Complete for current numeric path** | RuneScape numeric/sprite OCR is used where applicable with Tesseract fallback. General chat OCR remains the dominant poll-cycle cost. |
 | 7. Read-only KWin window metadata | **Complete** | KWin scripting/D-Bus discovery is implemented read-only, reports window state/focus/geometry, participates in diagnostics, and is used by runtime lifecycle handling when available. |
 | 8. Portal/PipeWire Wayland capture | **Partial** | A working XDG ScreenCast portal + PipeWire proof of concept exists in `tools/portal_poc.py`, including restore-token handling and frame acquisition. It is not yet integrated as a production `CaptureBackend`. |
-| 9. KDE/Wayland layer-shell overlay | **Partial** | A PySide6/layer-shell click-through overlay proof of concept exists in `tools/overlay.py` and `tools/overlay.qml`; it is not yet wired into the normal notification path. |
+| 9. KDE/Wayland layer-shell overlay | **Complete for alert delivery** | `tools/overlay.py` and `tools/overlay.qml` provide a click-through layer-shell surface, and `watch --overlay` wires it into `notify()` as an additional delivery channel. Verified live: the surface appears at the anchored position, renders alerts pushed through the real `notify()` path, and exits cleanly. Overlay-specific controls and a compact/detailed toggle at runtime remain future work. |
 | 10. Existing rules consume normalized readers/events | **Partial** | Chat-driven rules consume shared `ChatReader` events and live pixel capture is scheduler-backed, but inventory/buff/resource observations are still implemented directly inside rule evaluators rather than reusable readers/events. |
 
 ## Additional acceptance-gate work
@@ -94,7 +94,14 @@ addressed:
 - the portal/PipeWire proof of concept is integrated as a production
   `CaptureBackend` with persistent session/restore-token handling;
 - the click-through Wayland overlay proof of concept is integrated with the
-  normal notification/application-service path;
+  normal notification/application-service path. **Addressed:**
+  `watch --overlay` starts the layer-shell overlay and `notify()` sends
+  each alert to it as a fifth delivery channel, after the banner, the
+  sound, the alert log and the console line. It stays a separate process
+  - it needs a Qt event loop and a layer-shell surface, and a GUI crash
+  must not take the watcher down - and every failure in that channel is
+  swallowed, because losing the overlay degrades an alert while raising
+  would lose the alert itself. Opt-in, since it is a visible change;
 - long-duration frame-health assumptions and compatibility fingerprints are
   surfaced by diagnostics where they can be measured. **Addressed:**
   `RegionHealth` runs inside the watch loop and reports a region that has

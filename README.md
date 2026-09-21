@@ -177,7 +177,7 @@ nohup python3 watcher.py --config profiles/fishing.json watch \
 | `probe` | measure frame-to-frame differences for threshold tuning |
 | `inv` | show a live inventory slot-change feed |
 | `stats` | analyse logged inventory fill/bank cycles |
-| `watch` | run the polling and notification loop |
+| `watch` | run the polling and notification loop (`--overlay` also shows alerts on screen) |
 | `alerts` | show per-rule alert counts and rates |
 | `backends` | list capture backends and whether they work on this host |
 | `record` | record full-window frames for later replay without the game |
@@ -460,12 +460,13 @@ architectural limitations are documented in
   streams continuously instead of paying a round trip per region. Adopting it
   needs a persistent session, restore-token storage, and a `CaptureBackend`
   shaped around subscribing to a stream rather than requesting a rectangle.
-- A click-through KDE/Wayland overlay prototype lives in `tools/overlay.py`
-  (with `tools/overlay.qml`). It uses `wl-layer-shell` through `layer-shell-qt`
-  on the OVERLAY layer, never takes keyboard focus, and has an empty input
-  region so clicks pass through to the game. Verified rendering above the live
-  client. It reads JSON alerts on stdin and is not yet connected to `notify()`.
-  Wayland-only, and it needs `pyside6` and `layer-shell-qt`.
+- A click-through KDE/Wayland overlay shows alerts on screen. Run
+  `watch --overlay` to enable it: alerts are delivered to it alongside the
+  desktop banner, the sound, the alert log and the console line. It uses
+  `wl-layer-shell` through `layer-shell-qt` on the OVERLAY layer, never
+  takes keyboard focus, and has an empty input region so clicks pass
+  through to the game. Wayland-only; it needs `pyside6` and
+  `layer-shell-qt`, and the watcher runs normally without them.
 - A `replay` capture backend runs the whole stack - scheduler, OCR, rules,
   events - against recorded frames instead of the live game, so detector work
   is reproducible without playing. Record with `watcher.py record`, then set

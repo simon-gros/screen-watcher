@@ -1793,6 +1793,86 @@ def log_alert(rule_name: str, title: str, body: str,
         pass
 
 
+class OverlayChannel:
+    """Delivers alerts to the click-through Wayland overlay, if running.
+
+    The overlay stays a separate process for good reasons: it needs a Qt
+    event loop and a layer-shell surface, neither of which belongs inside a
+    polling loop, and a crash in the GUI cannot then take the watcher down.
+
+    Every failure here is swallowed deliberately. The overlay is the fifth
+    delivery channel after the banner, the sound, the alert log and the
+    console line; losing it degrades an alert, while raising would lose the
+    alert itself - mid-session, hours after the last green start.
+    """
+
+    SCRIPT = Path(__file__).resolve().parent / "tools" / "overlay.py"
+
+    def __init__(self) -> None:
+        self._proc: subprocess.Popen | None = None
+        self._failed = False
+
+    def available(self) -> tuple[bool, str]:
+        if not self.SCRIPT.exists():
+            return False, f"{self.SCRIPT.name} not found"
+        try:
+            import PySide6                                  # noqa: F401
+        except ImportError:
+            return False, "PySide6 not installed"
+        if not _session_is_wayland():
+            return False, "overlay needs a Wayland session"
+        return True, "ok"
+
+    def start(self) -> bool:
+        ok, _why = self.available()
+        if not ok or self._failed:
+            return False
+        try:
+            self._proc = subprocess.Popen(
+                [sys.executable, str(self.SCRIPT)],
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, text=True)
+        except OSError:
+            self._failed = True
+            return False
+        atexit.register(self.stop)
+        return True
+
+    def send(self, rule: str, body: str, urgency: str = "normal") -> None:
+        """Push one alert. Does nothing when the overlay is absent."""
+        proc = self._proc
+        if proc is None or proc.stdin is None or proc.poll() is not None:
+            return
+        tone = "critical" if urgency == "critical" else "normal"
+        try:
+            proc.stdin.write(json.dumps(
+                {"rule": rule, "body": body, "tone": tone}) + "\n")
+            proc.stdin.flush()
+        except (OSError, ValueError):
+            # The overlay died or its pipe closed. Stop trying rather than
+            # raising on every subsequent alert.
+            self._proc = None
+
+    def stop(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            if proc.stdin:
+                proc.stdin.close()
+            proc.terminate()
+            proc.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+
+#: Set by `watch` when the overlay is enabled; None everywhere else.
+ACTIVE_OVERLAY: "OverlayChannel | None" = None
+
+
 def notify(title: str, body: str, urgency: str = "normal",
            sound: str | None = None, timeout_ms: int = 8000,
            rule_name: str = "", source_text: str | None = None) -> None:
@@ -1816,6 +1896,8 @@ def notify(title: str, body: str, urgency: str = "normal",
         # and it would happen mid-session, hours after the last green start.
         print("notify-send not installed: banner skipped", flush=True)
     play(sound)
+    if ACTIVE_OVERLAY is not None:
+        ACTIVE_OVERLAY.send(rule_name or title, body, urgency)
     log_alert(rule_name or title, title, body, source_text)
     print(f"[{time.strftime('%H:%M:%S')}] NOTIFY {title}: {body}", flush=True)
 
@@ -4690,6 +4772,19 @@ def cmd_watch(args) -> None:
 
     tracker = WindowTracker(wm_class, wid, size, game)
     health = RegionHealth()
+
+    global ACTIVE_OVERLAY
+    if getattr(args, "overlay", False):
+        channel = OverlayChannel()
+        ok, why = channel.available()
+        if ok and channel.start():
+            ACTIVE_OVERLAY = channel
+            print("overlay: on-screen alerts enabled", flush=True)
+        else:
+            # Opt-in and non-essential: say why once and carry on, rather
+            # than refusing to watch because a display extra is missing.
+            print(f"overlay unavailable ({why}); continuing without it",
+                  flush=True)
     cycle = 0
     next_poll = time.monotonic()
     while True:
@@ -4850,7 +4945,12 @@ def main() -> None:
                     help="also show the last N alerts (0 to hide)")
     al.set_defaults(func=cmd_alerts)
 
-    w = sub.add_parser("watch"); w.set_defaults(func=cmd_watch)
+    w = sub.add_parser("watch",
+                       help="run the polling and notification loop")
+    w.add_argument("--overlay", action="store_true",
+                   help="also show alerts in a click-through on-screen "
+                        "overlay (Wayland only, needs pyside6)")
+    w.set_defaults(func=cmd_watch)
     stp = sub.add_parser("status"); stp.set_defaults(func=cmd_status)
     pa = sub.add_parser("pause"); pa.set_defaults(func=cmd_pause)
     res = sub.add_parser("resume"); res.set_defaults(func=cmd_resume)

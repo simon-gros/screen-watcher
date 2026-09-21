@@ -3967,3 +3967,122 @@ def test_region_health_ignores_an_empty_frame():
     health = watcher.RegionHealth()
     assert health.note("x", None) is None
     assert health.note("x", np.zeros((0, 0, 3), dtype=np.uint8)) is None
+
+
+# --------------------------------------------------------------------------
+# Overlay as a notification channel
+# --------------------------------------------------------------------------
+
+class _FakePipe:
+    def __init__(self, fail=False):
+        self.lines, self.fail, self.closed = [], fail, False
+
+    def write(self, text):
+        if self.fail:
+            raise OSError("pipe closed")
+        self.lines.append(text)
+
+    def flush(self):
+        if self.fail:
+            raise OSError("pipe closed")
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeProc:
+    def __init__(self, alive=True, fail=False):
+        self.stdin = _FakePipe(fail)
+        self._alive, self.terminated = alive, False
+
+    def poll(self):
+        return None if self._alive else 1
+
+    def terminate(self):
+        self.terminated = True
+        self._alive = False
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        self._alive = False
+
+
+def test_overlay_sends_a_json_line():
+    channel = watcher.OverlayChannel()
+    channel._proc = _FakeProc()
+    channel.send("low_prayer", "Prayer empty.", "critical")
+
+    payload = json.loads(channel._proc.stdin.lines[0])
+    assert payload == {"rule": "low_prayer", "body": "Prayer empty.",
+                       "tone": "critical"}
+
+
+def test_overlay_maps_urgency_to_tone():
+    channel = watcher.OverlayChannel()
+    channel._proc = _FakeProc()
+    channel.send("boss_defeated", "Killed 640.", "normal")
+    assert json.loads(channel._proc.stdin.lines[0])["tone"] == "normal"
+
+
+def test_overlay_send_is_silent_without_a_process():
+    """Absent overlay must not raise into the alert path."""
+    watcher.OverlayChannel().send("x", "y", "normal")
+
+
+def test_overlay_gives_up_after_a_broken_pipe():
+    """A dead overlay must not raise on every subsequent alert.
+
+    It is the fifth delivery channel; losing it degrades an alert, while
+    raising would lose the alert itself.
+    """
+    channel = watcher.OverlayChannel()
+    channel._proc = _FakeProc(fail=True)
+    channel.send("x", "y", "normal")
+    assert channel._proc is None
+    channel.send("x", "y", "normal")          # must stay quiet
+
+
+def test_overlay_ignores_an_exited_process():
+    channel = watcher.OverlayChannel()
+    channel._proc = _FakeProc(alive=False)
+    channel.send("x", "y", "normal")
+    assert channel._proc.stdin.lines == []
+
+
+def test_overlay_stop_is_idempotent():
+    channel = watcher.OverlayChannel()
+    proc = _FakeProc()
+    channel._proc = proc
+    channel.stop()
+    assert proc.terminated
+    channel.stop()                            # must not raise
+
+
+def test_notify_reaches_the_overlay(monkeypatch, tmp_path):
+    """The whole path: a rule firing ends up on screen."""
+    channel = watcher.OverlayChannel()
+    channel._proc = _FakeProc()
+    monkeypatch.setattr(watcher, "ACTIVE_OVERLAY", channel)
+    monkeypatch.setattr(watcher, "play", lambda *a, **k: None)
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *a, **k: None)
+
+    watcher.notify("PRAYER OUT", "Protect from Magic has stopped.",
+                   "critical", None, 20000, "prayer_out")
+
+    payload = json.loads(channel._proc.stdin.lines[0])
+    assert payload["rule"] == "prayer_out"
+    assert payload["tone"] == "critical"
+
+
+def test_notify_survives_a_failing_overlay(monkeypatch):
+    """Losing the banner or the overlay must not lose the alert."""
+    channel = watcher.OverlayChannel()
+    channel._proc = _FakeProc(fail=True)
+    monkeypatch.setattr(watcher, "ACTIVE_OVERLAY", channel)
+    monkeypatch.setattr(watcher, "play", lambda *a, **k: None)
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *a, **k: None)
+
+    watcher.notify("Health low", "Life 2,000/10,597.", "critical",
+                   None, 20000, "low_health")   # must not raise
