@@ -187,6 +187,105 @@ def test_supply_rules_that_can_nag_are_primed():
         assert rule.get("prime_on_start") is True, f"{profile}:{name}"
 
 
+def _corroborated_urn_rule(**over):
+    rule = _urn_rule(confirm_seconds=0, cooldown=0,
+                     corroborate_region="chat_tail",
+                     corroborate_pattern="you catch a",
+                     absent_seconds=60, **over)
+    rule._corroborate_box = (0, 0, 10, 10)
+    return rule
+
+
+def _drive(rule, monkeypatch, script, start=1000.0, step=10.0):
+    """Run a rule over (count, activity) pairs; return the alert times."""
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: np.zeros((10, 10, 3), dtype=np.int16))
+    fired, now = [], start
+    for i, (count, active) in enumerate(script):
+        line = (f"[10:00:{i:02d}] You catch a beltfish." if active
+                else "[10:00:00] nothing is happening here")
+        monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: line)
+        _count_is(monkeypatch, count)
+        if watcher.evaluate(rule, "w", region, (100, 100), now):
+            fired.append(now - start)
+        now += step
+    return fired
+
+
+def test_item_count_stays_quiet_while_the_activity_is_stopped(monkeypatch):
+    """Priming fixes the cold start; this fixes the mid-session case.
+
+    Bank, then stand idle with an empty pack: the shortage is real but
+    the alert is useless, because nothing is being consumed. Requires a
+    recent activity line before a shortage may fire.
+    """
+    # repeat_seconds is short enough that the 'out' state re-arms many
+    # times across this stretch, so the activity gate is the only thing
+    # that can keep it quiet. With the default 180 the _armed flag alone
+    # kept the test green and the gate went untested.
+    rule = _corroborated_urn_rule(repeat_seconds=30)
+    # Healthy while fishing, then a long idle stretch with none left.
+    fired = _drive(rule, monkeypatch, [(3, True)] + [(0, False)] * 14)
+
+    # Alerts only while the last catch is still within absent_seconds
+    # (60s). Fishing stopped at t=0, so t=20 and t=50 are legitimate -
+    # the drain was recent. From t=60 the gate holds for good, even
+    # though repeat_seconds keeps re-arming every 30s.
+    assert fired == [20.0, 50.0]
+    assert max(fired) < 60.0, "nothing may fire once activity is stale"
+
+
+def test_item_count_alerts_normally_while_the_activity_runs(monkeypatch):
+    """Corroboration must not cost the real alert."""
+    rule = _corroborated_urn_rule()
+    fired = _drive(rule, monkeypatch,
+                   [(3, True), (2, True), (1, True), (0, True), (0, True)])
+
+    assert fired == [40.0]
+
+
+def test_item_count_primes_on_its_very_first_healthy_reading(monkeypatch):
+    """The first reading always changes level, which skipped priming.
+
+    `level != _level` fires on the transition from "" and returned early,
+    so a rule that first saw a healthy pack never set `_primed` and then
+    stayed silent for the entire session - priming turned the alert off
+    rather than delaying it.
+    """
+    rule = _corroborated_urn_rule()
+    _drive(rule, monkeypatch, [(3, True)])
+
+    assert rule._primed is True
+
+
+def test_corroboration_is_allowed_only_where_it_is_implemented():
+    """Widening this guard is how the feature reaches a new rule kind.
+
+    Only presence and item_count read the corroboration fields. Allowing
+    them elsewhere would accept a profile whose gate silently does
+    nothing, which is worse than rejecting it.
+    """
+    grid = {"x0": 0, "y0": 0, "cell_w": 5, "cell_h": 5, "cols": 2, "rows": 2}
+    for kind in ("presence", "item_count"):
+        config = valid_config()
+        config["regions"]["chat"] = {"anchor": "top-left", "dx": 0, "dy": 0,
+                                     "w": 10, "h": 10}
+        # item_count additionally requires a grid on its own region.
+        config["regions"][config["rules"][0]["region"]]["grid"] = grid
+        config["rules"][0].update(kind=kind, corroborate_region="chat",
+                                  corroborate_pattern="you catch a")
+        validate_config(config)                   # must not raise
+
+    config = valid_config()
+    config["regions"]["chat"] = {"anchor": "top-left", "dx": 0, "dy": 0,
+                                 "w": 10, "h": 10}
+    config["rules"][0].update(kind="ocr", pattern="x", corroborate_region="chat",
+                              corroborate_pattern="you catch a")
+    with pytest.raises(ValueError, match="corroboration is only valid"):
+        validate_config(config)
+
+
 def test_item_count_out_state_uses_separate_template(monkeypatch):
     rule = Rule(
         name="urns", kind="item_count", region="backpack", item="urns",

@@ -203,9 +203,13 @@ def validate_config(cfg: object) -> None:
                 f"rule {name!r} requires corroborate_region and "
                 "corroborate_pattern together")
         if corroborate_region is not None:
-            if kind != "presence":
+            # item_count joined presence here: both ask "is the activity
+            # actually running?" before reporting, so a shortage nothing is
+            # consuming stays quiet the same way a blackout does.
+            if kind not in ("presence", "item_count"):
                 raise ValueError(
-                    f"rule {name!r}: corroboration is only valid for presence rules")
+                    f"rule {name!r}: corroboration is only valid for "
+                    "presence and item_count rules")
             if corroborate_region not in regions:
                 raise ValueError(
                     f"rule {name!r} references unknown corroborate_region "

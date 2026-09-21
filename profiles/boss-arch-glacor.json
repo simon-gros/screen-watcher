@@ -178,6 +178,7 @@
       "confirm_seconds": 6,
       "repeat_seconds": 120,
       "prime_on_start": true,
+      "_no_corroborate_note": "Deliberately NOT given the corroborate_region gate that urns_carried uses. That gate suppresses a shortage while the activity is stopped, which needs a frequent activity line to measure against. The only verified combat line here is boss_defeated, and the measured gap between kills was 339s - so any absent_seconds short enough to be useful would fall inside a normal fight and mute the alert exactly when food runs out mid-kill, which is when it matters most. fight_stalled's damage-line pattern would be more frequent but is unverified and disabled. Priming alone is the right trade here.",
       "_prime_note": "Same cold-start guard as urns_carried in the fishing profile: `_armed` defaults to true, so without this the rule announces 'Out of food' within confirm_seconds of launching the watcher next to a bank, before any fight. Requires a reading with food present first, so the drain is actually observed. The trade-off is deliberate and was chosen explicitly: starting a fight with genuinely zero food now goes unwarned, which is acceptable because the low_health gauge still covers the actual danger, and a false 'out of food' during banking was the more frequent event.",
       "cooldown": 45,
       "message": "Food low",

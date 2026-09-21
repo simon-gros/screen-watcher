@@ -388,6 +388,13 @@ def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
             icon = lum > lum_floor
             if icon.mean() < min_cover:
                 continue
+            if not icon.any():
+                # No bright pixels at all: an empty slot. With min_cover=0
+                # the check above lets this through, and the mean of an
+                # empty selection is NaN - which compares False and so
+                # gave the right answer by accident, with a RuntimeWarning
+                # on every empty cell of every poll.
+                continue
             red, _green, blue = patch[icon].mean(axis=0)
             if min_red > 0.0:
                 matched = float(red) - float(blue) >= min_red
@@ -396,6 +403,38 @@ def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
             if matched:
                 n += 1
     return n
+
+
+def _note_activity(rule: Rule, wid: str, now: float, cycle: int) -> bool:
+    """Refresh `_last_activity` from the corroboration region.
+
+    Returns False when the rule is not configured to corroborate, so a
+    caller can tell "no evidence of activity" apart from "not asked to
+    look". Only lines that are new since the last poll count: the chat
+    tail keeps old lines on screen for many cycles, so matching whatever
+    is visible would make stale scrollback look like fresh activity
+    forever.
+    """
+    if not (rule._corroborate_box and rule.corroborate_pattern):
+        return False
+    text = _w().ocr_cached(wid, rule._corroborate_box, cycle)
+    visible = set()
+    for line in text.splitlines():
+        key = _w().norm_line(line.strip())
+        if len(key) < 8:
+            continue
+        visible.add(key)
+        if key in rule._seen:
+            continue
+        rule._seen.add(key)
+        if re.search(rule.corroborate_pattern, line, re.I):
+            rule._last_activity = now
+            rule._last_activity_source = line.strip()
+    if len(rule._seen) > 400:
+        # Retain the viewport as the new baseline; clearing outright would
+        # make old scrollback look fresh on the next poll.
+        rule._seen = visible
+    return True
 
 
 def _eval_item_count(rule: Rule, wid: str, region: "_w().Region", box,
@@ -422,6 +461,10 @@ def _eval_item_count(rule: Rule, wid: str, region: "_w().Region", box,
     """
     if not region.grid:
         return
+    # Read corroboration every cycle, before any early return: the activity
+    # clock has to keep advancing while the count is healthy, or the first
+    # dip to "low" would see a stale `_last_activity` and stay silent.
+    corroborates = _note_activity(rule, wid, now, cycle)
     frame = _w().capture_array(wid, box, cycle=cycle)
     n = count_by_colour(frame, region.grid, rule.min_blue,
                         min_red=rule.min_red,
@@ -438,6 +481,12 @@ def _eval_item_count(rule: Rule, wid: str, region: "_w().Region", box,
     if level != rule._level:
         rule._level = level
         rule._level_since = now
+        # Prime on the transition too, not only on a settled "ok". The very
+        # first reading always changes level (from "") and returned here,
+        # so a rule whose first sight of the pack was healthy never primed
+        # and then stayed silent for the whole session.
+        if level == "ok":
+            rule._primed = True
         return
 
     if level == "ok":
@@ -464,6 +513,15 @@ def _eval_item_count(rule: Rule, wid: str, region: "_w().Region", box,
         return
     if not rule.ready(now):
         return
+    # Last gate: is the activity actually running? Priming stops a cold
+    # start alerting, but not the mid-session case - bank, then stand idle
+    # with an empty pack, and the shortage is real while the alert is
+    # useless, because nothing is being consumed. `absent_seconds` reuses
+    # the presence rule's field: no activity line for that long means the
+    # grind has stopped, so the shortage can wait until it resumes.
+    if corroborates and rule.absent_seconds > 0:
+        if now - rule._last_activity >= rule.absent_seconds:
+            return
 
     rule._armed = False
     if level == "out":
