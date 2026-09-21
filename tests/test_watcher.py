@@ -2285,3 +2285,126 @@ def test_norm_line_keeps_real_content():
     assert watcher.norm_line("You are stunned!") == "youarestunned"
     assert "455" in watcher.norm_line(
         "455 coins have been added to your money pouch.")
+
+
+# --------------------------------------------------------------------------
+# Counter rules must never lose a gain
+# --------------------------------------------------------------------------
+
+def _coin_rule():
+    return watcher.Rule(
+        name="coin_milestone", kind="counter", region="chat_tail",
+        pattern=r"(\d[\d,]*)\s*coins have been added to your money pouch",
+        step=1000000, cooldown=0, message="Milestone",
+        milestone_message="{total} coins - {n}M")
+
+
+def test_counter_keeps_counting_across_seen_overflow(monkeypatch):
+    """Clearing the dedup set used to silently drop a cycle's income.
+
+    Re-priming treats every line then on screen as old scrollback, so at
+    ~2 coin lines a second the total drifted further below reality the
+    longer the watcher ran.
+    """
+    rule = _coin_rule()
+    rule._primed = True
+    for i in range(399):
+        rule._seen.add(f"filler{i}")
+    region = Region("top-left", 0, 0, 10, 10)
+
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda *a, **k: "[10:00:00] 455 coins have been added to your money pouch.")
+    watcher.evaluate(rule, "0x1", region, (100, 100), 1.0)
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda *a, **k: "[10:00:02] 455 coins have been added to your money pouch.")
+    watcher.evaluate(rule, "0x1", region, (100, 100), 2.0)
+
+    assert rule._total == 910
+
+
+def test_counter_does_not_recount_lines_still_on_screen(monkeypatch):
+    """The viewport is retained as the new baseline, so nothing re-counts."""
+    rule = _coin_rule()
+    rule._primed = True
+    region = Region("top-left", 0, 0, 10, 10)
+    line = "[10:00:00] 455 coins have been added to your money pouch."
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: line)
+
+    for cycle in range(5):
+        watcher.evaluate(rule, "0x1", region, (100, 100), float(cycle))
+
+    assert rule._total == 455
+
+
+def test_counter_milestone_fires_through_the_evaluator(monkeypatch):
+    """The arithmetic-only test above never exercises evaluate() itself."""
+    rule = _coin_rule()
+    rule._primed = True
+    rule._total = 999_600
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda *a, **k: "[10:00:00] 455 coins have been added to your money pouch.")
+
+    alert = watcher.evaluate(rule, "0x1", region, (100, 100), 1.0)
+    assert alert is not None and "1M" in alert.body
+
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda *a, **k: "[10:00:02] 455 coins have been added to your money pouch.")
+    assert watcher.evaluate(rule, "0x1", region, (100, 100), 2.0) is None
+
+
+def test_counter_command_sets_and_reports(tmp_path, monkeypatch, capsys):
+    """`counter --set` realigns a drifted total to the real figure.
+
+    The watcher only counts what it sees, so after running without it the
+    persisted total understates reality and the next milestone lands late.
+    """
+    log = tmp_path / "counters.jsonl"
+    monkeypatch.setattr(watcher, "COUNTER_LOG", log)
+    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+
+    watcher.log_counter("coin_milestone", 1.0, 513_150)
+    assert watcher.load_counter("coin_milestone") == 513_150
+
+    watcher.log_counter("coin_milestone", 2.0, 2_300_000)
+    assert watcher.load_counter("coin_milestone") == 2_300_000
+
+
+def test_level_up_pattern_survives_wording_variants():
+    """The pattern must not require the leading 'Congratulations'.
+
+    RS3 splits some notices across lines, which is exactly how the stun
+    rule ended up matching the wrong one.
+    """
+    cfg = load_config(Path("profiles/thieving.json"))
+    pat = {r["name"]: r for r in cfg["rules"]}["level_up"]["pattern"]
+
+    for line in (
+            "Congratulations, you've just advanced a Thieving level!",
+            "Congratulations! You've just advanced a Thieving level!",
+            "Congratulations, you've just advanced an Agility level!",
+            "Congratulations, you've just advanced 2 Thieving levels!",
+            "You've just advanced a Thieving level! You are now level 72.",
+            "Congratulations, you've reached level 72 Thieving!",
+            "Your Thieving level is now 72.",
+            "(15:22:01] Congratulations, you've just advanced a Thieving level!"):
+        assert re.search(pat, line, re.I), line
+
+
+def test_level_up_pattern_ignores_near_misses():
+    """Lines that mention levels but are not a level-up must stay silent."""
+    cfg = load_config(Path("profiles/thieving.json"))
+    rules = {r["name"]: r for r in cfg["rules"]}
+    pat = rules["level_up"]["pattern"]
+
+    for line in ("Total level: 1544",
+                 "You need level 75 Thieving to do that.",
+                 "455 coins have been added to your money pouch.",
+                 "You've been stunned.",
+                 "You nimbly avoid getting stunned.",
+                 "Your pickpocket target becomes aware of your presence."):
+        assert not re.search(pat, line, re.I), line

@@ -2553,10 +2553,14 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
         return None
     gained = 0
     source_line = None
+    visible = set()
     for line in text.splitlines():
         line = line.strip()
         key = norm_line(line)
-        if len(key) < 8 or key in rule._seen:
+        if len(key) < 8:
+            continue
+        visible.add(key)
+        if key in rule._seen:
             continue
         m = re.search(rule.pattern, line, re.I)
         if not m:
@@ -2570,11 +2574,13 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
         except (ValueError, IndexError):
             continue
     if len(rule._seen) > 400:
-        rule._seen.clear()
-        rule._primed = False
-    if not rule._primed:
-        rule._primed = True
-        return None
+        # Retain the current viewport as the new baseline, the same way the
+        # presence rule does. Clearing the set and re-priming dropped a
+        # whole cycle's income: re-priming treats every line then on screen
+        # as pre-existing scrollback, so at ~2 coin lines a second the
+        # counter silently lost a gain every few minutes and drifted
+        # further below the real total the longer it ran.
+        rule._seen = visible
     if gained:
         rule._total += gained
         log_counter(rule.name, now, rule._total)
@@ -3540,6 +3546,50 @@ def summarise_rule(rule: dict, width: int = 96, verbose: bool = False) -> str:
     return line
 
 
+def cmd_counter(args) -> None:
+    """Show or correct a persisted counter total.
+
+    The watcher can only count what it sees, so its total is the amount
+    earned *while it was watching* - not the session total the game's own
+    Metrics panel reports. After running without the watcher, or after the
+    counter has drifted, `--set` realigns it so the next milestone lands
+    where it should.
+    """
+    cfg = load_config(args.config)
+    counters = [r for r in cfg["rules"] if r["kind"] == "counter"]
+    if not counters:
+        sys.exit("no counter rules in this profile")
+
+    if args.set is None:
+        print(f"{'counter':<20} {'total':>14} {'next milestone':>16}")
+        for r in counters:
+            total = load_counter(r["name"])
+            step = max(1, int(r.get("step", 1)))
+            nxt = (total // step + 1) * step
+            print(f"{r['name']:<20} {total:>14,} {nxt:>16,}")
+        return
+
+    name = args.name or counters[0]["name"]
+    if name not in {r["name"] for r in counters}:
+        sys.exit(f"unknown counter {name!r}")
+    try:
+        value = int(str(args.set).replace(",", "").replace("_", ""))
+    except ValueError:
+        sys.exit(f"not a number: {args.set!r}")
+    if value < 0:
+        sys.exit("counter totals cannot be negative")
+
+    was = load_counter(name)
+    # Written through the normal append path, so the watcher picks it up on
+    # its next start exactly as it would any other recorded total.
+    log_counter(name, time.monotonic(), value)
+    step = max(1, int(next(r for r in counters if r["name"] == name)
+                      .get("step", 1)))
+    print(f"{name}: {was:,} -> {value:,}")
+    print(f"next milestone at {((value // step) + 1) * step:,}")
+    print("restart the watcher for this to take effect")
+
+
 def cmd_regions(args) -> None:
     cfg = load_config(args.config)
     wid, size = resolve_window(cfg)
@@ -4092,6 +4142,12 @@ def main() -> None:
     s.add_argument("region", nargs="?")
     s.add_argument("--box", help="anchor,dx,dy,w,h or x,y,w,h")
     s.add_argument("--out"); s.set_defaults(func=cmd_shot)
+
+    ct = sub.add_parser("counter",
+                        help="show or correct a persisted counter total")
+    ct.add_argument("--set", help="new total, e.g. 2300000")
+    ct.add_argument("--name", help="counter rule name (default: the first)")
+    ct.set_defaults(func=cmd_counter)
 
     r = sub.add_parser("regions",
                        help="show regions and rules resolved against the "

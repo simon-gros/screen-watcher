@@ -182,14 +182,15 @@
       "name": "level_up",
       "kind": "ocr",
       "region": "chat_tail",
-      "pattern": "congratulations,? you('ve| have) (just )?(advanced|reached)",
+      "pattern": "advanced\\s+(an?|\\d+)\\s+\\w+\\s+levels?|you'?(ve|r)?\\s*(have\\s+)?reached level \\d+|\\w+ level is now \\d+",
       "cooldown": 60,
       "message": "Level up",
-      "alert_body": "Level up. The game noticed your progress before you did.",
+      "alert_body": "{line}",
       "sound": "outcome-success",
       "enabled": true,
       "urgency": "normal",
-      "timeout_ms": 8000
+      "timeout_ms": 15000,
+      "_note": "Fires on a skill level-up. The pattern is deliberately broader than the exact phrasing: it does NOT require the leading 'Congratulations', because RS3 splits some notices across lines and the level line alone must still match - the same two-line shape that made the stun rule match the wrong line. Accepts 'advanced a/an/N <Skill> level(s)', 'reached level N', and '<Skill> level is now N'. Verified against plural, article, and OCR-garbled forms, and against near misses that must stay silent: 'Total level: 1544' and 'You need level 75 Thieving to do that'. The alert echoes the matched line so the new level is visible without switching to the game. UNVERIFIED against this account's live chat - confirm the wording on the next level-up and tighten if it differs."
     }
   ],
   "_notification_note": "Rules use urgency 'normal' with an explicit timeout_ms so KDE auto-dismisses them. Setting urgency to 'critical' makes KDE keep the popup until it is closed by hand and ignore timeout_ms - only do that for an alert you must not miss."
