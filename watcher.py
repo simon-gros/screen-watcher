@@ -48,7 +48,7 @@ ANCHORS = {"top-left", "top-right", "bottom-left", "bottom-right",
            "top-center", "bottom-center", "center"}
 RULE_KINDS = {"inventory", "activity", "supply", "item_count",
               "ocr", "change", "idle", "loot", "counter", "stack", "timer",
-              "presence", "gauge", "percent", "total"}
+              "presence", "gauge", "percent", "total", "item_drop"}
 PROFILE_TYPES = {"skill", "quest", "boss"}
 
 
@@ -2827,6 +2827,95 @@ def _eval_loot(rule: Rule, wid: str, box, now: float,
     return None
 
 
+#: Leading chat timestamp. A line without one is a wrapped continuation of
+#: the line above it, which is how a long drop message is split.
+_CHAT_TIMESTAMP = re.compile(r"^[\(\[]?\s*\d{1,2}[:;.]\d{2}[:;.]\d{2}")
+
+#: OCR digit confusions seen in drop quantities: "1|" for 11, "2O" for 20.
+_QTY_FIXUPS = str.maketrans({"|": "1", "l": "1", "I": "1", "O": "0",
+                             "o": "0", "S": "5", "B": "8", "Z": "2"})
+
+
+def join_wrapped_lines(text: str) -> list[str]:
+    """Rejoin chat lines the client wrapped mid-message.
+
+    A long drop announcement is split across two rendered lines, with the
+    quantity at the end of the first and the item name on the second:
+
+        15:41:55] ... You receive: 12 x
+        slacor remnants.
+
+    Rules evaluate line by line, so neither half alone carries both facts.
+    Every real chat line starts with a timestamp, so a line without one is
+    a continuation and belongs to its predecessor.
+    """
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if out and not _CHAT_TIMESTAMP.match(line):
+            out[-1] = f"{out[-1]} {line}"
+        else:
+            out.append(line)
+    return out
+
+
+def parse_quantity(raw: str) -> int | None:
+    """Read a drop quantity, repairing common OCR digit confusions.
+
+    Observed in real captures: "1|" for 11, and "&" where the digits were
+    lost entirely. Returns None for the latter - a drop reported with the
+    wrong count is worse than one reported without it.
+    """
+    fixed = raw.translate(_QTY_FIXUPS)
+    digits = "".join(c for c in fixed if c.isdigit())
+    return int(digits) if digits else None
+
+
+def _eval_item_drop(rule: Rule, wid: str, box, now: float,
+                    cycle: int = 0) -> Alert | None:
+    """Alert on a named item dropping, reporting how many.
+
+    Separate from the generic drop rule because it answers a different
+    question: not "something dropped" but "how much of this specific thing
+    have I just been given". The quantity is the point.
+
+    Works on rejoined lines, since the client wraps the announcement and
+    splits the quantity from the item name.
+    """
+    if not rule.item_pattern:
+        return None
+    for line in join_wrapped_lines(ocr_cached(wid, box, cycle)):
+        key = norm_line(line)
+        if len(key) < 8 or key in rule._seen:
+            continue
+        if not re.search(rule.item_pattern, line, re.I):
+            continue
+        rule._seen.add(key)
+        if not rule._primed:
+            continue
+        m = re.search(r"receive[:;]?\s*([\dIl|&SBOoZ]{1,5})\s*[xX]",
+                      line, re.I)
+        count = parse_quantity(m.group(1)) if m else None
+        if count is not None:
+            rule._total += count
+        if not rule.ready(now):
+            continue
+        amount = (f"{count:,}" if count is not None
+                  else "an unreadable number of")
+        return rule.fire(
+            now, rule.alert_body or f"{amount} {rule.item}",
+            source_text=line[:120], n=count if count is not None else 0,
+            amount=amount, total=f"{rule._total:,}", item=rule.item,
+            line=line)
+    rule._primed = True
+    if len(rule._seen) > 400:
+        rule._seen.clear()
+        rule._primed = False
+    return None
+
+
 def _eval_total(rule: Rule, wid: str, box, now: float,
                 cycle: int = 0) -> Alert | None:
     """Alert on each milestone of a running total the game already keeps.
@@ -2941,6 +3030,8 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
     box = region.resolve(size)
     if rule.kind == "presence":
         return _eval_presence(rule, wid, box, now, cycle)
+    if rule.kind == "item_drop":
+        return _eval_item_drop(rule, wid, box, now, cycle)
     if rule.kind == "total":
         return _eval_total(rule, wid, box, now, cycle)
     if rule.kind == "percent":

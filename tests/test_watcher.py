@@ -3402,3 +3402,88 @@ def test_drop_pattern_does_not_match_ordinary_prose():
                  "455 coins have been added to your money pouch.",
                  "You are awarded 25 Marks of War and now have a total of 2,090."):
         assert not re.search(pat, line, re.I), line
+
+
+# --------------------------------------------------------------------------
+# Named item drops, with quantity, across a wrapped chat line
+# --------------------------------------------------------------------------
+
+#: Verbatim capture: the client wraps the announcement mid-message.
+WRAPPED_CHAT = """15:39:04] A aolden beam shines over one of your items, You receive: & x Runi
+tonE spiit.
+15:40:32] A golden bieam shines over one of your items, You receive: 1| X La
+s |unt adamarit.salvage:
+15:41:55] A golden beam shines over one of your items, You receive: 12 x
+slacor remnants.
+15:41:55] You have killed 626 Arch-Glacor in normal mode."""
+
+
+def test_join_wrapped_lines_uses_the_timestamp_as_the_anchor():
+    """A line without a leading timestamp continues the one above it."""
+    joined = watcher.join_wrapped_lines(WRAPPED_CHAT)
+    assert len(joined) == 4
+    assert "slacor remnants" in joined[2]
+    assert "You receive: 12 x" in joined[2]
+
+
+def test_parse_quantity_repairs_ocr_digits():
+    """"1|" is 11; "&" lost the digits and must not be guessed."""
+    assert watcher.parse_quantity("12") == 12
+    assert watcher.parse_quantity("1|") == 11
+    assert watcher.parse_quantity("2O") == 20
+    assert watcher.parse_quantity("&") is None
+    assert watcher.parse_quantity("") is None
+
+
+def _remnant_rule():
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    spec = {r["name"]: r for r in cfg["rules"]}["glacor_remnants"]
+    rule = watcher.Rule(**{k: v for k, v in spec.items()
+                           if not k.startswith("_")})
+    rule._primed = True
+    return rule
+
+
+def test_item_drop_reports_the_quantity(monkeypatch):
+    rule = _remnant_rule()
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: WRAPPED_CHAT)
+
+    alert = watcher.evaluate(rule, "0x1", Region("top-left", 0, 0, 10, 10),
+                             (100, 100), 100.0)
+    assert alert is not None
+    assert "12 Glacor remnants" in alert.body
+
+
+def test_item_drop_ignores_other_items(monkeypatch):
+    """Adamant salvage and rune spirits drop alongside; neither is this."""
+    rule = _remnant_rule()
+    chat = "\n".join(WRAPPED_CHAT.splitlines()[:4])   # no remnants line
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: chat)
+
+    assert watcher.evaluate(rule, "0x1", Region("top-left", 0, 0, 10, 10),
+                            (100, 100), 100.0) is None
+
+
+def test_item_drop_tolerates_a_mangled_item_name():
+    """OCR read "Glacor" as "slacor" in a real capture."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    pat = {r["name"]: r for r in cfg["rules"]}["glacor_remnants"]["item_pattern"]
+    for name in ("Glacor remnants", "slacor remnants", "6lacor remnants",
+                 "Glacor remnant", "glacor remants"):
+        assert re.search(pat, name, re.I), name
+
+
+def test_item_drop_accumulates_a_session_total(monkeypatch):
+    rule = _remnant_rule()
+    region = Region("top-left", 0, 0, 10, 10)
+
+    first = ("15:41:55] A golden beam shines over one of your items, "
+             "You receive: 12 x\nslacor remnants.")
+    second = ("15:44:10] A golden beam shines over one of your items, "
+              "You receive: 8 x\nslacor remnants.")
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: first)
+    watcher.evaluate(rule, "0x1", region, (100, 100), 100.0)
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: second)
+    alert = watcher.evaluate(rule, "0x1", region, (100, 100), 200.0)
+
+    assert alert is not None and "20 this session" in alert.body

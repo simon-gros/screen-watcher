@@ -191,6 +191,21 @@
       "_note": "A rare drop announces itself as a broadcast, which is a different message from the routine reward-chest line and is missed entirely by loot_received. Wiki-verified templates: 'News: [Player] has received [item] drop!', 'News: [Player] completed a Treasure Trail and received [item]!', and 'News: [Player] has received [Name], the [Skill] pet drop at [number] XP!'. Directly relevant here: the wiki lists Ragefire, Steadfast and Glaiven boots - the Glacor boots - under drops announced to friends, so an Arch-Glacor boot drop produces exactly this line. The pattern deliberately does NOT anchor on the player name. Broadcasts also fire for other players, and seeing someone else's rare drop is harmless noise, whereas anchoring on an OCR'd name risks missing the player's own - and this is the one alert where a miss costs something real. It must not match the ordinary 'You receive: 12 x Glacor remnants' chest line, which is asserted in the tests. urgency=critical and a long timeout because a rare drop is the single most important thing that can happen in a session. UNVERIFIED against this account's live chat - the wording comes from the wiki, not from an observed drop. Confirm on the first broadcast."
     },
     {
+      "name": "glacor_remnants",
+      "kind": "item_drop",
+      "region": "chat_tail",
+      "item": "Glacor remnants",
+      "item_pattern": "[g65s]lacor\\s+re\\w*ants?",
+      "cooldown": 0,
+      "message": "Glacor remnants",
+      "alert_body": "{amount} Glacor remnants ({total} this session).",
+      "sound": "message-highlight",
+      "urgency": "normal",
+      "timeout_ms": 15000,
+      "enabled": true,
+      "_note": "Reports the quantity, which is the point of the rule - the generic drop alert only says that something dropped. The announcement WRAPS across two rendered lines, with the count at the end of the first and the item name on the second: 'You receive: 12 x' / 'slacor remnants.' Rules evaluate line by line, so neither half alone carries both facts; join_wrapped_lines rejoins them using the leading chat timestamp, which every real line has and no continuation does. item_pattern allows [g65s] for the leading G because OCR read it as 'slacor' in a real capture, and \\w*ants? covers 'remnants' being mangled mid-word. Quantities get the same treatment: '1|' is read as 11, and a count OCR lost entirely ('&') reports as unreadable rather than guessing - a drop with the wrong number is worse than one without it. A running session total accompanies each alert. VERIFIED against three real captured drops: it matches the remnants line and correctly ignores the adamant salvage and rune spirit drops beside it."
+    },
+    {
       "name": "loot_received",
       "kind": "ocr",
       "region": "chat_tail",
