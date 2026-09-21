@@ -4445,3 +4445,45 @@ def test_patching_find_window_reaches_the_extracted_tracker(monkeypatch):
 
     tracker = watcher.WindowTracker("game", "0x100", (800, 600))
     assert tracker.reacquire()[0] == "gone"
+
+
+def test_rule_dataclass_fields_survived_the_move():
+    """A mechanical rewrite corrupted a field declaration.
+
+    Routing borrowed names through the late-import accessor rewrote
+    `log_occupancy: bool = True` into `_w().log_occupancy: bool = True`,
+    which removed the field from the dataclass. Validation compares
+    profile keys against these fields, so every profile using it was
+    rejected as having an unknown option - 34 tests failed at once.
+    """
+    import dataclasses
+
+    names = {f.name for f in dataclasses.fields(watcher.Rule)}
+    for expected in ("log_occupancy", "cooldown", "region", "kind",
+                     "warn_below", "warn_at", "prime_on_start", "min_red"):
+        assert expected in names, expected
+
+
+def test_rules_are_reexported():
+    from screen_watcher import rules
+
+    for name in ("Rule", "Alert", "evaluate", "count_by_colour",
+                 "parse_gauge", "parse_percent", "parse_total",
+                 "parse_timer", "join_wrapped_lines", "parse_quantity"):
+        assert getattr(watcher, name) is getattr(rules, name), name
+
+
+def test_patching_ocr_reaches_the_extracted_evaluators(monkeypatch):
+    """Fifty tests feed the evaluators through `watcher.ocr_cached`."""
+    rule = watcher.Rule(name="level_up", kind="ocr", region="chat_tail",
+                        pattern="advanced", cooldown=0, message="Level up",
+                        alert_body="{line}")
+    rule._primed = True
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda *a, **k: "[10:00:00] Congratulations, you've just advanced "
+                        "an Attack level!")
+
+    alert = watcher.evaluate(rule, "0x1", Region("top-left", 0, 0, 10, 10),
+                             (100, 100), 100.0)
+    assert alert is not None and "Attack level" in alert.body
