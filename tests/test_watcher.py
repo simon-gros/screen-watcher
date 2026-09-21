@@ -2408,3 +2408,30 @@ def test_level_up_pattern_ignores_near_misses():
                  "You nimbly avoid getting stunned.",
                  "Your pickpocket target becomes aware of your presence."):
         assert not re.search(pat, line, re.I), line
+
+
+def test_evaluating_a_counter_never_writes_the_real_state_dir(isolate_state):
+    """Guard the conftest safety net itself.
+
+    Three counter tests called evaluate(), which calls log_counter()
+    internally, against the real state/counters.jsonl. load_counter takes
+    the last recorded row, so every test run silently overwrote the
+    player's actual coin total with 1000055 and reset their milestone.
+    """
+    rule = _coin_rule()
+    rule._primed = True
+    region = Region("top-left", 0, 0, 10, 10)
+
+    original = watcher.ocr_cached
+    watcher.ocr_cached = (
+        lambda *a, **k: "[10:00:00] 455 coins have been added to your money pouch.")
+    try:
+        watcher.evaluate(rule, "0x1", region, (100, 100), 1.0)
+    finally:
+        watcher.ocr_cached = original
+
+    # The write landed in the per-test directory, not the repository.
+    assert watcher.COUNTER_LOG.parent == isolate_state
+    assert watcher.COUNTER_LOG.exists()
+    assert not (Path(__file__).resolve().parents[1]
+                / "state" / "counters.jsonl").samefile(watcher.COUNTER_LOG)
