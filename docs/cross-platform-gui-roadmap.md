@@ -331,6 +331,16 @@ Retain:
 - layer-shell for supported Wayland overlays;
 - X11 transparent/input-transparent overlay fallback where appropriate.
 
+## Cross-platform product version
+
+Linux and Windows packages must use the same Screen Watcher product version
+from the repository-root `VERSION` file. Platform package revisions, CI build
+numbers, commit hashes, or installer revisions are build metadata and must not
+create independent Linux/Windows version sequences.
+
+Milestone and stability rules are defined in
+[versioning-policy.md](versioning-policy.md).
+
 ## Packaging and distribution
 
 ### Native per-platform builds
