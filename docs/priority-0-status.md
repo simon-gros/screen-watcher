@@ -12,6 +12,33 @@ Status meanings:
   not yet fully satisfied.
 - **Not started** — documented design only.
 
+## Immediate validation priority
+
+Before additional Priority 0 architecture is allowed to dominate development,
+the **already implemented Linux version must be exercised in real use**.
+Automated tests prove code paths under controlled inputs; they do not prove that
+RuneScape capture, OCR, window lifecycle, notifications, timing, and persistence
+behave correctly together on the actual CachyOS desktop.
+
+Current development priority is therefore:
+
+1. reproduce and measure the current implementation in ordinary Fishing and
+   Thieving sessions;
+2. record false positives, false negatives, capture/OCR failures, lifecycle
+   failures, persistence problems, performance regressions, and usability
+   problems;
+3. fix confirmed current-version defects before adding more speculative
+   architecture;
+4. convert reproducible practical failures into regression tests/replay fixtures;
+5. rerun practical smoke/session/soak tests after material runtime fixes.
+
+A green CI run is a baseline, **not** sufficient evidence that the current
+application works correctly in practice.
+
+See the "Immediate practical validation stage" in
+[application-outline.md](application-outline.md) and the dedicated testing
+tracking issue.
+
 ## Ordered foundation
 
 | Step | Status | Current state |
@@ -58,8 +85,11 @@ Until the remaining work is complete:
 4. Persistent records must use Unix wall-clock timestamps and include profile
    identity. Monotonic time is for in-process cooldowns and elapsed-state logic
    only.
-5. Broad skill/profile expansion remains secondary to reusable readers,
-   replay/fixtures, schema/versioning, Wayland support, and modularization.
+5. Reproducible defects found in the current working implementation take
+   precedence over new architectural or profile work.
+6. Broad skill/profile expansion remains secondary to practical validation,
+   reusable readers, replay/fixtures, schema/versioning, Wayland support, and
+   modularization.
 
 ## Next major roadmap target — cross-platform desktop application
 
