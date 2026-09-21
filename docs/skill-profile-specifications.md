@@ -34,7 +34,9 @@ skill` for the 29 skill profiles.
 ## Implementation gate before broad profile expansion
 
 The next development phase is **not** to create many more skill JSON files.
-Before broadening coverage, implement the Priority 0 Linux foundation defined in
+Before broadening coverage, complete the remaining Priority 0 Linux foundation.
+The authoritative completion state is
+[`priority-0-status.md`](priority-0-status.md); design rationale remains in
 [`future-implementation-ideas.md`](future-implementation-ideas.md) and
 [`application-outline.md`](application-outline.md).
 
@@ -314,9 +316,13 @@ Chat-driven rules should consume a normalized chat event with:
 - confidence;
 - dedup key.
 
-Local chat timestamps should be treated as a preferred freshness signal when
-enabled. Startup scrollback and duplicate reads must be handled by the reader,
-not separately by each profile rule.
+Local chat timestamps should be treated as a strongly recommended freshness
+and identity signal. Timestamped events support safe same-event fuzzy OCR
+deduplication. Without timestamps, repeated identical messages can be
+intrinsically ambiguous while old lines remain visible, so profiles that depend
+on counting repeated chat events should declare the timestamp recommendation
+explicitly. Startup scrollback and duplicate reads must be handled by the
+reader, not separately by each profile rule.
 
 ### Status/buff absence is conditional evidence
 
