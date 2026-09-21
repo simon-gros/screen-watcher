@@ -25,6 +25,27 @@ profiles, overlays, diagnostics, and Linux support reliable. The promoted
 cross-platform desktop items are likewise architectural commitments rather than
 optional feature ideas.
 
+## VERSIONING RULE — milestone numbers follow implementation
+
+The current product version is **0.0.1**. Screen Watcher follows the formal
+policy in [versioning-policy.md](versioning-policy.md).
+
+Roadmap items must **not** be assigned release numbers merely because they have
+been planned. At the end of a substantial coding milestone, perform a version
+review:
+
+- if the work is corrective/smaller and does not complete a major milestone,
+  the next declared development release uses a PATCH increment;
+- if a major coding milestone is complete, merged, green in CI, and practically
+  validated, the next declared development release uses a MINOR increment and
+  resets PATCH to zero;
+- unfinished or purely theoretical roadmap work does not affect the version;
+- `1.0.0` remains reserved for the first stable public compatibility
+  contract.
+
+This keeps the version number evidence-based in the same way that the practical
+validation policy keeps the roadmap evidence-based.
+
 ## IMMEDIATE PRIORITY — validate the working version in practice
 
 Do not allow the size of this research backlog to create the impression that
