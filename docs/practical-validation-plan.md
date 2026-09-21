@@ -1,5 +1,7 @@
 # Practical validation plan
 
+Tracking issue: [#13 — Immediate priority: practical validation of the current Screen Watcher](https://github.com/simon-gros/screen-watcher/issues/13)
+
 This document defines how the **currently implemented** Screen Watcher is
 validated before development expands into more architecture, platforms, GUIs,
 readers, or profiles.
