@@ -3027,3 +3027,53 @@ def test_rare_drop_and_loot_rules_do_not_overlap(monkeypatch):
 
     assert "Ragefire" in bodies["rare_drop"]
     assert "golden beam" in bodies["loot_received"]
+
+
+def test_gauge_rejects_a_bad_first_reading(monkeypatch):
+    """With no previous value, a bad frame had nothing to contradict it.
+
+    Both logged false alerts - "4/10597" and "8/10597" - arrive as valid
+    numbers. The drop guard catches them mid-run, but at startup there is
+    nothing to compare against, so a critical alert fired while health was
+    full.
+    """
+    rule = _gauge_rule(maximum=10597, warn_below=30, confirm_readings=2)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["4/10597", "10,597/10,597", "10,500/10,597"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    for now in (1.0, 2.0, 3.0):
+        assert watcher.evaluate(rule, "0x1", region, (100, 100), now) is None
+
+
+def test_gauge_still_alerts_when_genuinely_near_death(monkeypatch):
+    """The startup floor is 1%; a real emergency above it must alert.
+
+    500 of 10,597 is 4.7% - dire, real, and well clear of the floor.
+    """
+    rule = _gauge_rule(maximum=10597, warn_below=30, confirm_readings=2)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["500/10,597", "400/10,597", "350/10,597"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(3)]
+    assert sum(1 for a in fired if a is not None) == 1
+
+
+def test_gauge_recovers_after_a_bad_first_reading(monkeypatch):
+    """Discarding the frame must not poison the following ones."""
+    rule = _gauge_rule(maximum=10597, warn_below=30, confirm_readings=2)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    readings = iter(["4/10597", "2,000/10,597", "1,900/10,597"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
+             for n in range(3)]
+    assert sum(1 for a in fired if a is not None) == 1

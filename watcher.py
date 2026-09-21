@@ -2518,6 +2518,17 @@ def _eval_gauge(rule: Rule, wid: str, box, now: float,
             and previous >= maximum * 0.2
             and current < previous * 0.1):
         return None
+
+    # The same guard, for the first reading of a run. With no previous value
+    # to compare against, a bad frame at startup had nothing to contradict
+    # it and fired immediately - which is how a critical alert arrived while
+    # health was full. A four-figure gauge reading under 1% is very much
+    # more likely to be a lost digit than a real state: a player that close
+    # to zero is about to die, and one more frame costs a second.
+    if (previous is None and maximum >= 1000
+            and current < maximum * 0.01):
+        rule._last_reading = None
+        return None
     rule._last_reading = current
 
     # `warn_below` is always a percentage, and `warn_at` is an absolute
