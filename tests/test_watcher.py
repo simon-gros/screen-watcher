@@ -3487,3 +3487,71 @@ def test_item_drop_accumulates_a_session_total(monkeypatch):
     alert = watcher.evaluate(rule, "0x1", region, (100, 100), 200.0)
 
     assert alert is not None and "20 this session" in alert.body
+
+
+# --------------------------------------------------------------------------
+# Every kill must be reported
+# --------------------------------------------------------------------------
+
+def _kill_rule():
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    spec = {r["name"]: r for r in cfg["rules"]}["boss_defeated"]
+    rule = watcher.Rule(**{k: v for k, v in spec.items()
+                           if not k.startswith("_")})
+    rule._primed = True
+    return rule
+
+
+def _kill_line(n):
+    return f"[15:47:0{n % 10}] You have killed {n} Arch-Glacor in normal mode."
+
+
+def _run_kills(rule, lines, gap, monkeypatch):
+    region = Region("top-left", 0, 0, 10, 10)
+    fired = []
+    for i, line in enumerate(lines):
+        monkeypatch.setattr(watcher, "ocr_cached", lambda *a, _l=line, **k: _l)
+        if watcher.evaluate(rule, "0x1", region, (100, 100), float(i) * gap):
+            fired.append(i)
+    return fired
+
+
+def test_every_kill_fires_even_in_a_fast_streak(monkeypatch):
+    """A 20s cooldown dropped one of three kills spaced 15s apart.
+
+    The request was an alert for every kill, so the cooldown was removed;
+    per-line deduplication already prevents repeats.
+    """
+    fired = _run_kills(_kill_rule(),
+                       [_kill_line(n) for n in (630, 631, 632)],
+                       15, monkeypatch)
+    assert len(fired) == 3
+
+
+def test_every_kill_fires_at_five_second_spacing(monkeypatch):
+    fired = _run_kills(_kill_rule(),
+                       [_kill_line(n) for n in (640, 641, 642, 643)],
+                       5, monkeypatch)
+    assert len(fired) == 4
+
+
+def test_a_lingering_kill_line_reports_once(monkeypatch):
+    """The chat tail holds the line for many polls; it is one kill."""
+    fired = _run_kills(_kill_rule(), [_kill_line(650)] * 5, 1.5, monkeypatch)
+    assert len(fired) == 1
+
+
+def test_kill_alert_carries_the_running_count(monkeypatch):
+    """The count is the per-session statistic worth having."""
+    rule = _kill_rule()
+    line = _kill_line(627)
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: line)
+
+    alert = watcher.evaluate(rule, "0x1", Region("top-left", 0, 0, 10, 10),
+                             (100, 100), 100.0)
+    assert alert is not None and "627" in alert.body
+
+
+def test_kill_rule_has_no_cooldown():
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    assert {r["name"]: r for r in cfg["rules"]}["boss_defeated"]["cooldown"] == 0

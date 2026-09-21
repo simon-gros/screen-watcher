@@ -241,14 +241,14 @@
       "kind": "ocr",
       "region": "chat_tail",
       "pattern": "you have killed \\d[\\d,]* arch[- ]?glacor",
-      "cooldown": 20,
+      "cooldown": 0,
       "message": "Boss defeated",
       "alert_body": "{line}",
       "sound": "outcome-success",
       "urgency": "normal",
       "timeout_ms": 10000,
       "enabled": true,
-      "_note": "VERIFIED from live chat: 'You have killed 626 Arch-Glacor in normal mode.' The previous pattern was a guess - 'kill count is|completed ... in |defeated' - and matched none of the real lines, so this rule would never have fired. Confirmed against two consecutive kills. The digit group also makes the running total visible in the alert, which is the per-session statistic worth having. Per the wiki, rewards accumulate across a killstreak and part is LOST on death, which is why player_died matters here beyond the immediate risk."
+      "_note": "VERIFIED from live chat: 'You have killed 626 Arch-Glacor in normal mode.' The original pattern was a guess - 'kill count is|completed ... in |defeated' - and matched none of the real lines, so this rule would never have fired. Confirmed against four consecutive kills. The digit group puts the running total in the alert, which is the per-session statistic worth having. cooldown=0, deliberately. Every kill should be reported, and a 20s cooldown dropped one of three kills spaced 15s apart in a fast streak. Nothing is lost by removing it: each chat line is counted once via the same dedup key the other OCR rules use, verified by holding one kill line on screen for five consecutive polls and seeing a single alert. Observed kill pace on this account is ~85s apart, so the cooldown was not protecting against anything real. Per the wiki, rewards accumulate across a killstreak and part is LOST on death, which is why player_died matters here beyond the immediate risk."
     },
     {
       "name": "encounter_started",
