@@ -2931,7 +2931,7 @@ def cmd_calibrate(args) -> None:
 def cmd_shot(args) -> None:
     cfg = load_config(args.config)
     game = acquire_game(cfg, getattr(args, "backend", None))
-    wid, size = game.handle, game.size
+    size = game.size
     if args.box:
         parts = args.box.split(",")
         if len(parts) == 5:
@@ -3006,7 +3006,7 @@ def cmd_inv(args) -> None:
     """Live per-slot inventory change feed."""
     cfg = load_config(args.config)
     game = acquire_game(cfg, getattr(args, "backend", None))
-    wid, size = game.handle, game.size
+    size = game.size
     reg = cfg["_regions"][args.region]
     if not reg.grid:
         sys.exit(f"region {args.region!r} has no grid defined")
