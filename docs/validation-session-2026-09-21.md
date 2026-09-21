@@ -113,6 +113,57 @@ already prevents repeats.
 
 Test: `test_every_kill_fires_even_in_a_fast_streak`.
 
+### Critical — every rule broken while the suite was green
+
+Found by running `watch` against the live game immediately after the
+module split, with 319 tests passing:
+
+```text
+rule 'low_health' failed: NameError: name 'ACTIVE_GAME' is not defined
+...and the same for all fifteen rules, every cycle
+```
+
+`ACTIVE_GAME` moved into `screen_watcher/capture.py`, but `set_active_game`
+in `watcher.py` still said `global ACTIVE_GAME`. That declares a *second*
+name in `watcher` which nothing ever assigns before the first read, so
+`capture_array` raised on every rule on every cycle. The watcher started,
+printed its rule table, and then did nothing at all.
+
+**No test could have caught it.** Thirty-two tests patch `capture_array`
+itself — they replace the exact line the bug was on. The failure only
+appears when the real function runs, which only happens live.
+
+Fixed by routing both the write and the read through `capture_mod`, and
+by pointing `ocr.py` at the live module attribute rather than a value
+copied at import time.
+
+Tests: `test_set_active_game_is_visible_to_the_extracted_readers`,
+`test_capture_array_reads_active_game_without_a_nameerror` — both
+verified to fail against the reintroduced bug, not merely to pass now.
+
+### The dead-patch class, and a guard for it
+
+The split moved functions into submodules while tests kept patching them
+through `watcher`. Where the new home calls a name module-locally, such a
+patch reaches nothing — and the test usually *still passes*, because the
+real function returns the same answer the fake would have.
+
+Four such patches were found, three of them silently passing:
+
+| name | call site | why it still passed |
+|---|---|---|
+| `count_by_colour` | `rules.py` | real counter returned 0 on the blank test frame, same as the fake |
+| `ensure_x_env` | `capture.py` | real one is harmless on a host with no tools |
+| `X11ImageMagickBackend` | `capture.py` | the real backend happened to be available |
+| `ocr` / `ocr_array` | `ocr.py` | failed loudly — the only one the suite caught |
+
+`test_no_test_patches_a_name_its_target_cannot_see` now walks the test
+file for `monkeypatch.setattr(watcher, ...)` and flags any name whose
+defining module calls it bare. Names verified as genuinely undriven are
+listed in `_BARE_CALLS_NO_TEST_DRIVES` with the reason — each confirmed
+by spying the implementation across the whole suite to see which tests
+actually reach it, rather than by reading the code.
+
 ## Cross-cutting lesson: guessed wording is reliably wrong
 
 Five rule patterns were written from assumption rather than observation.

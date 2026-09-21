@@ -115,7 +115,12 @@ def test_item_count_out_state_uses_separate_template(monkeypatch):
         watcher, "capture_array",
         lambda *args, **kwargs: np.zeros((10, 10, 3), dtype=np.int16),
     )
-    monkeypatch.setattr(watcher, "count_by_colour", lambda *args, **kwargs: 0)
+    # _eval_item_count calls count_by_colour as a module-local name in
+    # screen_watcher.rules, so patching watcher.count_by_colour was a dead
+    # patch: the real counter ran and happened to return 0 for this blank
+    # frame, so the test passed while testing the wrong thing.
+    from screen_watcher import rules as rules_mod
+    monkeypatch.setattr(rules_mod, "count_by_colour", lambda *a, **k: 0)
 
     assert watcher._eval_item_count(
         rule, "w", region, (0, 0, 10, 10), 100.0, 1) is None
@@ -972,8 +977,12 @@ def test_make_backend_falls_back_when_default_unavailable(monkeypatch):
         def available(self):
             return True, "ok"
 
+    # make_backend builds the fallback from the module-local name, so this
+    # must patch screen_watcher.capture; via watcher it reached nothing and
+    # the test passed only because the real backend was available here.
+    from screen_watcher import capture as capture_mod
     monkeypatch.setitem(watcher.BACKENDS, "x11-xcb", Unavailable)
-    monkeypatch.setattr(watcher, "X11ImageMagickBackend", Usable)
+    monkeypatch.setattr(capture_mod, "X11ImageMagickBackend", Usable)
 
     assert watcher.make_backend().name == "x11-imagemagick"
 
@@ -994,7 +1003,11 @@ def test_xcb_backend_reports_missing_binding(monkeypatch):
     """`available` must name the missing dependency, not just say no."""
     backend = watcher.X11XcbBackend()
     monkeypatch.setitem(os.environ, "DISPLAY", ":0")
-    monkeypatch.setattr(watcher, "ensure_x_env", lambda: None)
+    # available() resolves ensure_x_env in screen_watcher.capture, so a
+    # watcher-level patch never reached it. Harmless here - the real one
+    # just finds no tools - but it left the test depending on the host.
+    from screen_watcher import capture as capture_mod
+    monkeypatch.setattr(capture_mod, "ensure_x_env", lambda: None)
 
     real_import = builtins.__import__
 
@@ -1486,7 +1499,9 @@ def test_match_digit_reports_low_confidence():
 
 def test_ocr_numeric_falls_back_to_tesseract(monkeypatch):
     calls = []
-    monkeypatch.setattr(watcher, "ocr",
+    # ocr_numeric resolves `ocr` in screen_watcher.ocr, not watcher.
+    from screen_watcher import ocr as ocr_mod
+    monkeypatch.setattr(ocr_mod, "ocr",
                         lambda wid, box, psm=6: calls.append(psm) or "fallback")
 
     blank = np.zeros((20, 60, 3), dtype=np.int16)
@@ -1495,7 +1510,10 @@ def test_ocr_numeric_falls_back_to_tesseract(monkeypatch):
 
 
 def test_ocr_numeric_skips_tesseract_when_sprites_match(monkeypatch):
-    monkeypatch.setattr(watcher, "ocr", lambda *a, **k: pytest.fail(
+    # Must patch screen_watcher.ocr: this assertion is a negative one, so a
+    # patch that reaches nothing would keep passing while testing nothing.
+    from screen_watcher import ocr as ocr_mod
+    monkeypatch.setattr(ocr_mod, "ocr", lambda *a, **k: pytest.fail(
         "tesseract must not run when sprite matching succeeds"))
 
     frame = _render_digits("00:02:06")
@@ -1864,7 +1882,12 @@ def test_ocr_scrolling_reads_only_the_new_strip(monkeypatch):
         seen.append(frame.shape[0])
         return "alpha\nbravo" if len(seen) == 1 else "bravo\ncharlie"
 
-    monkeypatch.setattr(watcher, "ocr_array", fake_ocr)
+    # Retargeted at the module split: ocr_scrolling now lives in
+    # screen_watcher.ocr and calls its module-local ocr_array, so patching
+    # watcher.ocr_array would be a no-op. capture_array above still goes
+    # through watcher, because the OCR module reaches it via _w().
+    from screen_watcher import ocr as ocr_mod
+    monkeypatch.setattr(ocr_mod, "ocr_array", fake_ocr)
     watcher._SCROLL_CACHE.clear()
 
     box = (0, 0, 200, 160)
@@ -1886,7 +1909,9 @@ def test_ocr_scrolling_reuses_text_when_nothing_scrolled(monkeypatch):
         calls.append(f.shape[0])
         return "only line"
 
-    monkeypatch.setattr(watcher, "ocr_array", fake_ocr)
+    # screen_watcher.ocr, not watcher - see the retargeting note above.
+    from screen_watcher import ocr as ocr_mod
+    monkeypatch.setattr(ocr_mod, "ocr_array", fake_ocr)
     watcher._SCROLL_CACHE.clear()
 
     box = (0, 0, 200, 120)
@@ -1903,7 +1928,9 @@ def test_ocr_scrolling_falls_back_on_unrelated_frame(monkeypatch):
     monkeypatch.setattr(watcher, "capture_array",
                         lambda *a, **k: next(frames))
     seen = []
-    monkeypatch.setattr(watcher, "ocr_array",
+    # screen_watcher.ocr, not watcher - see the retargeting note above.
+    from screen_watcher import ocr as ocr_mod
+    monkeypatch.setattr(ocr_mod, "ocr_array",
                         lambda f, psm=6: (seen.append(f.shape[0]), "text")[1])
     watcher._SCROLL_CACHE.clear()
 
@@ -4315,6 +4342,63 @@ def test_capture_backends_are_reexported():
         assert getattr(watcher, name) is getattr(capture_mod, name), name
 
 
+def test_set_active_game_is_visible_to_the_extracted_readers():
+    """Every rule raised NameError live while the suite stayed green.
+
+    ACTIVE_GAME moved into screen_watcher.capture, but set_active_game
+    still said `global ACTIVE_GAME`. That created a second, never-assigned
+    name in watcher, so capture_array raised NameError on the first read
+    and all fifteen rules failed on every cycle.
+
+    No test caught it because the tests patch capture_array itself, which
+    is the exact line the bug was on. This asserts the binding instead:
+    one setter, one variable, seen by watcher and by the OCR reader.
+    """
+    from screen_watcher import capture as capture_mod
+    from screen_watcher import ocr as ocr_mod
+
+    sentinel = object()
+    previous = capture_mod.ACTIVE_GAME
+    try:
+        watcher.set_active_game(sentinel)
+        assert capture_mod.ACTIVE_GAME is sentinel
+        # ocr.ocr() reads it through the same module object.
+        assert ocr_mod.capture_mod.ACTIVE_GAME is sentinel
+        # and watcher must not have grown a private shadow copy
+        assert "ACTIVE_GAME" not in vars(watcher) or \
+            vars(watcher)["ACTIVE_GAME"] is sentinel
+
+        watcher.set_active_game(None)
+        assert capture_mod.ACTIVE_GAME is None
+    finally:
+        capture_mod.ACTIVE_GAME = previous
+
+
+def test_capture_array_reads_active_game_without_a_nameerror(monkeypatch):
+    """The live symptom itself: capture_array must not raise NameError.
+
+    Exercises the real function rather than the binding, because the
+    NameError came from reading the name, not from writing it. The
+    uncached path is stubbed so this stays a pure name-resolution test.
+
+    Reproducing it needs the live ordering: `watch` reads the vitals
+    region before anything binds a game, so the read happens with no
+    prior assignment. Deleting a watcher-level ACTIVE_GAME reproduces
+    that - with the bug present, `global ACTIVE_GAME` had never run, so
+    the name did not exist and the read raised.
+    """
+    from screen_watcher import capture as capture_mod
+
+    monkeypatch.delattr(watcher, "ACTIVE_GAME", raising=False)
+    monkeypatch.setattr(capture_mod, "ACTIVE_GAME", None)
+    monkeypatch.setattr(
+        watcher, "_capture_array_uncached",
+        lambda wid, box: np.zeros((4, 4, 3), dtype=np.int16))
+
+    frame = watcher.capture_array("0x1", (0, 0, 4, 4), None, cycle=1)
+    assert frame.shape == (4, 4, 3)
+
+
 def test_capture_array_stayed_with_its_callers():
     """Thirty-two tests patch `watcher.capture_array`.
 
@@ -4471,6 +4555,92 @@ def test_rules_are_reexported():
                  "parse_gauge", "parse_percent", "parse_total",
                  "parse_timer", "join_wrapped_lines", "parse_quantity"):
         assert getattr(watcher, name) is getattr(rules, name), name
+
+
+# Names called bare inside their own module at a site no test substitutes.
+# Verified by spying each implementation across the whole suite and checking
+# which tests reach it: a name belongs here only if every test that reaches
+# the bare path wants the real function.
+_BARE_CALLS_NO_TEST_DRIVES = {
+    # find_window's own size probe. The window_size patches all drive
+    # WindowTracker in runtime.py, which goes through _w().
+    "window_size",
+    # ocr_numeric's tesseract fallback. Reached for real by the two
+    # OcrError tests and the replay-fixture test, none of which patch it.
+    "ocr_array",
+    # ocr_scrolling's full-region read, patched at screen_watcher.ocr by
+    # the three scrolling tests rather than through watcher.
+    "ocr",
+    # X11ImageMagickBackend.grab_array. The one test that reaches it wants
+    # the real function and substitutes capture_mod.capture beneath it;
+    # watcher.capture_array's own call does go through the re-export.
+    "_capture_array_uncached",
+}
+
+
+def test_no_test_patches_a_name_its_target_cannot_see():
+    """Guard against the dead-patch class the module split introduced.
+
+    `monkeypatch.setattr(watcher, "f", fake)` only reaches code that looks
+    `f` up on `watcher`. After a function moved into a submodule, callers
+    there resolve `f` module-locally, so such a patch silently becomes a
+    no-op - the test keeps passing while exercising the real code. That
+    happened four times in this split (count_by_colour, ocr, ocr_array,
+    ensure_x_env) and three of the four still passed, which is why this
+    guard reads the test source rather than trusting a green run.
+
+    A submodule may call a moved name in two ways. `_w().f(...)` reads it
+    off `watcher` at call time, so a watcher-level patch reaches it. A bare
+    `f(...)` was bound at import time and never will. This walks the
+    submodule's AST and flags any name that is both patched through
+    `watcher` by some test and called bare inside its own module.
+    """
+    import ast
+    import importlib
+
+    source = Path(__file__).read_text()
+    patched = {
+        node.args[1].value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "setattr"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "monkeypatch"
+        and len(node.args) >= 2
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "watcher"
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    }
+
+    offenders = []
+    for name in sorted(patched):
+        target = getattr(watcher, name, None)
+        home = getattr(target, "__module__", None)
+        if not home or not home.startswith("screen_watcher"):
+            continue                      # still defined in watcher: fine
+        module = importlib.import_module(home)
+        tree = ast.parse(Path(module.__file__).read_text())
+
+        # A bare call `f(...)`. `_w().f(...)` is an ast.Attribute, and the
+        # `def f` that defines it is not a Call, so neither is counted.
+        bare = [
+            node.lineno for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == name
+        ]
+        if bare and name not in _BARE_CALLS_NO_TEST_DRIVES:
+            lines = ", ".join(f"{home.split('.')[-1]}.py:{n}" for n in bare)
+            offenders.append(f"{name} called bare at {lines}")
+
+    assert not offenders, (
+        "these names are patched through `watcher`, but their own module "
+        "calls them as a module-local name, so the patch reaches "
+        "nothing. Patch the defining module instead, or - if no test "
+        "drives that call site - add it to _BARE_CALLS_NO_TEST_DRIVES "
+        "with a reason:\n  " + "\n  ".join(offenders))
 
 
 def test_patching_ocr_reaches_the_extracted_evaluators(monkeypatch):
