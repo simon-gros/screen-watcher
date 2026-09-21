@@ -4355,3 +4355,31 @@ def test_watcher_keeps_shutil_for_test_patching():
     binaries installed.
     """
     assert watcher.shutil is not None
+
+
+def test_load_config_resolves_its_default_at_call_time():
+    """A `_w().CONFIG_PATH` default would run at import time.
+
+    Default arguments are evaluated when the module loads, which would
+    trigger the circular import this module exists to avoid. The default
+    is None and resolved inside the call instead.
+    """
+    import inspect
+    from screen_watcher import config as config_mod
+
+    default = inspect.signature(config_mod.load_config).parameters["path"].default
+    assert default is None
+    assert isinstance(watcher.load_config(), dict)
+
+
+def test_config_helpers_are_reexported():
+    """SCHEMA_VERSION moved with the code and had to move back into view.
+
+    Five tests failed on `watcher.SCHEMA_VERSION` disappearing, which is
+    the re-export contract doing its job loudly rather than silently.
+    """
+    from screen_watcher import config as config_mod
+
+    for name in ("load_config", "validate_config", "validate_schema_version",
+                 "check_fingerprint", "resolve_window", "SCHEMA_VERSION"):
+        assert getattr(watcher, name) is getattr(config_mod, name), name
