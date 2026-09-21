@@ -4257,3 +4257,21 @@ def test_overlay_script_path_survives_the_module_move():
     assert channel.SCRIPT.exists(), channel.SCRIPT
     assert channel.SCRIPT.name == "overlay.py"
     assert channel.SCRIPT.parent.name == "tools"
+
+
+def test_window_helpers_are_reexported():
+    """WindowTracker and the backends address these through `watcher`."""
+    from screen_watcher import windows
+
+    for name in ("find_window", "window_size", "ensure_x_env", "_xdo"):
+        assert getattr(watcher, name) is getattr(windows, name), name
+
+
+def test_patching_find_window_still_reaches_window_tracker(monkeypatch):
+    """The five WindowTracker tests depend on this, so assert it directly."""
+    monkeypatch.setattr(watcher, "kwin_available", lambda: (False, "test"))
+    monkeypatch.setattr(watcher, "find_window", lambda *a, **k: None)
+    monkeypatch.setattr(watcher, "window_size", lambda *a, **k: None)
+
+    tracker = watcher.WindowTracker("game", "0x100", (800, 600))
+    assert tracker.reacquire()[0] == "gone"
