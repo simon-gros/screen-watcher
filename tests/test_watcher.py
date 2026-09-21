@@ -403,28 +403,29 @@ def test_activity_reports_stop_only_after_matching_activity(monkeypatch):
     assert "No matching activity" in alert.body
 
 
-def test_loot_ignores_currency_and_reports_item():
-    """Coins arrive ~76% of successes; only named drops should alert."""
+def test_loot_ignores_currency_and_reports_item(monkeypatch):
+    """Exercise the production evaluator instead of copying its regex loop."""
+    pages = {
+        1: "[20:49:08] 455 coins have been added to your money pouch.",
+        2: ("[20:49:09] You pick the target's pocket.\n"
+            "[20:50:01] You steal Extra fine sand."),
+    }
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda wid, box, cycle, psm=6: pages.get(cycle, ""),
+    )
+    watcher.set_active_readers()
     rule = _rule(
         item_pattern=r"extra fine sand|sealed clue scroll \(elite\)",
         ignore_pattern=r"coins have been added|you pick the target",
+        cooldown=0,
     )
-    rule._primed = True
-    lines = [
-        "[20:49:08] 455 coins have been added to your money pouch.",
-        "[20:49:09] You pick the target's pocket.",
-        "[20:50:01] You steal Extra fine sand.",
-    ]
-    hits = []
-    for line in lines:
-        key = watcher.norm_line(line)
-        if re.search(rule.ignore_pattern, line, re.I):
-            rule._seen.add(key)
-            continue
-        m = re.search(rule.item_pattern, line, re.I)
-        if m:
-            hits.append(m.group(0))
-    assert hits == ["Extra fine sand"]
+
+    assert watcher._eval_loot(rule, "w", (0, 0, 1, 1), 100.0, 1) is None
+    alert = watcher._eval_loot(rule, "w", (0, 0, 1, 1), 101.0, 2)
+
+    assert alert is not None
+    assert "Extra fine sand" in alert.body
 
 
 def test_counter_fires_once_per_milestone():
