@@ -1,4 +1,5 @@
 import builtins
+import json
 import os
 import re
 from pathlib import Path
@@ -418,11 +419,16 @@ def test_stun_pattern_matches_real_contraction():
     activity = rules["thieving_stopped"]["pattern"]
 
     for line in ("You've been stunned.", "You've been stunned,",
-                 "You fail to steal from the target."):
+                 "You are stunned!"):
         assert re.search(stun, line, re.I), line
         assert not re.search(alerted, line, re.I), line
         # a stun is the opposite of activity and must not keep the timer alive
         assert not re.search(activity, line, re.I), line
+
+    # A failed steal is NOT a stun. It used to be in the pattern, and with a
+    # Fingerfeather necklace equipped the steal fails without any stun at
+    # all - every stun alert in the logged history had fired on this line.
+    assert not re.search(stun, "You fail to steal from the target.", re.I)
 
     warn = "Your pickpocket target becomes aware of your presence."
     assert re.search(alerted, warn, re.I)
@@ -2141,3 +2147,141 @@ def test_terminate_leaves_another_process_pid_file_alone():
             assert pid_file.exists()
         finally:
             watcher.PID_FILE = original
+
+
+# --------------------------------------------------------------------------
+# Occupancy log timebase - persisted rows must be wall-clock
+# --------------------------------------------------------------------------
+
+def test_log_occupancy_persists_wall_clock_not_monotonic(tmp_path,
+                                                         monkeypatch):
+    """The caller passes monotonic time, which must not reach the file.
+
+    Monotonic counts seconds since boot, so it restarts from an arbitrary
+    base. Persisting it put rows of 1001.0 next to rows of 1789967548 in
+    one log.
+    """
+    log = tmp_path / "occupancy.jsonl"
+    monkeypatch.setattr(watcher, "OCCUPANCY_LOG", log)
+    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+
+    watcher.log_occupancy(1001.0, 14)            # a monotonic-looking value
+
+    row = json.loads(log.read_text().splitlines()[0])
+    assert row["occ"] == 14
+    assert row["t"] >= watcher._WALL_CLOCK_FLOOR
+
+
+def test_load_cycles_ignores_pre_fix_monotonic_rows(tmp_path, monkeypatch):
+    """Mixed bases produced 57-year gaps that split every cycle.
+
+    `stats` segments on time gaps, so it was reporting confident tuning
+    advice derived from those phantom jumps.
+    """
+    log = tmp_path / "occupancy.jsonl"
+    base = 1_789_967_000.0
+    rows = [
+        {"t": 1001.0, "occ": 5},                 # legacy monotonic row
+        {"t": 266.6, "occ": 9},                  # and another
+        {"t": base, "occ": 0},
+        {"t": base + 30, "occ": 14},
+        {"t": base + 60, "occ": 27},
+        {"t": base + 70, "occ": 1},              # banked
+        {"t": base + 100, "occ": 15},
+        {"t": base + 130, "occ": 27},
+        {"t": base + 140, "occ": 0},             # banked again
+    ]
+    log.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    monkeypatch.setattr(watcher, "OCCUPANCY_LOG", log)
+
+    cycles = watcher.load_cycles(capacity=28)
+
+    assert cycles, "a complete cycle should survive the filter"
+    for c in cycles:
+        assert c["start"] >= watcher._WALL_CLOCK_FLOOR
+
+
+def test_load_cycles_skips_malformed_and_partial_rows(tmp_path, monkeypatch):
+    """A truncated final write must not break every later `stats` run."""
+    log = tmp_path / "occupancy.jsonl"
+    base = 1_789_967_000.0
+    log.write_text(
+        json.dumps({"t": base, "occ": 0}) + "\n"
+        + "{not json\n"
+        + json.dumps({"t": base + 10}) + "\n"          # missing occ
+        + json.dumps([1, 2, 3]) + "\n"                 # not a dict
+        + json.dumps({"t": base + 20, "occ": 27}) + "\n"
+        + json.dumps({"t": base + 30, "occ": 0}) + "\n")
+    monkeypatch.setattr(watcher, "OCCUPANCY_LOG", log)
+
+    watcher.load_cycles(capacity=28)               # must not raise
+
+
+# --------------------------------------------------------------------------
+# Stun false positives - Fingerfeather avoids the stun entirely
+# --------------------------------------------------------------------------
+
+def test_avoided_stun_never_alerts():
+    """"You nimbly avoid getting stunned" is a success, not a stun.
+
+    Reported from live play with a Fingerfeather necklace equipped.
+    """
+    cfg = load_config(Path("profiles/thieving.json"))
+    stun = {r["name"]: r for r in cfg["rules"]}["stunned"]
+    suppress = stun.get("suppress_pattern")
+    assert suppress, "the stun rule needs a suppression pattern"
+
+    for line in ("You nimbly avoid getting stunned.",
+                 "You nimbly avoid getting stunned. v",
+                 "You avoided getting stunned."):
+        assert re.search(suppress, line, re.I), line
+
+
+def test_ocr_rule_suppression_beats_the_pattern(monkeypatch):
+    """Suppression is checked first, so such a line can never fire."""
+    rule = watcher.Rule(
+        name="stunned", kind="ocr", region="chat_tail",
+        pattern="you are stunned",
+        suppress_pattern="nimbly avoid|avoid(ed)? getting stunned",
+        cooldown=0, message="Stunned")
+    rule._primed = True
+
+    # A line containing both the trigger wording and the avoidance wording.
+    text = "[10:00:00] You nimbly avoid getting stunned, you are stunned"
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: text)
+    region = Region("top-left", 0, 0, 10, 10)
+
+    assert watcher.evaluate(rule, "0x1", region, (100, 100), 100.0) is None
+
+
+def test_ocr_rule_still_fires_without_suppression(monkeypatch):
+    rule = watcher.Rule(name="stunned", kind="ocr", region="chat_tail",
+                        pattern="you are stunned", cooldown=0,
+                        message="Stunned")
+    rule._primed = True
+    monkeypatch.setattr(watcher, "ocr_cached",
+                        lambda *a, **k: "[10:00:00] You are stunned!")
+    region = Region("top-left", 0, 0, 10, 10)
+
+    assert watcher.evaluate(rule, "0x1", region, (100, 100), 100.0) is not None
+
+
+def test_norm_line_collapses_trailing_ocr_noise():
+    """One stun fired three times 0.2s apart despite a 25s cooldown.
+
+    The scrollbar and the 3D scene behind the chat panel bled stray glyphs
+    past the end of the line, so each read produced a different dedup key
+    and looked like a separate event.
+    """
+    base = "[14:53:20] You fail to steal from the target."
+    keys = {watcher.norm_line(base + tail)
+            for tail in ("", " v", " v I", " v I x")}
+    assert len(keys) == 1
+
+
+def test_norm_line_keeps_real_content():
+    """Stripping must not eat short genuine words."""
+    assert watcher.norm_line("I am here.") == "iamhere"
+    assert watcher.norm_line("You are stunned!") == "youarestunned"
+    assert "455" in watcher.norm_line(
+        "455 coins have been added to your money pouch.")

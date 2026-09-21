@@ -396,7 +396,8 @@ The failure path is **two lines, one second apart**:
 [21:03:26] You've been stunned.
 ```
 
-Both are matched, because OCR frequently catches only one of them.
+Only the second line is matched. Matching the first as well was a mistake,
+corrected after a live report - see below.
 
 An earlier *guessed* pattern used `you (have been |are )?stunned` and
 `you fail to pick`. It missed **both** real lines: the game uses the
@@ -405,12 +406,50 @@ contraction `You've`, and says `fail to steal from the target` rather than
 clearest argument in this document for reading live OCR before writing a
 pattern.
 
+### A failed steal is not a stun
+
+Reported from live play: an alert fired while chat plainly said
+`You nimbly avoid getting stunned.` - a Fingerfeather necklace was equipped,
+which prevents the stun. The steal still fails, so the two lines had come
+apart, and the rule was matching the wrong one.
+
+Checking `state/alerts.jsonl` made it worse than a single false positive.
+**Every** stun alert ever logged had fired on the fail line:
+
+```json
+{"rule": "stunned", "source_text": "[14:42:38] You fail to steal from the target."}
+{"rule": "stunned", "source_text": "[14:53:20] You fail to steal from the target. v"}
+{"rule": "stunned", "source_text": "[14:58:01] You fail to steal from the target."}
+```
+
+Not one had fired on an actual stun line. The rule had been reporting failed
+pickpockets as stuns the whole time, and pairing the two lines hid it: while
+a failed steal usually *was* followed by a stun, the alert looked correct.
+The necklace broke the correlation and exposed it.
+
+`you fail to steal from the target` is therefore out of the pattern, and a
+`suppress_pattern` now rejects any line about avoiding or resisting a stun
+before the pattern is even tried. Logged `source_text` is what made this
+diagnosable; a rule recording only *that* it fired would have left the
+report unfalsifiable.
+
+### The same evidence showed a dedup bug
+
+Two of those alerts are 0.2 seconds apart, against `cooldown: 25`. Their
+source texts differ only in trailing junk - `. v` and `. v I` - which the
+chat scrollbar and the 3D scene behind the panel bleed past the end of the
+line. `norm_line` kept those glyphs, so each read produced a different key,
+each looked like a separate event, and the cooldown never applied.
+
+`norm_line` now strips trailing fragments too short to be words before
+building the key.
+
 These are now two rules, because the consequences differ:
 
 | rule | line | effect | sound |
 |---|---|---|---|
 | `target_alerted` | `becomes aware of your presence` | warning; pickpocketing continues | `dialog-warning-auth` |
-| `stunned` | `You've been stunned` / `You fail to steal from the target` | **halts pickpocketing** | `dialog-error-serious` |
+| `stunned` | `You've been stunned` (**not** the fail line) | **halts pickpocketing** | `dialog-error-serious` |
 
 The stun lines were also **removed from `thieving_stopped`'s activity
 pattern**. Being stunned is not evidence of activity but of the opposite, and

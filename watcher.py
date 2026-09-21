@@ -1130,6 +1130,11 @@ def diff_slots(prev: list[dict], cur: list[dict],
     return changes
 
 
+#: Unix time for 2020-01-01. Any persisted timestamp below this came from
+#: the monotonic clock, which counts seconds since boot and so lands in the
+#: thousands rather than the billions.
+_WALL_CLOCK_FLOOR = 1_577_836_800.0
+
 OCCUPANCY_LOG = STATE_DIR / "occupancy.jsonl"
 COUNTER_LOG = STATE_DIR / "counters.jsonl"
 
@@ -1141,11 +1146,18 @@ def log_counter(name: str, ts: float, total: int) -> None:
     the total only in memory would mean a watcher restart - or the game window
     briefly disappearing - silently rewinds it to zero and the alert never
     arrives.
+
+    Timestamps are wall-clock for the same reason as the occupancy log: the
+    caller passes the loop's monotonic clock, which restarts from an
+    arbitrary base each boot and is meaningless once written to disk.
+    `load_counter` reads by name and ignores `t`, so this was not breaking
+    anything - but a persisted timestamp that cannot be compared across runs
+    is a trap for whatever reads it next.
     """
     try:
         STATE_DIR.mkdir(exist_ok=True)
         with COUNTER_LOG.open("a") as f:
-            f.write(json.dumps({"t": round(ts, 1), "name": name,
+            f.write(json.dumps({"t": round(time.time(), 1), "name": name,
                                 "total": total}) + "\n")
     except OSError:
         pass
@@ -1171,11 +1183,20 @@ def load_counter(name: str) -> int:
 
 def log_occupancy(ts: float, occ: int) -> None:
     """Append an occupancy change. Only transitions are recorded, so an hour
-    of fishing costs a few hundred bytes rather than thousands of samples."""
+    of fishing costs a few hundred bytes rather than thousands of samples.
+
+    `ts` is the loop's monotonic clock, which is right for elapsed-time
+    arithmetic and wrong to persist: it restarts from an arbitrary base on
+    every boot. The log was carrying both bases at once - real rows of
+    1789967548 next to rows of 1001.0 - and `load_cycles` segments cycles by
+    time gaps, so those backwards jumps silently split or merged bank trips
+    and corrupted `stats`. Wall-clock is written instead, matching the alert
+    and counter logs.
+    """
     try:
         STATE_DIR.mkdir(exist_ok=True)
         with OCCUPANCY_LOG.open("a") as f:
-            f.write(json.dumps({"t": round(ts, 1), "occ": occ}) + "\n")
+            f.write(json.dumps({"t": round(time.time(), 1), "occ": occ}) + "\n")
     except OSError:
         pass
 
@@ -1193,9 +1214,17 @@ def load_cycles(capacity: int, gap: float = 300.0) -> list[dict]:
     rows = []
     for line in OCCUPANCY_LOG.read_text().splitlines():
         try:
-            rows.append(json.loads(line))
+            row = json.loads(line)
         except ValueError:
             continue
+        if isinstance(row, dict) and "t" in row and "occ" in row:
+            rows.append(row)
+    # Existing logs carry rows written against the monotonic clock before
+    # that was fixed. They are indistinguishable from wall-clock rows except
+    # by magnitude, and mixing the two produces enormous phantom gaps that
+    # split every cycle. Keep only the wall-clock era rather than guessing
+    # at their real times.
+    rows = [r for r in rows if r["t"] >= _WALL_CLOCK_FLOOR]
     cycles, cur = [], None
     for i, r in enumerate(rows):
         t, occ = r["t"], r["occ"]
@@ -1261,7 +1290,21 @@ def norm_line(s: str) -> str:
     as '[11:03:15]' on one pass and '(11:03:15]' on the next. Comparing raw
     strings therefore re-reports old lines as new. Collapsing to lowercase
     alphanumerics makes the key stable across those wobbles.
+
+    Trailing fragments are stripped before that. The chat panel's scrollbar
+    and the 3D scene behind it bleed a stray glyph or two past the end of a
+    line, and those land *inside* the key - observed in the alert log as one
+    stun firing three times 0.2s apart from:
+
+        "You fail to steal from the target."
+        "You fail to steal from the target. v"
+        "You fail to steal from the target. v I"
+
+    Three different keys, so the cooldown never applied: each looked like a
+    separate event. Anything after the sentence-ending punctuation that is
+    too short to be a word is dropped.
     """
+    s = re.sub(r"(?<=[.!?])\s+(?:[a-zA-Z]\s*){1,3}$", "", s.strip())
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
@@ -2575,6 +2618,14 @@ def evaluate(rule: Rule, wid: str, region: "Region", size, now: float,
             line = line.strip()
             key = norm_line(line)
             if len(key) < 8 or key in rule._seen:
+                continue
+            # A line can contain the pattern and mean its opposite: with a
+            # Fingerfeather necklace the game says "You nimbly avoid getting
+            # stunned", which is a *success*. Suppression is checked first so
+            # such a line can never alert, whatever the pattern matches.
+            if rule.suppress_pattern and re.search(rule.suppress_pattern,
+                                                   line, re.I):
+                rule._seen.add(key)
                 continue
             if re.search(rule.pattern, line, re.I):
                 rule._seen.add(key)

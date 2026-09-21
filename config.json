@@ -212,15 +212,16 @@
       "name": "stunned",
       "kind": "ocr",
       "region": "chat_tail",
-      "pattern": "you'?ve been stunned|you have been stunned|you are stunned|you fail to steal from the target",
+      "pattern": "you'?ve been stunned|you have been stunned|you are stunned|you'?re stunned",
       "cooldown": 25,
       "message": "Stunned",
       "alert_body": "Stunned. The target has filed a formal objection.",
       "sound": "dialog-error-serious",
-      "_note": "VERIFIED from live chat - the real failure path is TWO lines, one second apart:\n  [21:03:25] You fail to steal from the target.\n  [21:03:26] You've been stunned.\nBoth are matched because OCR often catches only one of them. The earlier guessed pattern used 'you (have been |are )?stunned' and 'you fail to pick', and missed BOTH real lines: the game uses the contraction \"You've\" and says 'fail to steal from the target', not 'fail to pick'. Per the wiki a stun lasts 5 ticks (~3s) and deals 200 + 3% of base life points, and it halts pickpocketing - which is why this is a separate, louder alert than target_alerted. cooldown=25 keeps a bad streak to one alert while still reporting a later independent stun.",
+      "_note": "VERIFIED from live chat. The real stun lines are the contraction form and its variants:\n  [21:03:26] You've been stunned.\nIMPORTANT: 'You fail to steal from the target.' is NOT in the pattern, though it used to be. A failed steal and a stun are different events, and with a Fingerfeather necklace equipped the game says 'You nimbly avoid getting stunned' - the steal fails and no stun occurs. Every stun alert in the logged history had fired on the fail line, never on a real stun line, so the rule was effectively reporting failed pickpockets as stuns. suppress_pattern is belt-and-braces: any line about avoiding or resisting a stun can never alert, whatever else it matches. Per the wiki a stun lasts 5 ticks (~3s), deals 200 + 3% of base life points, and halts pickpocketing - which is why this is a louder alert than target_alerted. cooldown=25 keeps a bad streak to one alert while still reporting a later independent stun.",
       "enabled": true,
       "urgency": "normal",
-      "timeout_ms": 12000
+      "timeout_ms": 12000,
+      "suppress_pattern": "nimbly avoid|avoid(ed)? getting stunned|resist(ed)? the stun|shrug(ged)? off the stun"
     },
     {
       "name": "item_gained",
