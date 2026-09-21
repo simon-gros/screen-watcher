@@ -39,6 +39,8 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
+VERSION_PATH = ROOT / "VERSION"
+__version__ = VERSION_PATH.read_text(encoding="utf-8").strip()
 CONFIG_PATH = ROOT / "config.json"
 STATE_DIR = ROOT / "state"
 ACTIVE_SKILL = ""
@@ -3200,6 +3202,7 @@ def cmd_watch(args) -> None:
 
     interval = cfg.get("interval", 1.0)
     wm_class = cfg["window"]["wm_class"]
+    print(f"Screen Watcher {__version__}")
     print(f"watching skill={ACTIVE_SKILL!r} profile={args.config} "
           f"{wid} ({wm_class}) {size[0]}x{size[1]} every {interval}s "
           f"backend={backend.name}")
@@ -3289,10 +3292,10 @@ def cmd_watch(args) -> None:
 
 
 def main() -> None:
-    ensure_x_env()
-    STATE_DIR.mkdir(exist_ok=True)
     p = argparse.ArgumentParser(prog="watcher", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version",
+                   version=f"%(prog)s {__version__}")
     p.add_argument("--config", type=Path, default=CONFIG_PATH,
                    help="skill profile JSON (default: config.json)")
     p.add_argument("--backend", default=None, choices=sorted(BACKENDS),
@@ -3348,6 +3351,8 @@ def main() -> None:
     res = sub.add_parser("resume"); res.set_defaults(func=cmd_resume)
 
     args = p.parse_args()
+    ensure_x_env()
+    STATE_DIR.mkdir(exist_ok=True)
     args.func(args)
 
 
