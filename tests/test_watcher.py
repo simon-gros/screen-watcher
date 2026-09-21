@@ -2813,3 +2813,53 @@ def test_parse_gauge_handles_every_observed_separator_style():
             ("I © 2177/10597 y@x%", (2177, 10597)),
             ("I§9,347[1o,597 @85%", (9347, 10597))):
         assert watcher.parse_gauge(text, 10597) == expected
+
+
+def test_boss_session_hour_fires_once_per_hour(monkeypatch):
+    """One alert at each hour, silence in between."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    spec = {r["name"]: r for r in cfg["rules"]}["session_hour"]
+    rule = watcher.Rule(**{k: v for k, v in spec.items()
+                           if not k.startswith("_")})
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    fired = []
+    for i, reading in enumerate(("00:24:29", "00:59:57", "01:00:02",
+                                 "01:00:05", "01:30:00", "02:00:01")):
+        monkeypatch.setattr(watcher, "ocr_numeric",
+                            lambda *a, _r=reading, **k: _r)
+        alert = watcher.evaluate(rule, "0x1", region, (100, 100),
+                                 float(i) * 100)
+        if alert:
+            fired.append(reading)
+
+    assert fired == ["01:00:02", "02:00:01"]
+
+
+def test_boss_session_hour_rearms_after_a_timer_reset(monkeypatch):
+    """Resetting the Metrics timer starts a fresh session."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    spec = {r["name"]: r for r in cfg["rules"]}["session_hour"]
+    rule = watcher.Rule(**{k: v for k, v in spec.items()
+                           if not k.startswith("_")})
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    fired = []
+    for i, reading in enumerate(("01:00:02", "00:00:05", "01:00:03")):
+        monkeypatch.setattr(watcher, "ocr_numeric",
+                            lambda *a, _r=reading, **k: _r)
+        if watcher.evaluate(rule, "0x1", region, (100, 100), float(i) * 100):
+            fired.append(reading)
+
+    assert fired == ["01:00:02", "01:00:03"]
+
+
+def test_boss_profile_reuses_the_metrics_timer_region():
+    """RS3 pins the Metrics panel, so the skilling geometry still applies."""
+    boss = load_config(Path("profiles/boss-arch-glacor.json"))
+    thieving = load_config(Path("profiles/thieving.json"))
+    a = boss["_regions"]["session_timer"]
+    b = thieving["_regions"]["session_timer"]
+    assert (a.anchor, a.dx, a.dy, a.w, a.h) == (b.anchor, b.dx, b.dy, b.w, b.h)
