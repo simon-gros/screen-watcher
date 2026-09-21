@@ -147,7 +147,8 @@ enough evidence to silently switch from one profile to another.
 ## System layers
 
 ```text
-Profile manager / compatibility fingerprint
+Desktop shell / CLI / application services
+    -> profile manager / compatibility fingerprint
     -> observation backend
     -> calibration + detector health
     -> signal extraction
@@ -159,9 +160,11 @@ Profile manager / compatibility fingerprint
     -> optional local extension API
 ```
 
-The central architectural rule is that **observation is replaceable**. Screen
-capture, OCR, image matching, replay fixtures, and a future sanctioned Jagex
-API/plugin source should all be capable of producing the same normalized events.
+The central architectural rules are that **observation is replaceable** and
+**the UI is replaceable**. Screen capture, OCR, image matching, replay fixtures,
+and a future sanctioned Jagex API/plugin source should all be capable of
+producing the same normalized events. The CLI and Qt GUI should consume the
+same application-service state rather than embedding detector logic.
 Rules and profiles should not care which backend produced them. This is
 important because Jagex's official 2026 plugin/API work explicitly demonstrates
 the limitations of unreliable screen reading while opening richer sanctioned
@@ -564,7 +567,10 @@ multi-client support possible without cross-contaminating alerts.
 ### Current foundation
 
 - Anchored region capture and calibration
-- ImageMagick/X11 subprocess capture suitable for the prototype stage
+- Native XCB `GetImage` capture as the default X11/XWayland path, with
+  ImageMagick retained as a compatibility fallback
+- Shared `GameInstance` / `FrameScheduler` capture lifecycle
+- Shared `ChatReader` event stream for chat-driven rules
 - OCR, pixel, inventory, activity, and idle detectors
 - Explicit skill profiles for fishing and thieving
 - Profile validation and skill-aware alert logs
@@ -619,6 +625,49 @@ coverage section. Current completion is tracked in
 - Keep optional OpenVINO/ML work deferred until classical OpenCV/template/sprite
   approaches are demonstrably insufficient.
 
+### Major cross-platform desktop stage — Linux GUI and Windows parity
+
+Screen Watcher is Linux-first today, but the mature application is explicitly a
+**Windows + Linux desktop companion**. This stage is a major roadmap target, not
+a cosmetic wrapper and not a late port.
+
+The shared desktop/UI plan is defined in
+[cross-platform-gui-roadmap.md](cross-platform-gui-roadmap.md).
+
+Core requirements:
+
+- build one shared PySide6/Qt 6 desktop application rather than separate Linux
+  and Windows products;
+- keep capture/window/notification/overlay/lifecycle differences behind
+  platform-service interfaces;
+- keep the CLI/headless runtime first-class so the GUI never becomes the only
+  way to run or diagnose the watcher;
+- implement a complete Linux GUI around the current backend stack;
+- implement Windows window discovery, DPI/state handling, native window capture,
+  notifications, tray integration, overlay output, and packaging;
+- make the same profile format, event schema, rules, history, analytics, and
+  application-service models work on both platforms;
+- add a calibration wizard, profile manager, doctor/health dashboard, watcher
+  controls, event/alert history, settings, exports, and sanitized diagnostic
+  bundles;
+- move packaged runtime state/config/cache out of the source tree and into
+  platform-standard per-user locations;
+- keep capture/OCR/database work off the GUI thread;
+- treat high-DPI/mixed-monitor geometry, keyboard navigation, accessibility, and
+  translation readiness as acceptance criteria rather than later polish;
+- add Linux and Windows CI plus dedicated/manual real-desktop capture smoke
+  tests that use a synthetic test window rather than RuneScape itself;
+- produce native per-platform release artifacts and signed Windows packages.
+
+Windows capture should primarily investigate `Windows.Graphics.Capture` for a
+specific HWND, entering the same `GameInstance -> FrameScheduler -> Reader ->
+Event` path used by Linux. Linux retains XCB for X11/XWayland and targets
+ScreenCast portal + PipeWire for native Wayland.
+
+The GUI must remain useful without an overlay. A click-through overlay is an
+optional output surface, while the main dashboard, tray, diagnostics,
+calibration, history, and settings remain ordinary desktop UI.
+
 ### Broader coverage stage
 
 - Prioritise reusable detectors that unlock several activities: resource bars,
@@ -644,12 +693,15 @@ coverage section. Current completion is tracked in
 
 ### Mature application stage
 
+- Ship Linux and Windows as supported desktop platforms with one shared Qt
+  application shell and platform-specific observation/output adapters.
 - Provide a stable CLI, normalized event schema, extension API, and
   configuration format.
 - Offer an operator-facing status/diagnostics and session-analytics view.
 - Support shareable profile packages, reusable presets, schema versions,
   permissioned extensions, and migration compatibility.
-- Support X11/XWayland and native Wayland/PipeWire capture where practical.
+- Support X11/XWayland and native Wayland/PipeWire capture on Linux, plus a
+  native Windows per-window capture backend.
 - Support independent multi-client sessions.
 - Add a sanctioned RuneScape API/plugin observation backend if Jagex exposes a
   suitable public path and its terms permit this use.
@@ -659,8 +711,10 @@ coverage section. Current completion is tracked in
   normalized state where useful.
 - Add optional dashboards and notification integrations without coupling them to
   game control.
-- Publish releases with tested profile bundles, locale packs, fixture corpora,
-  and migration notes.
+- Publish signed/versioned Linux and Windows releases with tested profile
+  bundles, locale packs, fixture corpora, checksums, and migration notes.
+- Keep stable/beta/development release channels and transactional
+  config/database migrations.
 
 ## Non-goals
 
