@@ -3193,10 +3193,82 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     return cfg
 
 
+#: Profile schema this build understands. Bump the MAJOR part when a change
+#: makes older profiles misbehave rather than merely lack a feature.
+SCHEMA_VERSION = 1
+
+
+def validate_schema_version(cfg: dict) -> None:
+    """Reject a profile written for a schema this build cannot honour.
+
+    A profile missing the field is accepted as version 1: every profile
+    predates the field, and refusing them would break working setups to
+    enforce bookkeeping.
+
+    A *newer* major version is refused outright. Silently ignoring fields
+    it does not understand is the failure mode worth preventing - a
+    profile that relies on a detector this build lacks would run with that
+    protection quietly absent.
+    """
+    raw = cfg.get("schema_version", SCHEMA_VERSION)
+    if isinstance(raw, str):
+        raw = raw.split(".")[0]
+    try:
+        version = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"schema_version must be a number, got {cfg.get('schema_version')!r}")
+    if version > SCHEMA_VERSION:
+        raise ValueError(
+            f"profile needs schema version {version}, this build supports "
+            f"{SCHEMA_VERSION} - update Screen Watcher")
+    if version < 1:
+        raise ValueError(f"schema_version must be 1 or greater, got {version}")
+
+
+def check_fingerprint(cfg: dict, size: tuple[int, int],
+                      backend: str = "") -> list[str]:
+    """Compare a profile's calibration assumptions against reality.
+
+    Regions are pixel offsets measured on one window size. At any other
+    size they resolve somewhere else entirely, and the failure is silent:
+    OCR returns nothing or, worse, reads a neighbouring panel. This
+    already happened during development - a gold row measured from a
+    scaled screenshot landed 80px off and read as garbage for hours.
+
+    Returns human-readable mismatches rather than raising, because a
+    mismatch is a warning: the profile may still work, and refusing to
+    start would be worse than reporting a risk.
+    """
+    fp = cfg.get("fingerprint")
+    if not isinstance(fp, dict):
+        return []
+    problems = []
+
+    expected = fp.get("window_size")
+    if isinstance(expected, list) and len(expected) == 2:
+        if tuple(expected) != tuple(size):
+            problems.append(
+                f"window is {size[0]}x{size[1]}, profile calibrated at "
+                f"{expected[0]}x{expected[1]} - regions may resolve wrongly")
+
+    expected_backend = fp.get("capture_backend")
+    if expected_backend and backend and expected_backend != backend:
+        problems.append(
+            f"capture backend is {backend}, profile recorded "
+            f"{expected_backend}")
+
+    return problems
+
+
 def validate_config(cfg: object) -> None:
     """Validate configuration before any window or capture side effects."""
     if not isinstance(cfg, dict):
         raise ValueError("root must be an object")
+    validate_schema_version(cfg)
+    fp = cfg.get("fingerprint")
+    if fp is not None and not isinstance(fp, dict):
+        raise ValueError("fingerprint must be an object")
     window = cfg.get("window")
     if not isinstance(window, dict) or not isinstance(window.get("wm_class"), str):
         raise ValueError("window.wm_class must be a string")
@@ -3671,6 +3743,11 @@ def _check_window(cfg: dict, game: GameInstance) -> list[Check]:
                       "in the profile")]
     w, h = game.size
     out = [Check("window", PASS, f"{game.handle} {w}x{h} class={wm_class}")]
+    backend = getattr(getattr(game, "backend", None), "name", "")
+    for problem in check_fingerprint(cfg, (w, h), backend):
+        out.append(Check("fingerprint match", WARN, problem,
+                         "recalibrate the regions for this window, or "
+                         "restore the recorded size"))
     if w < 800 or h < 600:
         out.append(Check("geometry", WARN, f"window is small ({w}x{h})",
                          "regions were calibrated on a larger window and "
@@ -3840,7 +3917,20 @@ def _check_profile(cfg: dict, path: Path) -> list[Check]:
     """Profile identity, rule coverage, and region references."""
     out = [Check("profile", PASS,
                  f"{path} skill={cfg.get('skill', 'unnamed')!r} "
-                 f"type={cfg.get('profile_type', 'skill')}")]
+                 f"type={cfg.get('profile_type', 'skill')} "
+                 f"schema={cfg.get('schema_version', SCHEMA_VERSION)}")]
+    fp = cfg.get("fingerprint")
+    if not isinstance(fp, dict):
+        out.append(Check("fingerprint", WARN, "profile records no calibration "
+                         "assumptions",
+                         "add a fingerprint so a resolution change is "
+                         "reported rather than silently misreading regions"))
+    else:
+        recorded = fp.get("window_size")
+        out.append(Check("fingerprint", PASS,
+                         f"calibrated at {recorded[0]}x{recorded[1]}"
+                         if isinstance(recorded, list) and len(recorded) == 2
+                         else "recorded"))
     enabled = [r for r in cfg["rules"] if r.get("enabled", True)]
     disabled = len(cfg["rules"]) - len(enabled)
     if not enabled:

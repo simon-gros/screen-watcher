@@ -1,6 +1,18 @@
 {
   "skill": "arch-glacor",
   "profile_type": "boss",
+  "schema_version": 1,
+  "fingerprint": {
+    "window_size": [
+      3840,
+      2058
+    ],
+    "capture_backend": "x11-xcb",
+    "ui_scale": 1.75,
+    "session": "CachyOS/KDE Plasma 6 Wayland, RS3 NXT via XWayland",
+    "_note": "Regions are pixel offsets measured on this exact window size. At any other size they resolve elsewhere and fail silently - OCR returns nothing, or reads a neighbouring panel. ui_scale 1.75 is the logical-to-physical factor KWin reports (2194 logical vs 3840 pixels); `doctor` detects it independently and reports it.",
+    "last_validated": "2026-09-21, Arch-Glacor session"
+  },
   "window": {
     "wm_class": "steam_app_1343400",
     "_comment": "RS3 NXT. WM_CLASS survives title changes and skips the Steam launcher window."

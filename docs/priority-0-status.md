@@ -90,7 +90,7 @@ addressed:
   so region geometry is still exercised and the capture path is unchanged;
   that also strips display names, clan and private chat. Overlay, resize
   and deliberate OCR-failure states are not yet captured;
-- profile/schema versions and compatibility metadata are defined and validated;
+- profile/schema versions and compatibility metadata are defined and validated. **Addressed:** every shipped profile declares `schema_version` and a `fingerprint` recording the window size, capture backend, UI scale and last validation. A profile written for a newer schema is refused outright rather than silently ignoring fields it needs; a fingerprint mismatch is reported by `doctor` as a warning, since the profile may still work. Detector-health baselines and structural anchors are not yet recorded;
 - the portal/PipeWire proof of concept is integrated as a production
   `CaptureBackend` with persistent session/restore-token handling;
 - the click-through Wayland overlay proof of concept is integrated with the

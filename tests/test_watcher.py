@@ -3833,3 +3833,72 @@ def test_fixture_advances_through_its_frames(monkeypatch):
     while backend.advance():
         steps += 1
     assert steps >= 2
+
+
+# --------------------------------------------------------------------------
+# Profile schema version and calibration fingerprint
+# --------------------------------------------------------------------------
+
+def test_schema_version_accepts_a_profile_without_the_field():
+    """Every existing profile predates it; refusing them helps nobody."""
+    watcher.validate_schema_version({"window": {"wm_class": "x"}})
+
+
+def test_schema_version_refuses_a_future_profile():
+    """Silently ignoring unknown fields is the failure worth preventing.
+
+    A profile relying on a detector this build lacks would run with that
+    protection quietly absent.
+    """
+    with pytest.raises(ValueError, match="update Screen Watcher"):
+        watcher.validate_schema_version(
+            {"schema_version": watcher.SCHEMA_VERSION + 1})
+
+
+def test_schema_version_reads_the_major_part_of_a_string():
+    watcher.validate_schema_version({"schema_version": "1.4"})
+
+
+def test_schema_version_rejects_nonsense():
+    for bad in ("abc", 0, -1, None):
+        with pytest.raises(ValueError):
+            watcher.validate_schema_version({"schema_version": bad})
+
+
+def test_fingerprint_flags_a_resized_window():
+    """Regions are pixel offsets; at another size they resolve elsewhere.
+
+    The failure is silent - OCR returns nothing, or reads a neighbouring
+    panel. A gold row measured from a scaled screenshot landed 80px off
+    and read as garbage until it was checked against the live game.
+    """
+    cfg = {"fingerprint": {"window_size": [3840, 2058],
+                           "capture_backend": "x11-xcb"}}
+    assert watcher.check_fingerprint(cfg, (3840, 2058), "x11-xcb") == []
+
+    problems = watcher.check_fingerprint(cfg, (2560, 1440), "x11-xcb")
+    assert len(problems) == 1
+    assert "2560x1440" in problems[0] and "3840x2058" in problems[0]
+
+
+def test_fingerprint_flags_a_different_backend():
+    cfg = {"fingerprint": {"window_size": [3840, 2058],
+                           "capture_backend": "x11-xcb"}}
+    problems = watcher.check_fingerprint(cfg, (3840, 2058), "x11-imagemagick")
+    assert any("backend" in p for p in problems)
+
+
+def test_fingerprint_is_optional():
+    """A mismatch is a warning, not a refusal to start."""
+    assert watcher.check_fingerprint({}, (1, 1), "any") == []
+
+
+def test_shipped_profiles_declare_their_calibration():
+    """Each profile records the window it was measured on."""
+    for name in ("boss-arch-glacor", "thieving", "fishing"):
+        cfg = load_config(Path(f"profiles/{name}.json"))
+        assert cfg["schema_version"] == watcher.SCHEMA_VERSION
+        fp = cfg["fingerprint"]
+        assert fp["window_size"] == [3840, 2058]
+        assert fp["capture_backend"] == "x11-xcb"
+        assert fp["last_validated"]
