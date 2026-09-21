@@ -636,3 +636,77 @@ proportional text, not a fixed numeric readout. Making chat OCR cheaper is
 a separate problem, and the realistic options are reducing the region,
 running Tesseract less often than every poll, or a RuneScape-specific
 chat-font reader of the kind Alt1 uses.
+
+## Focus loss must not look like a closed game
+
+Reported from live use: the game going in and out of focus killed the
+watcher. Step 10 made this visible rather than causing it - the loop had
+always exited, but it now runs long enough in real sessions to hit it.
+
+The mechanism: three consecutive `CaptureError`s triggered reacquisition
+through `find_window`, which passes `--onlyvisible`. A minimised client, or
+one on another virtual desktop, returns nothing from that search - exactly
+like a closed one. The loop could not tell the two apart, so it took the
+destructive reading and called `sys.exit("game window gone")`, mid-session,
+after roughly three seconds of alt-tab.
+
+The fix is one extra question on the failure path. `find_window` grew a
+`visible_only` flag; when the visible search comes back empty, ask again
+including unmapped windows. A hit means hidden - wait. A miss means gone -
+stop. The distinction costs one `xdotool` call, and only on a path that is
+already failing.
+
+### Why this became a class
+
+`WindowTracker` exists because the interesting states are all awkward to
+produce by hand: minimised, on another desktop, restarted under a new
+window id, or caught mid-resize between `window_size` and the capture.
+Inline in `cmd_watch`, none of them could be tested - which is why the
+original bug shipped. The class has seven tests; the loop has none.
+
+While hidden, the loop skips rule evaluation entirely. Every rule would
+fail against an unmapped window, and the log would fill with misses. It
+also backs off exponentially (1 to 30 cycles) between attempts, so a long
+alt-tab does not spawn an `xdotool` pair every second for its duration.
+
+### Two faults found by writing the tests
+
+Both were pre-existing, and neither was what I set out to fix:
+
+- `reacquire` adopted `size=None` when a window vanished between the find
+  and the geometry call. Every later resize check then compared against
+  nothing, reporting a phantom resize - and re-anchoring every region - on
+  every single cycle. It now keeps the last real measurement.
+- A window resize changes the UI scale, so digits render a pixel taller and
+  shift inside their fixed cell. The second digit of each pair scored
+  0.75-0.78 against the 13px templates, below the 0.80 threshold, silently
+  disabling the step 6 sprite fast path and falling back to Tesseract.
+  Glyphs are now cropped to their own ink and matched over +/-1 offsets.
+
+The second one is the more instructive: it was a *silent* regression. The
+fast path degraded to the slow path and everything kept working, just
+2500x slower on numeric reads. Nothing failed, so nothing reported it.
+
+### Verified against the live client
+
+Minimising the real RS3 window (`steam_app_1343400`, 3840x2058) and
+restoring it confirms the premise the whole fix rests on:
+
+| state | `--onlyvisible` search | plain search | `reacquire` |
+|---|---|---|---|
+| mapped | `100663297` | `100663297` | `ok` |
+| minimised | `None` | `100663297` | `hidden` |
+| restored | `100663297` | `100663297` | `ok` |
+
+The middle row is the bug: the visible search returns nothing for a window
+that is still very much running, and that `None` used to mean `sys.exit`.
+Restoring re-points cleanly at the same id and geometry.
+
+### A trap worth recording
+
+The first live check appeared to show the game was closed - both searches
+returned `None`. The game was running. RS3 under Steam has WM_CLASS
+`steam_app_1343400`, not `RuneScape`, which is exactly what the shipped
+profiles configure and what I failed to use in the ad-hoc check. Verify
+against the configured `window.wm_class`, never a guessed name, or a
+working window looks like an absent one.

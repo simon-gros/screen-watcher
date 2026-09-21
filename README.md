@@ -460,6 +460,11 @@ architectural limitations are documented in
   because the live regions total 0.69 MPx against a 7.90 MPx window.
 - Capture and OCR scratch files use unique temporary paths, so the earlier
   shared-scratch-file contention issue has been removed.
+- Minimising the game, or switching to another virtual desktop, pauses the
+  watcher instead of stopping it: rule evaluation is skipped and the window
+  is re-checked with an exponential backoff (1 to 30 cycles) until it comes
+  back. Only a window that has genuinely closed stops the run. Verified by
+  minimising and restoring the live client.
 - Polling uses a monotonic deadline, but `main` does not yet skip missed
   deadlines. If a cycle runs substantially late, subsequent cycles can run
   back-to-back until the schedule catches up.
