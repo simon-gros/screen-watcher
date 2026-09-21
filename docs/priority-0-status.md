@@ -82,7 +82,14 @@ addressed:
 
 - replay coverage is expanded with sanitized fixtures that exercise
   representative normal, overlay, resize, OCR-failure, and false-positive
-  states through the same application path used by live capture;
+  states through the same application path used by live capture.
+  **Partly addressed:** `tests/fixtures/glacor` holds three masked frames
+  from a live session, built by `tools/make_fixture.py`, and `doctor`
+  runs the full stack against them with no game present (38 pass, 0 fail).
+  Frames stay full-size with everything outside the read regions blanked,
+  so region geometry is still exercised and the capture path is unchanged;
+  that also strips display names, clan and private chat. Overlay, resize
+  and deliberate OCR-failure states are not yet captured;
 - profile/schema versions and compatibility metadata are defined and validated;
 - the portal/PipeWire proof of concept is integrated as a production
   `CaptureBackend` with persistent session/restore-token handling;

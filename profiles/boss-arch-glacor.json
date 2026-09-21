@@ -71,15 +71,15 @@
       "dy": 90,
       "w": 520,
       "h": 290,
-      "_note": "The whole Metrics panel body: four XP rows with their XP/h and ETA columns, and the Gain/Drops/GP-h row beneath them. Wider and taller than the skilling profiles' metrics_xp (20,100,410,105), which covers only the XP rows and cuts off the gold row entirely. Measured from a full-window capture at 3840x2058. NOT YET OCR-VERIFIED at native resolution - the readability check was done on a downscaled screenshot and is not representative; confirm with `shot metrics_panel` before relying on it."
+      "_note": "The whole Metrics panel body: XP rows with their XP/h and ETA columns, and the Gain/Drops/GP-h row beneath. VERIFIED live at native resolution: OCR returns 'XP XP/h ETA ... 71,148 877,167 5h52m ... Gain D'. The ETA column is the game's own time-to-level estimate, which is a better source than inferring one from an XP rate the watcher would have to track itself. Use gold_row for the gold figures - reading the whole panel mixes them with the XP rows above."
     },
     "gold_row": {
       "anchor": "top-left",
       "dx": 20,
-      "dy": 320,
-      "w": 400,
-      "h": 44,
-      "_note": "The Metrics panel's gold row: Gain, Drops and GP/h, left to right, after the coin icon. Narrowed from metrics_panel so OCR sees only these three figures - reading the whole panel would mix them with the four XP rows above. Measured from a full-window capture at 3840x2058 and confirmed by cropping: the row contains exactly the coin icon and three numbers. NOT YET OCR-VERIFIED with real values - the only full-resolution sample available was taken at session start, when all three read 0."
+      "dy": 240,
+      "w": 420,
+      "h": 46,
+      "_note": "The Metrics panel's gold row: Gain, Drops and GP/h, left to right, after the coin icon. VERIFIED live at native resolution: OCR returns '& 177,407 0 2,040,463' and the three columns parse cleanly, with Gain climbing in 455-coin steps that match pickpocketing income exactly. dy=240, not the 320 first estimated from a downscaled screenshot - that was 80px too low and read empty. Measuring from a scaled capture is not reliable for this panel; take a native crop."
     }
   },
   "rules": [

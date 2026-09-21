@@ -3757,3 +3757,79 @@ def test_validation_session_cites_tests_that_exist():
     missing = sorted(name for name in cited
                      if f"def {name}(" not in source)
     assert not missing, f"cited but absent: {missing}"
+
+
+# --------------------------------------------------------------------------
+# Replay fixture: the whole stack, no game required
+# --------------------------------------------------------------------------
+
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "glacor"
+
+
+def test_fixture_exists_and_is_sanitized():
+    """Frames keep only the regions enabled rules read.
+
+    A full frame of someone's screen carries their display name, clan
+    chat, private messages and friends list. Masking is what makes the
+    fixture committable, and it also compresses 10.9 MB to under 1 MB.
+    """
+    frames = sorted(FIXTURE.glob("*.png"))
+    assert len(frames) >= 3
+    assert all(f.stat().st_size < 2_000_000 for f in frames)
+
+
+def test_fixture_drives_the_real_capture_path(monkeypatch):
+    """The point of a fixture: the same path live capture uses.
+
+    Storing cropped regions would bypass the geometry resolution the
+    fixture exists to exercise, so frames are full-size and masked.
+    """
+    monkeypatch.setenv("SCREEN_WATCHER_REPLAY", str(FIXTURE))
+    backend = watcher.ReplayBackend()
+    ok, why = backend.available()
+    assert ok, why
+
+    handle = backend.find("steam_app_1343400")
+    assert handle is not None
+    assert backend.size(handle) == (3840, 2058)
+
+
+def test_fixture_reads_chat_and_vitals(monkeypatch):
+    """OCR through the fixture must return real content, not blanks."""
+    monkeypatch.setenv("SCREEN_WATCHER_REPLAY", str(FIXTURE))
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    backend = watcher.ReplayBackend()
+    game = watcher.GameInstance("steam_app_1343400", backend=backend)
+    assert game.acquire()
+    # Bind it, or capture_array falls back to ImageMagick against the
+    # replay backend's fake handle - the same coupling the replay backend
+    # exposed in `doctor`.
+    watcher.set_active_game(game)
+    monkeypatch.setattr(watcher, "ACTIVE_GAME", game, raising=False)
+    game.begin_cycle(1)
+
+    chat_box = cfg["_regions"]["chat_tail"].resolve(game.size)
+    chat = watcher.ocr_array(watcher.capture_array(game.handle, chat_box,
+                                                   None, cycle=1))
+    assert len(chat.split()) > 20, "chat region should carry real text"
+
+    vitals_box = cfg["_regions"]["vitals"].resolve(game.size)
+    vitals = watcher.ocr_array(watcher.capture_array(game.handle, vitals_box,
+                                                     None, cycle=1))
+    watcher.set_active_game(None)
+    # The life maximum is whatever this recording held - it varies with
+    # gear and differs between the bossing and skilling sessions - so the
+    # assertion is that a current/maximum pair parses at all.
+    assert re.search(r"\d[\d,]*\s*[/I\[]\s*\d[\d,]*", vitals)
+    assert watcher.parse_gauge(vitals, 780) is not None   # prayer pool
+
+
+def test_fixture_advances_through_its_frames(monkeypatch):
+    monkeypatch.setenv("SCREEN_WATCHER_REPLAY", str(FIXTURE))
+    backend = watcher.ReplayBackend()
+    backend.find("steam_app_1343400")
+
+    steps = 0
+    while backend.advance():
+        steps += 1
+    assert steps >= 2
