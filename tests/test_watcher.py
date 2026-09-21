@@ -4383,3 +4383,27 @@ def test_config_helpers_are_reexported():
     for name in ("load_config", "validate_config", "validate_schema_version",
                  "check_fingerprint", "resolve_window", "SCHEMA_VERSION"):
         assert getattr(watcher, name) is getattr(config_mod, name), name
+
+
+def test_scheduler_and_readers_are_reexported():
+    from screen_watcher import readers, scheduler
+
+    assert watcher.FrameScheduler is scheduler.FrameScheduler
+    assert watcher.RegionStats is scheduler.RegionStats
+    for name in ("ChatReader", "ChatLine", "InterfaceReader",
+                 "ReaderRegistry", "_split_stamp"):
+        assert getattr(watcher, name) is getattr(readers, name), name
+
+
+def test_patching_ocr_cached_still_reaches_chatreader(monkeypatch):
+    """Readers resolve OCR through a late import of `watcher`.
+
+    Thirteen tests patch `watcher.ocr_cached`; binding it at import time
+    would make every one of them reach nothing.
+    """
+    from screen_watcher import readers
+
+    sched = _chat_env(["[10:00:00] You catch a fish."], monkeypatch)
+    reader = readers.ChatReader("chat_tail")
+    lines = reader.read(sched)
+    assert any("catch a fish" in line.text for line in lines)

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import atexit
-import difflib
 import json
 import os
 import shutil                       # noqa: F401 - tests patch watcher.shutil
@@ -105,153 +104,13 @@ from screen_watcher.capture import (              # noqa: E402,F401
 # --------------------------------------------------------------------------
 # shared frame scheduler
 #
-# Priority 0, step 2. The architecture note asks for the game window to be
-# treated as "a continuously sampled data source, not a sequence of unrelated
-# screenshot subprocesses".
-#
-# Note what that does NOT mean here. The obvious reading - grab one immutable
-# full-window frame and crop every region out of it - was measured and is
-# much worse at this resolution:
-#
-#     4 cropped captures      4.2 ms/cycle
-#     1 full + numpy crops   48.1 ms/cycle   (11.4x slower)
-#
-# The thieving profile's four live regions total 0.69 MPx against a 7.90 MPx
-# window, so a full grab moves ~11x more pixels and the encode/decode cost
-# tracks that ratio exactly. Capture strategy is therefore per-region, and
-# the scheduler's job is coherence and accounting rather than fewer pixels.
+# Lives in `screen_watcher/scheduler.py`. Re-exported because `doctor` and
+# the tests build one as `watcher.FrameScheduler`.
 # --------------------------------------------------------------------------
 
-
-@dataclass
-class RegionStats:
-    """Per-region capture accounting, surfaced later by `doctor`."""
-
-    name: str
-    captures: int = 0
-    reuses: int = 0
-    failures: int = 0
-    last_error: str = ""
-    total_seconds: float = 0.0
-
-    @property
-    def mean_ms(self) -> float:
-        return (self.total_seconds / self.captures * 1000.0) if self.captures else 0.0
-
-
-class FrameScheduler:
-    """Drives one sampling pass over a set of named regions.
-
-    Responsibilities:
-
-    - own the cycle counter so callers stop hand-rolling one;
-    - resolve named regions against the current window size;
-    - serve every reader in a pass from one coherent set of frames;
-    - record per-region timing, reuse, and failure counts;
-    - report frame health so a blank or frozen region is visible as such
-      rather than silently producing confident detections.
-
-    It deliberately does not decide *what* a region means. Readers and rules
-    sit above it.
-    """
-
-    def __init__(self, game: GameInstance, regions: dict):
-        self.game = game
-        self.regions = regions
-        self.cycle = 0
-        self.stats: dict[str, RegionStats] = {}
-        self._last_hashes: dict[str, int] = {}
-        self._static_cycles: dict[str, int] = {}
-
-    def _stat(self, name: str) -> RegionStats:
-        if name not in self.stats:
-            self.stats[name] = RegionStats(name)
-        return self.stats[name]
-
-    def begin(self) -> int:
-        """Open a new sampling pass and return its cycle number."""
-        self.cycle += 1
-        self.game.begin_cycle(self.cycle)
-        return self.cycle
-
-    def box_for(self, name: str):
-        """Absolute box for a configured region at the current window size."""
-        if name not in self.regions:
-            raise KeyError(f"unknown region {name!r}")
-        if not self.game.size:
-            raise CaptureError("no game window acquired")
-        return self.regions[name].resolve(self.game.size)
-
-    def frame(self, name: str, mask: str | None = None) -> np.ndarray:
-        """Frame for a named region, captured at most once per cycle."""
-        box = self.box_for(name)
-        stat = self._stat(name)
-        key = (tuple(box), mask)
-        if key in self.game._frames:
-            stat.reuses += 1
-            return self.game._frames[key]
-        started = time.monotonic()
-        try:
-            arr = self.game.frame(box, mask)
-        except CaptureError as e:
-            stat.failures += 1
-            stat.last_error = str(e)[:200]
-            raise
-        stat.captures += 1
-        stat.total_seconds += time.monotonic() - started
-        if mask is None:
-            self._track_health(name, arr)
-        return arr
-
-    def prefetch(self, names) -> list[str]:
-        """Capture several regions up front, returning the ones that failed.
-
-        A pass that needs three regions should not abandon the other two
-        because the first was mid-repaint, so failures are collected rather
-        than raised.
-        """
-        failed = []
-        for name in names:
-            try:
-                self.frame(name)
-            except (CaptureError, KeyError):
-                failed.append(name)
-        return failed
-
-    # -- health ------------------------------------------------------------
-
-    def _track_health(self, name: str, arr: np.ndarray) -> None:
-        """Notice blank and frozen regions.
-
-        A region that is uniformly flat is almost certainly a capture fault
-        rather than real content, and one whose pixels never change across
-        cycles suggests a frozen or occluded window. Both produce confident
-        but meaningless detections if nothing watches for them.
-        """
-        digest = hash(arr.tobytes())
-        if self._last_hashes.get(name) == digest:
-            self._static_cycles[name] = self._static_cycles.get(name, 0) + 1
-        else:
-            self._static_cycles[name] = 0
-        self._last_hashes[name] = digest
-
-    def health(self, name: str, static_limit: int = 20) -> tuple[str, str]:
-        """PASS/WARN/FAIL plus a reason, in the shape `doctor` will print."""
-        stat = self.stats.get(name)
-        if stat is None or stat.captures == 0:
-            return "WARN", "never captured"
-        if stat.failures and stat.captures == 0:
-            return "FAIL", stat.last_error or "all captures failed"
-        static = self._static_cycles.get(name, 0)
-        if static >= static_limit:
-            return "WARN", f"unchanged for {static} cycles (frozen or occluded?)"
-        if stat.failures:
-            return "WARN", f"{stat.failures} capture failure(s); {stat.last_error}"
-        return "PASS", f"{stat.captures} captures, {stat.mean_ms:.1f} ms mean"
-
-    def report(self) -> list[tuple[str, str, str]]:
-        """Health for every region the scheduler has been asked about."""
-        return [(n, *self.health(n)) for n in sorted(self.stats)]
+from screen_watcher.scheduler import (    # noqa: E402,F401
+    FrameScheduler, RegionStats,
+)
 
 
 # --------------------------------------------------------------------------
@@ -2487,179 +2346,15 @@ from screen_watcher.config import (       # noqa: E402,F401
 # --------------------------------------------------------------------------
 # interface readers
 #
-# Priority 0, step 5. A reader turns one region's pixels into normalized
-# events that any number of rules can consume, instead of each rule owning
-# its own OCR loop.
-#
-# The duplication this removes is concrete: five rule kinds (`ocr`,
-# `activity`, `supply`, `loot`, `counter`) each carried their own copy of
-# "OCR the region, split lines, normalize a dedup key, skip keys already
-# seen, cap the seen-set". Each copy had drifted slightly, and a fix to one
-# never reached the others.
+# Live in `screen_watcher/readers.py`. Re-exported because the tests build
+# a ChatReader as `watcher.ChatReader`. The module resolves `ocr_cached`
+# and `norm_line` through a late import, so patching those still reaches
+# the readers.
 # --------------------------------------------------------------------------
 
-_STAMP_RE = re.compile(r"^(\d{6})(.*)$")
-
-
-def _split_stamp(key: str) -> tuple[str, str]:
-    """Split a normalized key into its leading HHMMSS stamp and the rest.
-
-    `norm_line` strips punctuation, so `[16:10:26] You catch...` becomes
-    `161026youcatch...`. Separating the stamp lets fuzzy matching compare
-    wording without letting the clock dominate the similarity ratio.
-    """
-    m = _STAMP_RE.match(key)
-    return (m.group(1), m.group(2)) if m else ("", key)
-
-
-@dataclass(frozen=True)
-class ChatLine:
-    """One newly observed chat line.
-
-    `key` is the normalized dedup key rather than the raw text, because
-    tesseract is not deterministic on this font: the same line comes back as
-    `[11:03:15]` on one pass and `(11:03:15]` on the next.
-    """
-
-    text: str
-    key: str
-    cycle: int
-
-
-class InterfaceReader:
-    """Base class: one region, one kind of meaning, normalized output."""
-
-    kind = "abstract"
-
-    def __init__(self, region: str):
-        self.region = region
-
-    def read(self, sched: "FrameScheduler") -> list:
-        raise NotImplementedError
-
-
-class ChatReader(InterfaceReader):
-    """Emits chat lines that have not been seen before.
-
-    The chat tail keeps old lines on screen for many polls, so the same line
-    is re-read every cycle until it scrolls off. Deduplication is therefore
-    the reader's core job, not an optimisation.
-
-    Ownership matters here. When each rule kept its own seen-set, a line was
-    consumed independently by every rule, which worked but meant N copies of
-    the same 400-entry set and N chances for the capping logic to differ. One
-    reader keeps one set and hands every rule the same event list.
-    """
-
-    kind = "chat"
-
-    def __init__(self, region: str, min_key_len: int = 8,
-                 max_seen: int = 400, similarity: float = 0.90):
-        super().__init__(region)
-        self.min_key_len = min_key_len
-        self.max_seen = max_seen
-        self.similarity = similarity
-        self._seen: set[str] = set()
-        self._recent: list[str] = []
-        self.primed = False
-        self.lines_read = 0
-        self.events_emitted = 0
-        self.variants_suppressed = 0
-
-    def _is_variant(self, key: str) -> bool:
-        """Whether `key` is an OCR variant of a line already emitted.
-
-        Exact-key dedup is not enough. Tesseract mis-reads this font
-        differently on each pass, so one unchanging chat line yields a
-        stream of distinct keys: measured on live chat, 67% of emitted
-        events were >85% similar to a key already seen. Without this a rule
-        can fire several times for one game event.
-
-        Only the recent window is compared, because a line that has scrolled
-        off and genuinely recurs should be reported again.
-        """
-        if self.similarity >= 1.0:
-            return False
-        stamp, body = _split_stamp(key)
-        for prev in self._recent:
-            prev_stamp, prev_body = _split_stamp(prev)
-            # A different in-game timestamp means a different event, however
-            # similar the wording. Repeated catches a second apart differ
-            # only by their stamp, and collapsing those would break every
-            # rule that counts occurrences.
-            if stamp and prev_stamp and stamp != prev_stamp:
-                continue
-            if abs(len(prev_body) - len(body)) > max(4, len(body) // 4):
-                continue          # cheap length gate before the real compare
-            if difflib.SequenceMatcher(None, body, prev_body).ratio() >= self.similarity:
-                return True
-        return False
-
-    def read(self, sched: "FrameScheduler", psm: int = 6) -> list[ChatLine]:
-        """New lines visible this cycle, oldest first."""
-        box = sched.box_for(self.region)
-        text = ocr_cached(sched.game.handle, box, sched.cycle, psm)
-        fresh: list[ChatLine] = []
-        for raw in text.splitlines():
-            line = raw.strip()
-            key = norm_line(line)
-            self.lines_read += 1
-            if len(key) < self.min_key_len or key in self._seen:
-                continue
-            self._seen.add(key)
-            if self._is_variant(key):
-                self.variants_suppressed += 1
-                continue
-            self._recent.append(key)
-            if len(self._recent) > 60:
-                del self._recent[:30]
-            fresh.append(ChatLine(line, key, sched.cycle))
-        if len(self._seen) > self.max_seen:
-            # Dropping the whole set would let lines still on screen re-fire,
-            # so callers re-prime rather than alert on the next pass.
-            self._seen.clear()
-            self._recent.clear()
-            self.primed = False
-        self.events_emitted += len(fresh)
-        return fresh
-
-    def forget(self, key: str) -> None:
-        """Allow a key to be emitted again; used by replay and tests."""
-        self._seen.discard(key)
-
-
-class ReaderRegistry:
-    """Named readers for one profile, built once and shared by every rule.
-
-    Keyed on `(kind, region)` so two rules watching the same chat region get
-    the same reader - which is what makes one dedup set authoritative.
-    """
-
-    def __init__(self):
-        self._readers: dict[tuple[str, str], InterfaceReader] = {}
-
-    def chat(self, region: str) -> ChatReader:
-        key = ("chat", region)
-        if key not in self._readers:
-            self._readers[key] = ChatReader(region)
-        return self._readers[key]
-
-    def get(self, kind: str, region: str) -> InterfaceReader | None:
-        return self._readers.get((kind, region))
-
-    def __len__(self) -> int:
-        return len(self._readers)
-
-    def stats(self) -> list[tuple[str, str, int, int]]:
-        """(kind, region, lines_read, events_emitted) for diagnostics."""
-        out = []
-        for (kind, region), reader in sorted(self._readers.items()):
-            out.append((kind, region,
-                        getattr(reader, "lines_read", 0),
-                        getattr(reader, "events_emitted", 0)))
-        return out
-
-
+from screen_watcher.readers import (      # noqa: E402,F401
+    ChatLine, ChatReader, InterfaceReader, ReaderRegistry, _split_stamp,
+)
 # --------------------------------------------------------------------------
 # doctor
 #
