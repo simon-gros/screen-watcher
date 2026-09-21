@@ -2446,6 +2446,38 @@ def _coin_rule():
         milestone_message="{total} coins - {n}M")
 
 
+def test_counter_primes_itself_and_then_counts(monkeypatch):
+    """The counter never counted anything on its own.
+
+    `_eval_counter` read `_primed` to skip the startup viewport but never
+    set it, unlike every other rule kind, so the skip applied forever and
+    every gain was discarded. Found live: 45s of continuous pickpocketing
+    added nothing, and state/counters.jsonl contained no automatic write
+    in its entire history - the totals there had all been seeded by hand.
+
+    Every other counter test sets `_primed = True` itself, which is
+    precisely why none of them caught this. This one must not.
+    """
+    rule = _coin_rule()
+    assert rule._primed is False              # as built from a profile
+    region = Region("top-left", 0, 0, 10, 10)
+
+    # First sweep: lines already on screen are scrollback, not income.
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda *a, **k: "[10:00:00] 350 coins have been added to your money pouch.")
+    watcher.evaluate(rule, "0x1", region, (100, 100), 1.0)
+    assert rule._total == 0, "startup viewport must not count as income"
+    assert rule._primed is True, "priming pass must end after one sweep"
+
+    # A genuinely new line now counts.
+    monkeypatch.setattr(
+        watcher, "ocr_cached",
+        lambda *a, **k: "[10:00:02] 350 coins have been added to your money pouch.")
+    watcher.evaluate(rule, "0x1", region, (100, 100), 2.0)
+    assert rule._total == 350
+
+
 def test_counter_keeps_counting_across_seen_overflow(monkeypatch):
     """Clearing the dedup set used to silently drop a cycle's income.
 

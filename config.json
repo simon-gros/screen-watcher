@@ -11,11 +11,21 @@
     "ui_scale": 1.75,
     "session": "CachyOS/KDE Plasma 6 Wayland, RS3 NXT via XWayland",
     "_note": "Regions are pixel offsets measured on this exact window size. At any other size they resolve elsewhere and fail silently - OCR returns nothing, or reads a neighbouring panel. ui_scale 1.75 is the logical-to-physical factor KWin reports (2194 logical vs 3840 pixels); `doctor` detects it independently and reports it.",
-    "last_validated": "2026-09-21, Menaphos pickpocketing"
+    "last_validated": "2026-09-21, Archaeology professor pickpocketing (Exam Centre)"
   },
   "window": {
     "wm_class": "steam_app_1343400",
     "_comment": "RS3 NXT. WM_CLASS survives title changes and skips the Steam launcher window."
+  },
+  "target": {
+    "name": "Archaeology professor",
+    "thieving_level": 108,
+    "xp_per_success": 493.5,
+    "coins_per_success": 350,
+    "stun_ticks": 5,
+    "_verified": "Live, 2026-09-21. Metrics panel read '+493' per success and chat read '350 coins have been added to your money pouch' on 417/417 samples - a single value, no variance. Both match the wiki exactly, which independently confirms the target. The PREVIOUS target (Menaphos market guard) paid 455 coins, so any tuning expressed in coins-per-hour or pickpockets-per-million had to be recomputed.",
+    "_chat_wording_unchanged": "The three activity lines are IDENTICAL to the Menaphos target and were re-verified live: 'You pick the target's pocket.', 'Your camouflage outfit keeps you hidden and you steal additional loot.', and the money-pouch line. 'Your pickpocket target becomes aware of your presence.' was also seen verbatim. So thieving_stopped, target_alerted, stunned and activity_icon_gone needed no pattern change - the wording is a property of the Thieving skill, not of the target.",
+    "_loot_is_silent": "MEASURED, not assumed: 40 OCR samples over ~40s of active pickpocketing found ZERO chat lines matching chronote, tetracompass, artefact, material, binding contract, 'you receive', 'you find' or 'added to your backpack'. Artefacts and materials land silently. This is the decisive fact for this profile: a chat-based loot rule cannot work here at all, so item_gained (backpack) is the only viable drop detector and loot_drop stays disabled."
   },
   "interval": 1.5,
   "_regions_help": "anchor + dx,dy offset from that corner + fixed w,h. RS3 pins panels to edges at fixed size rather than scaling them, so this survives a window resize. Negative dx/dy measure inward from a right/bottom edge.",
@@ -193,13 +203,13 @@
       "name": "loot_drop",
       "kind": "loot",
       "region": "chat_tail",
-      "item_pattern": "extra fine sand|acadia wood spirit|waterskin|potato cactus|vital spark|large bladed adamant salvage|menaphite gift offering \\(small\\)|menaphite gift offering \\(medium\\)|menaphite gift offering|sealed clue scroll \\(master\\)|sealed clue scroll \\(elite\\)|sealed clue scroll \\(hard\\)|sealed clue scroll",
+      "item_pattern": "tetracompass piece \\((left|right|dial|needle)\\)|tetracompass piece|binding contract|hi-spec monocle|archaeologist'?s tea|tarpaulin sheet|material manual|chronotes?",
       "ignore_pattern": "coins have been added|you pick the target|camouflage outfit keeps",
       "cooldown": 0,
       "message": "Loot",
       "alert_body": "Loot: {item}. The economy survives another drop.",
       "sound": "message-highlight",
-      "_note": "DISABLED pending live verification: the item list comes from the wiki drop table, not from observed chat, and the rarest entries are 2-6 per 1000. Enable once a named drop has been seen and its exact wording confirmed. Announces a named item drop and ignores the currency line. Item list taken from the RuneScape Wiki drop table for Menaphos market guards: coins 758/1000, extra fine sand 100/1000, acadia wood spirit 50/1000, waterskin 50/1000, large bladed adamant salvage 20/1000, sealed clue (hard) 6/1000, menaphite gift offering small 4/1000, potato cactus 5/1000, vital spark 2/1000, gift offering medium 2/1000, sealed clue (elite) ~495/100000, master 5/100000. Coins are excluded because they land in the money pouch roughly every two seconds and would bury the rare drops. cooldown=0 because every drop is worth seeing; the alternatives in the pattern are ordered longest-first so '(elite)' wins over the bare 'sealed clue scroll'.",
+      "_note": "DISABLED - and for this target the reason is now stronger than 'unverified'. MEASURED 2026-09-21: 40 OCR samples over ~40s of active pickpocketing found ZERO loot lines of any kind. The Archaeology professor's artefacts and materials land silently in the backpack, so a chat-based loot rule has nothing to read. item_gained watches the backpack instead and is the only detector that works here. The item list below was rewritten from the wiki drop table for this target anyway, so the rule is correct if a future target does announce drops: common table 922/1000 (coins 736/1000, chronotes x3 175/1000, binding contract 10/1000, four tetracompass pieces 1/1000 each, always dropped left-right-dial-needle); consumable table 2/1000 (hi-spec monocle, archaeologist's tea, tarpaulin sheet, material manual, 2/4000 each); material table 75/1000, contents varying BY DIG SITE. Coins are excluded because they arrive roughly once a second and would bury everything else. The alternatives are ordered longest-first so 'tetracompass piece (left)' wins over the bare form.",
       "enabled": false,
       "urgency": "normal",
       "timeout_ms": 6000,
@@ -216,7 +226,8 @@
       "message": "Milestone",
       "alert_body": "{total} coins pickpocketed. {n}M milestone reached; capitalism remains operational.",
       "sound": "complete-media-burn",
-      "_note": "Sums the money-pouch line and alerts once per million. Coins go straight to the pouch, which the backpack grid cannot see, so chat is the only evidence. At 455 coins per success and ~76% success rate that is roughly 2,900 pickpockets per million, so milestone-based alerting is essential - per-gain would fire every two seconds. The running total is persisted to state/counters.jsonl and restored on startup, so a restart mid-grind does not rewind progress.",
+      "_note": "Sums the money-pouch line and alerts once per million. Coins go straight to the pouch, which the backpack grid cannot see, so chat is the only evidence. RETUNED for the Archaeology professor: 350 coins per success (measured 417/417 samples, single value) against the previous target's 455, and the wiki gives a 736/1000 coin chance, so roughly 3,900 pickpockets per million rather than 2,900. Milestone-based alerting remains essential - measured live at ~1.2 coin lines/s, per-gain would fire under once a second. step stays at 1,000,000: at the observed rate that is about 20 minutes per alert. The running total is persisted to state/counters.jsonl and restored on startup, so a restart mid-grind does not rewind progress. MEASURED 2026-09-21: counted 3,500 coins (exactly 10 successes) over 16s of live pickpocketing, in clean 350 multiples, after fixing the priming bug below.",
+      "_priming_note": "This rule never counted anything until 2026-09-21. _eval_counter read _primed to skip the startup viewport but never set it, so the skip applied forever and every gain was discarded; the totals in state/counters.jsonl had all been seeded by hand. Found only by watching a live session add nothing over 45s. Guarded by test_counter_primes_itself_and_then_counts, which deliberately does NOT set _primed - every pre-existing counter test set it manually, which is exactly why none of them caught it.",
       "enabled": true,
       "urgency": "normal",
       "timeout_ms": 20000

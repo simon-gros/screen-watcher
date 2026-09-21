@@ -1267,6 +1267,14 @@ def _eval_counter(rule: Rule, wid: str, box, now: float,
             source_line = line
         except (ValueError, IndexError):
             continue
+    # End the priming pass. Every other rule kind does this after its first
+    # sweep; the counter did not, so `_primed` stayed False forever and the
+    # `continue` above discarded EVERY gain. Found live: 45s of continuous
+    # pickpocketing at ~1.2 coin lines/s added nothing to the total, and
+    # state/counters.jsonl had no automatic write in its whole history.
+    # Must come after the loop, so the lines already on screen when the
+    # watcher starts are treated as scrollback rather than fresh income.
+    rule._primed = True
     if len(rule._seen) > 400:
         # Retain the current viewport as the new baseline, the same way the
         # presence rule does. Clearing the set and re-priming dropped a
