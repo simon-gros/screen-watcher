@@ -443,6 +443,13 @@ architectural limitations are documented in
   *logical*, not pixels (1.75x apart on a scaled display), so it is never fed
   to capture directly. `doctor` reports discovery, window state, and the
   detected scale factor.
+- Native Wayland capture (XDG ScreenCast portal + PipeWire) exists as a
+  working proof of concept in `tools/portal_poc.py`, not as a capture backend.
+  It captures the live game at 3840x2107 with a median frame time of 16.8 ms -
+  roughly twice as fast as the XCB path for ~12x the pixels, because PipeWire
+  streams continuously instead of paying a round trip per region. Adopting it
+  needs a persistent session, restore-token storage, and a `CaptureBackend`
+  shaped around subscribing to a stream rather than requesting a rectangle.
 - Desktop notifications are the implemented notification backend.
 - Per-rule sound names currently resolve against KDE's Ocean sound theme under
   `/usr/share/sounds/ocean/stereo`; if a configured sound file or `paplay`

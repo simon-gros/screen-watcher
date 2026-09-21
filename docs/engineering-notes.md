@@ -876,3 +876,80 @@ isolate these tests from the desktop.
 
 Strictly read-only throughout, per the architecture notes: discovery,
 identity, geometry, focus, health. No input injection.
+
+## Priority 0, step 8 — Wayland capture via portal + PipeWire
+
+`tools/portal_poc.py` is a standalone probe, deliberately not wired into
+`watcher.py`. Native Wayland has no `XGetImage` equivalent - a client cannot
+capture a window it does not own - so the supported route is the XDG
+ScreenCast portal, which returns a PipeWire node id to read frames from.
+
+Environment: `xdg-desktop-portal-kde` 6.7.5, PipeWire 1.6.8,
+`gst-plugin-pipewire`, portal ScreenCast **version 5**, source types 7
+(monitor, window, virtual). Window capture is supported, which matters -
+a monitor-only portal would have forced cropping and broken on occlusion.
+
+### It works, on live game pixels
+
+| result | value |
+|---|---|
+| frame | 3840x2107, RGB, uint8 |
+| frame time | min 4.6, **median 16.8**, max 34.1 ms |
+| restore token | issued |
+
+The frame is full-colour real game content with legible chat text, captured
+with no X11 involvement whatsoever.
+
+The height, 2107, is the number predicted by the step 7 scale analysis:
+KWin's *frame* geometry including decoration, not the 2058 X11 client area.
+Two independent subsystems agreeing on an unusual number is good evidence
+neither is being misread.
+
+### The comparison inverts step 2's conclusion
+
+| path | pixels | median |
+|---|---|---|
+| XCB, six regions | 0.69 MPx | 35.0 ms |
+| portal, full frame | 8.09 MPx | **16.8 ms** |
+
+The portal is ~2x faster while delivering ~12x the pixels. Step 2 measured
+full-window capture as 11.4x *slower* than cropped regions and rejected it
+on that basis; that finding was correct for XCB, where each capture is a
+separate synchronous round trip whose cost scales with area. PipeWire is a
+continuous stream - the compositor is compositing those pixels anyway, and
+a frame is already waiting when asked for. Area stops being the dominant
+term, so "capture once, crop in memory" becomes the cheaper design exactly
+as the architecture target assumed.
+
+### A benchmark that lied first
+
+The initial per-region figures were 80-307 ms, which would have meant a
+catastrophic regression against step 3's 15.3 ms. It was the benchmark:
+varying `cycle` per region defeated the frame cache and forced repeated
+backend work. Measured through `backend.grab_array` directly, one small
+region costs **0.3 ms**. Step 3's numbers stand.
+
+Worth recording because the wrong number was plausible and pointed at a
+real-sounding conclusion. The tell was that it contradicted an earlier
+careful measurement, which is a reason to re-measure rather than to write
+up a regression.
+
+### Consent is the design, not an obstacle
+
+The portal shows a KDE dialog and cannot be bypassed - that user grant is
+what makes arbitrary window capture safe on Wayland. KDE issued a
+**restore token**, so a later run can reuse the grant without prompting,
+which is what an unattended watcher would need. Any future adoption must
+treat token absence as normal: the portal is entitled to decline.
+
+### Not yet adopted, and why
+
+This stays a probe. Switching the watcher over needs: a persistent session
+held across the whole run rather than per capture, restore-token storage,
+handling the user revoking the grant mid-session, and a `CaptureBackend`
+whose model is "subscribe to a stream" rather than "request a rectangle" -
+`grab_array(handle, box)` assumes the latter. That is a step 11 concern.
+
+The value delivered here is the proof the acceptance criteria asked for:
+a working portal/PipeWire path on KDE/CachyOS, benchmarked against the
+current backend, with the pixels verified as real game content.
