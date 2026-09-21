@@ -33,8 +33,8 @@ behave correctly together on the actual CachyOS desktop.
 
 Current development priority is therefore:
 
-1. reproduce and measure the current implementation in ordinary Fishing and
-   Thieving sessions;
+1. reproduce and measure the current implementation in ordinary Fishing,
+   Thieving, and Arch-Glacor sessions;
 2. record false positives, false negatives, capture/OCR failures, lifecycle
    failures, persistence problems, performance regressions, and usability
    problems;
@@ -58,12 +58,12 @@ See the "Immediate practical validation stage" in
 | 1. `GameInstance` / `CaptureBackend` abstraction | **Complete** | Live capture and interactive capture commands use the backend abstraction. |
 | 2. Shared frame scheduler/cache | **Complete** | `watch` lets `FrameScheduler` own the cycle, prefetches required regions, and isolates failed regions. `GameInstance` owns per-cycle frame reuse. |
 | 3. Native X11 capture | **Complete for XCB GetImage** | `X11XcbBackend` is the default and is benchmarked against ImageMagick. The shipped implementation uses persistent XCB `GetImage`; XComposite/XShm remain optional future optimizations, not completed work. |
-| 4. Backend/frame diagnostics | **Partial** | `doctor` covers dependencies, backend selection, window/geometry, regions/grids, real captures, OCR, outputs, and profile structure. Long-duration frozen-frame diagnosis, focus state, UI-scale assumptions, and compatibility fingerprints remain outstanding. |
+| 4. Backend/frame diagnostics | **Partial** | `doctor` covers dependencies, backend selection, window/geometry, regions/grids, real captures, OCR, outputs, profile structure, KWin focus/window state, and detected logical-to-pixel scale. Long-duration frozen-frame diagnosis and compatibility fingerprints remain outstanding. |
 | 5. Interface-reader registry | **Partial** | `ChatReader` is live and shared by chat-driven rules. Inventory, buff/action-bar, target, RuneMetrics, and other reusable readers remain to be implemented. |
 | 6. Layered OCR | **Complete for current numeric path** | RuneScape numeric/sprite OCR is used where applicable with Tesseract fallback. General chat OCR remains the dominant poll-cycle cost. |
-| 7. Read-only KWin window metadata | **Not started** | No native KWin/D-Bus window-state backend exists yet. |
-| 8. Portal/PipeWire Wayland capture | **Not started** | Native Wayland ScreenCast/PipeWire capture is design work only. |
-| 9. KDE/Wayland layer-shell overlay | **Not started** | No click-through overlay proof of concept exists yet. |
+| 7. Read-only KWin window metadata | **Complete** | KWin scripting/D-Bus discovery is implemented read-only, reports window state/focus/geometry, participates in diagnostics, and is used by runtime lifecycle handling when available. |
+| 8. Portal/PipeWire Wayland capture | **Partial** | A working XDG ScreenCast portal + PipeWire proof of concept exists in `tools/portal_poc.py`, including restore-token handling and frame acquisition. It is not yet integrated as a production `CaptureBackend`. |
+| 9. KDE/Wayland layer-shell overlay | **Partial** | A PySide6/layer-shell click-through overlay proof of concept exists in `tools/overlay.py` and `tools/overlay.qml`; it is not yet wired into the normal notification path. |
 | 10. Existing rules consume normalized readers/events | **Partial** | Chat-driven rules consume shared `ChatReader` events and live pixel capture is scheduler-backed, but inventory/buff/resource observations are still implemented directly inside rule evaluators rather than reusable readers/events. |
 
 ## Additional acceptance-gate work
@@ -71,15 +71,16 @@ See the "Immediate practical validation stage" in
 The Priority 0 foundation is **not complete** until the following are also
 addressed:
 
-- recorded/replay input feeds the same observation/reader/event layer as live
-  capture;
+- replay coverage is expanded with sanitized fixtures that exercise
+  representative normal, overlay, resize, OCR-failure, and false-positive
+  states through the same application path used by live capture;
 - profile/schema versions and compatibility metadata are defined and validated;
-- detector fixtures cover representative normal, overlay, resize, OCR-failure,
-  and false-positive states;
-- native Wayland capture has a working KDE/CachyOS proof of concept;
-- a read-only click-through overlay proof of concept exists;
-- focus/session/UI-scale assumptions are surfaced by diagnostics where they can
-  be measured;
+- the portal/PipeWire proof of concept is integrated as a production
+  `CaptureBackend` with persistent session/restore-token handling;
+- the click-through Wayland overlay proof of concept is integrated with the
+  normal notification/application-service path;
+- long-duration frame-health assumptions and compatibility fingerprints are
+  surfaced by diagnostics where they can be measured;
 - the monolithic `watcher.py` is split into independently testable capture,
   runtime, profile, reader/signal, rule, persistence, notification, diagnostic,
   and CLI modules.
