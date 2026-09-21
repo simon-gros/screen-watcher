@@ -1935,6 +1935,9 @@ def _eval_stack(rule: Rule, wid: str, region: "Region", box, now: float,
     rule._slot_occupancy = cur_occ
     if (not prev or len(prev) != len(cur)
             or not prev_occ or len(prev_occ) != len(cur_occ)):
+        # This frame is the startup baseline. The next sustained change is a
+        # real post-start event and must not be swallowed as another "prime".
+        rule._primed = True
         return None
 
     stack_changed = {
@@ -1968,9 +1971,6 @@ def _eval_stack(rule: Rule, wid: str, region: "Region", box, now: float,
     if now - rule._pending_since < rule.confirm_seconds:
         return None
     rule._pending_slots = set()
-    if not rule._primed:
-        rule._primed = True
-        return None
 
     grew = {
         i for i in slots
