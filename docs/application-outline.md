@@ -576,6 +576,87 @@ multi-client support possible without cross-contaminating alerts.
 - Profile validation and skill-aware alert logs
 - Quest/boss profile type support and development tests
 
+### Immediate practical validation stage — test the software that already exists
+
+Before expanding the architectural roadmap further, **the current working
+Screen Watcher implementation must be tested as a real application**. Passing
+unit tests and CI is necessary but not sufficient for a screen-reading program:
+capture timing, OCR quality, window lifecycle, RuneScape UI state, notification
+delivery, and long-running behavior can fail only on the real desktop.
+
+This validation stage takes priority over speculative feature work. If testing
+finds a reproducible correctness, reliability, data-loss, false-alert, or
+capture/OCR failure in existing code, correcting and regression-testing that
+failure comes before implementing the next roadmap feature.
+
+The practical validation program should cover:
+
+- every currently shipped CLI command: `doctor`, `watch`, `calibrate`,
+  `shot`, `regions`, `probe`, `inv`, `stats`, `alerts`, process
+  lifecycle commands, and explicit backend selection;
+- both bundled Fishing and Thieving profiles in real RuneScape sessions;
+- startup while idle, startup while already active, normal activity, genuine
+  stops, inventory changes, full/near-full states, counters, timers, loot/item
+  changes, supply warnings, and activity-presence evidence;
+- local chat timestamps enabled and disabled, old visible scrollback, repeated
+  identical messages, OCR punctuation variation, partially obscured text, and
+  intentional OCR failure;
+- XCB as the normal live backend and ImageMagick fallback behavior where the
+  fallback remains supported;
+- window resize, movement, minimization/restoration, temporary loss, recreation,
+  game restart, and Screen Watcher reacquisition;
+- watcher restart during an active session, persisted counter restoration,
+  profile separation, wall-clock history, truncated/corrupt state records, and
+  clean recovery;
+- notifications and per-rule sounds, including missing sound/tool degradation;
+- CPU use, memory growth, capture latency, OCR latency, alert rate, state/log
+  growth, and repeated capture failures during longer sessions;
+- false positives **and false negatives**, not merely crashes.
+
+Use several test durations:
+
+1. **smoke** — 5–15 minutes after every significant runtime change;
+2. **session** — at least 1–2 hours of ordinary play for affected profiles;
+3. **soak** — multi-hour/overnight runs when capture, OCR, scheduling,
+   persistence, or lifecycle code changes.
+
+Each practical test should record at minimum:
+
+- exact commit;
+- CachyOS/kernel/desktop/session type;
+- Python version and selected backend;
+- RuneScape window size and relevant UI/chat timestamp assumptions;
+- active profile;
+- duration;
+- alerts observed versus alerts expected;
+- false positives/false negatives;
+- capture/OCR errors;
+- peak/representative CPU and memory use where relevant;
+- resulting bug/issue links.
+
+A failure found manually must gain an automated regression test or replay
+fixture whenever the failure can be reproduced without the live game. A fix is
+not considered complete merely because the symptom disappears once.
+
+### Practical validation gate
+
+Do not let theoretical roadmap work outrun the current executable version.
+Before a substantial new platform, GUI, reader family, or profile expansion is
+treated as the next implementation focus:
+
+- current CI must be green;
+- no unresolved known critical/high-severity regression may remain in the
+  existing Linux implementation;
+- affected current features must have passed an appropriate smoke/session/soak
+  test after their latest material change;
+- manual findings must be entered as issues with reproduction evidence;
+- performance must be re-measured when capture/OCR/scheduler behavior changes;
+- documentation must describe observed behavior rather than intended behavior.
+
+This stage is continuous: it does not disappear after one testing pass. Every
+major later roadmap phase must include validation of already-shipped behavior
+before adding more surface area.
+
 ### Priority 0 engineering stage — implement before broad profile expansion
 
 This remains the gating engineering stage and should be read before the broader
