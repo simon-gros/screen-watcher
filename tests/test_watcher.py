@@ -38,7 +38,6 @@ def test_mean_abs_diff_handles_identical_and_changed_frames():
 
 
 def test_capture_array_is_reused_within_a_cycle(monkeypatch, tmp_path):
-    import watcher
     from PIL import Image
 
     calls = []
@@ -48,7 +47,11 @@ def test_capture_array_is_reused_within_a_cycle(monkeypatch, tmp_path):
         Image.new("RGB", (2, 2), (1, 2, 3)).save(out, format="PPM")
         return out
 
-    monkeypatch.setattr(watcher, "capture", fake_capture)
+    from screen_watcher import capture as capture_mod
+    # Retargeted with the code: _capture_array_uncached moved into
+    # screen_watcher.capture and calls that module's `capture`, so
+    # patching watcher.capture no longer reaches it.
+    monkeypatch.setattr(capture_mod, "capture", fake_capture)
     _FRAME_CACHE.clear()
 
     first = capture_array("window", (0, 0, 2, 2), cycle=7)
@@ -4098,7 +4101,11 @@ def test_portal_backend_is_registered():
 
 def test_portal_backend_reports_why_it_cannot_run(monkeypatch):
     """An unusable backend explains itself rather than failing opaquely."""
-    monkeypatch.setattr(watcher, "_session_is_wayland", lambda: False)
+    from screen_watcher import capture as capture_mod
+    # Retargeted with the code: the portal backend reads
+    # _session_is_wayland from its own module, so patching watcher would
+    # be a no-op that still passes.
+    monkeypatch.setattr(capture_mod, "_session_is_wayland", lambda: False)
     ok, why = watcher.WaylandPortalBackend().available()
     assert ok is False and "Wayland" in why
 
@@ -4150,9 +4157,10 @@ def test_portal_backend_raises_when_no_frame_arrives(monkeypatch):
 
 def test_portal_token_is_written_private(tmp_path, monkeypatch):
     """The token grants screen capture until revoked."""
+    from screen_watcher import capture as capture_mod
     token_file = tmp_path / "portal-token"
-    monkeypatch.setattr(watcher, "PORTAL_TOKEN_FILE", token_file)
-    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(capture_mod, "PORTAL_TOKEN_FILE", token_file)
+    monkeypatch.setattr(capture_mod, "STATE_DIR", tmp_path)
 
     watcher.WaylandPortalBackend._store_token("abc123")
 
@@ -4275,3 +4283,44 @@ def test_patching_find_window_still_reaches_window_tracker(monkeypatch):
 
     tracker = watcher.WindowTracker("game", "0x100", (800, 600))
     assert tracker.reacquire()[0] == "gone"
+
+
+def test_capture_error_is_one_class_across_modules():
+    """`except watcher.CaptureError` must catch what the backends raise.
+
+    Re-exporting left the old definition in place for a moment, so there
+    were two classes with the same name: the watch loop's handlers
+    silently stopped catching backend errors while every test passed.
+    """
+    from screen_watcher import capture as capture_mod
+
+    assert watcher.CaptureError is capture_mod.CaptureError
+
+    backend = watcher.ReplayBackend("")
+    try:
+        backend.grab_array("x", (0, 0, 1, 1))
+    except watcher.CaptureError:
+        pass
+    except Exception as exc:                       # noqa: BLE001
+        raise AssertionError(f"raised {type(exc).__name__}, not CaptureError")
+
+
+def test_capture_backends_are_reexported():
+    from screen_watcher import capture as capture_mod
+
+    for name in ("CaptureBackend", "GameInstance", "make_backend", "BACKENDS",
+                 "ReplayBackend", "WaylandPortalBackend", "X11XcbBackend",
+                 "X11ImageMagickBackend", "capture", "_apply_bright_mask",
+                 "_capture_array_uncached"):
+        assert getattr(watcher, name) is getattr(capture_mod, name), name
+
+
+def test_capture_array_stayed_with_its_callers():
+    """Thirty-two tests patch `watcher.capture_array`.
+
+    Its thirteen callers are the rule evaluators, which have not moved, so
+    the function stays with them - moving it would make those patches
+    silently ineffective.
+    """
+    import inspect
+    assert inspect.getmodule(watcher.capture_array).__name__ == "watcher"
