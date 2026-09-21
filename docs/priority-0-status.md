@@ -51,6 +51,15 @@ See the "Immediate practical validation stage" in
 [practical validation plan](practical-validation-plan.md), and tracking issue
 [#13](https://github.com/simon-gros/screen-watcher/issues/13).
 
+Session records:
+
+- [21 September 2026](validation-session-2026-09-21.md) — Level C, live
+  Menaphos Fishing and Arch-Glacor. Eight defects found in live use and
+  fixed, including false critical alerts on correct game state, a kill rule
+  that had never fired, and a coin counter that silently lost income. Its
+  main finding: of five rule patterns written from assumption, four were
+  wrong when finally checked against real chat.
+
 ## Ordered foundation
 
 | Step | Status | Current state |

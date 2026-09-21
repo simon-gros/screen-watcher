@@ -3738,3 +3738,22 @@ def test_a_confirmed_recovery_still_re_arms(monkeypatch):
                 if watcher.evaluate(rule, "0x1", region, (100, 100),
                                     float(i) * 2))
     assert fired == 1
+
+
+def test_validation_session_cites_tests_that_exist():
+    """The session log names the guard for each defect it records.
+
+    A findings document whose references have rotted is worse than none:
+    it implies coverage that is not there. This keeps the two in step.
+    """
+    root = Path(__file__).resolve().parents[1]
+    log = root / "docs" / "validation-session-2026-09-21.md"
+    assert log.exists()
+
+    source = (root / "tests" / "test_watcher.py").read_text()
+    cited = set(re.findall(r"`(test_\w+)`", log.read_text()))
+    assert len(cited) >= 10, "the log should cite its regression tests"
+
+    missing = sorted(name for name in cited
+                     if f"def {name}(" not in source)
+    assert not missing, f"cited but absent: {missing}"
