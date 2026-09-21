@@ -1991,3 +1991,74 @@ def test_overlay_qml_declares_a_click_through_overlay_surface():
             "LayerShell.Window.KeyboardInteractivityNone") in qml
     assert "LayerShell.Window.exclusionZone: -1" in qml
     assert "Qt.WindowTransparentForInput" in qml
+
+
+# --------------------------------------------------------------------------
+# Replay backend - exercise the real reader/event code without the game
+# --------------------------------------------------------------------------
+
+def _write_frames(directory, count=3, size=(120, 80)):
+    """Frames with a distinguishable band per index, so order is checkable."""
+    from PIL import Image
+    directory.mkdir(parents=True, exist_ok=True)
+    for i in range(count):
+        arr = np.zeros((size[1], size[0], 3), dtype=np.uint8)
+        arr[:, :, 0] = i * 40          # red channel encodes the frame number
+        Image.fromarray(arr).save(directory / f"frame{i:05d}.png")
+    return directory
+
+
+def test_replay_backend_reports_unusable_without_frames(tmp_path):
+    backend = watcher.ReplayBackend(tmp_path)
+    ok, why = backend.available()
+    assert ok is False and "no frames" in why
+
+
+def test_replay_backend_needs_a_directory(monkeypatch):
+    monkeypatch.delenv("SCREEN_WATCHER_REPLAY", raising=False)
+    ok, why = watcher.ReplayBackend("").available()
+    assert ok is False and "SCREEN_WATCHER_REPLAY" in why
+
+
+def test_replay_backend_takes_its_size_from_the_first_frame(tmp_path):
+    """A recording made at another resolution still resolves its regions."""
+    backend = watcher.ReplayBackend(_write_frames(tmp_path, size=(640, 480)))
+    assert backend.find("anything") == watcher.ReplayBackend.HANDLE
+    assert backend.size(backend.HANDLE) == (640, 480)
+
+
+def test_replay_backend_crops_like_a_real_frame(tmp_path):
+    backend = watcher.ReplayBackend(_write_frames(tmp_path))
+    crop = backend.grab_array(backend.HANDLE, (10, 20, 30, 40))
+    assert crop.shape == (40, 30, 3)
+
+
+def test_replay_backend_advances_through_frames(tmp_path):
+    backend = watcher.ReplayBackend(_write_frames(tmp_path, count=3))
+    seen = [int(backend.grab_array(backend.HANDLE, (0, 0, 1, 1))[0, 0, 0])]
+    while backend.advance():
+        seen.append(int(backend.grab_array(backend.HANDLE, (0, 0, 1, 1))[0, 0, 0]))
+    assert seen == [0, 40, 80]
+
+
+def test_replay_backend_holds_on_the_last_frame(tmp_path):
+    """Looping would replay a one-off event forever - a manufactured alert."""
+    backend = watcher.ReplayBackend(_write_frames(tmp_path, count=2))
+    backend.advance()
+    assert backend.advance() is False
+    assert int(backend.grab_array(backend.HANDLE, (0, 0, 1, 1))[0, 0, 0]) == 40
+
+
+def test_replay_backend_rejects_an_out_of_bounds_region(tmp_path):
+    backend = watcher.ReplayBackend(_write_frames(tmp_path, size=(100, 100)))
+    with pytest.raises(watcher.CaptureError):
+        backend.grab_array(backend.HANDLE, (500, 500, 50, 50))
+
+
+def test_replay_backend_is_registered(tmp_path):
+    assert watcher.BACKENDS["replay"] is watcher.ReplayBackend
+
+
+def test_replay_backend_reads_the_env_var(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCREEN_WATCHER_REPLAY", str(_write_frames(tmp_path)))
+    assert watcher.ReplayBackend().available()[0] is True

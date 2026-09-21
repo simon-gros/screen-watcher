@@ -1033,3 +1033,64 @@ Priority 0 primitive.
 Wayland-only by nature. `tools/overlay.py` reports that plainly on an X11
 session, and every Qt import is function-local so the module - and its
 tests - load on a machine without PySide6.
+
+## Replay backend, and the focus check
+
+The last two open Priority 0 acceptance criteria.
+
+### Replay
+
+`ReplayBackend` implements the same `CaptureBackend` interface as the live
+paths, so everything above it - scheduler, readers, OCR, rules, events,
+notifications - runs unchanged against recorded frames. `watcher.py record`
+captures them:
+
+```bash
+python watcher.py record --out state/recording --frames 20
+SCREEN_WATCHER_REPLAY=state/recording python watcher.py --backend replay doctor
+```
+
+Recordings are **full-window**, not per-region, so they outlive the region
+layout they were made under: a later calibration change can be tested
+against frames captured before it existed.
+
+The backend **holds on the last frame** rather than looping. Looping would
+replay a one-off event - a level-up, a stun - forever, which is precisely
+the false positive a replay harness must never manufacture.
+
+### It immediately found a real bug
+
+`doctor --backend replay` reported `ocr:chat_tail FAIL CaptureError: import
+timed out`. ImageMagick was being handed the replay backend's fake window
+id, because `_check_ocr` calls `ocr()` directly and `ocr()` only routes
+through a `GameInstance` when `ACTIVE_GAME` is bound - which `doctor` never
+did. So `doctor` had been reporting on the ImageMagick path regardless of
+`--backend` for every check that captures directly.
+
+Binding the instance fixes it, in a `try/finally` so the global does not
+leak into tests. Replay now reports **36 pass, 0 fail**, and the live
+backends are unaffected at 35 pass.
+
+This is exactly what the acceptance criterion was for: a replay harness
+exercising the real code found a coupling bug that live capture hid, because
+with a real window id the fallback silently worked.
+
+### An empty path is a real directory
+
+`Path("")` is `"."`. An unset `SCREEN_WATCHER_REPLAY` therefore scanned the
+working directory and reported "no frames in ." rather than saying it was
+unconfigured. The directory is now `None` when unset, so the two states are
+distinguishable.
+
+### Focus
+
+The criteria ask `doctor` to identify focus, which X11 discovery cannot
+answer - a mapped window and a focused one are identical through `xdotool
+search`. The step 7 KWin `active` flag supplies it:
+
+```text
+PASS  focus   game visible but not focused
+```
+
+Minimised is reported as a WARN rather than a PASS, since capture will fail
+until the window is restored.

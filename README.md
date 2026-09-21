@@ -171,6 +171,7 @@ nohup python3 watcher.py --config profiles/fishing.json watch \
 | `watch` | run the polling and notification loop |
 | `alerts` | show per-rule alert counts and rates |
 | `backends` | list capture backends and whether they work on this host |
+| `record` | record full-window frames for later replay without the game |
 | `doctor` | PASS/WARN/FAIL diagnostics for capture, OCR, regions, and outputs |
 | `status` | report whether a watcher process is running |
 | `pause` | pause the running watcher |
@@ -456,6 +457,10 @@ architectural limitations are documented in
   region so clicks pass through to the game. Verified rendering above the live
   client. It reads JSON alerts on stdin and is not yet connected to `notify()`.
   Wayland-only, and it needs `pyside6` and `layer-shell-qt`.
+- A `replay` capture backend runs the whole stack - scheduler, OCR, rules,
+  events - against recorded frames instead of the live game, so detector work
+  is reproducible without playing. Record with `watcher.py record`, then set
+  `SCREEN_WATCHER_REPLAY` and pass `--backend replay`.
 - Desktop notifications are the implemented notification backend.
 - Per-rule sound names currently resolve against KDE's Ocean sound theme under
   `/usr/share/sounds/ocean/stereo`; if a configured sound file or `paplay`

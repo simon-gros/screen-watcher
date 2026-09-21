@@ -545,9 +545,109 @@ class X11XcbBackend(CaptureBackend):
         return out
 
 
+class ReplayBackend(CaptureBackend):
+    """Replay recorded full-window frames instead of capturing live ones.
+
+    The point is that everything above the backend - scheduler, readers,
+    OCR, rules, events, notifications - runs unchanged. A detector bug that
+    needs a rare chat line, a stun, or a full inventory can be reproduced
+    from a recording rather than by playing until it happens again.
+
+    Frames come from a directory of images, in sorted filename order, and
+    are cropped in memory exactly as a real full-window frame would be.
+    The window size is taken from the first frame, so recordings made at a
+    different resolution still resolve their regions correctly.
+
+    Set `SCREEN_WATCHER_REPLAY` to the directory, then select the backend:
+
+        SCREEN_WATCHER_REPLAY=state/recording watcher.py doctor \\
+            --backend replay
+    """
+
+    name = "replay"
+
+    #: Replay has no window manager, so it reports a stable fake handle.
+    HANDLE = "replay:0"
+
+    def __init__(self, directory: str | os.PathLike | None = None):
+        raw = str(directory or os.environ.get("SCREEN_WATCHER_REPLAY", ""))
+        # Path("") is ".", a real directory, so an unset variable would
+        # silently scan the working directory instead of reporting itself
+        # unconfigured.
+        self.directory = Path(raw) if raw else None
+        self._frames: list[Path] = []
+        self._pos = 0
+        self._size: tuple[int, int] | None = None
+
+    def available(self) -> tuple[bool, str]:
+        if self.directory is None:
+            return False, "set SCREEN_WATCHER_REPLAY to a frame directory"
+        if not self.directory.is_dir():
+            return False, f"{self.directory} is not a directory"
+        if not self._list():
+            return False, f"no frames in {self.directory}"
+        return True, f"{len(self._list())} frames in {self.directory}"
+
+    def _list(self) -> list[Path]:
+        if not self._frames and self.directory and self.directory.is_dir():
+            self._frames = sorted(
+                p for p in self.directory.iterdir()
+                if p.suffix.lower() in (".png", ".ppm", ".jpg", ".jpeg"))
+        return self._frames
+
+    def find(self, wm_class: str) -> str | None:
+        return self.HANDLE if self._list() else None
+
+    def size(self, handle: str) -> tuple[int, int] | None:
+        if self._size is None:
+            frames = self._list()
+            if not frames:
+                return None
+            with Image.open(frames[0]) as im:
+                self._size = im.size
+        return self._size
+
+    def _current(self) -> np.ndarray:
+        frames = self._list()
+        if not frames:
+            raise CaptureError(f"no frames in {self.directory}")
+        # Hold on the last frame rather than wrapping: looping would make a
+        # recording of a one-off event replay it forever, which is exactly
+        # the false positive a replay harness must not manufacture.
+        path = frames[min(self._pos, len(frames) - 1)]
+        try:
+            with Image.open(path) as im:
+                return np.asarray(im.convert("RGB"))
+        except (OSError, ValueError) as e:
+            raise CaptureError(f"replay frame {path.name}: {e}") from e
+
+    def advance(self) -> bool:
+        """Step to the next frame. False once the recording is exhausted."""
+        if self._pos < len(self._list()) - 1:
+            self._pos += 1
+            return True
+        return False
+
+    def grab_array(self, handle: str, box) -> np.ndarray:
+        x, y, w, h = box
+        frame = self._current()
+        crop = frame[y:y + h, x:x + w]
+        if crop.size == 0:
+            raise CaptureError(
+                f"region {box} lies outside the {frame.shape[1]}x"
+                f"{frame.shape[0]} replay frame")
+        return crop
+
+    def grab_file(self, handle: str, box, out: Path,
+                  resize: str | None = None) -> Path:
+        Image.fromarray(self.grab_array(handle, box)).save(out)
+        return out
+
+
 BACKENDS: dict[str, type[CaptureBackend]] = {
     X11ImageMagickBackend.name: X11ImageMagickBackend,
     X11XcbBackend.name: X11XcbBackend,
+    ReplayBackend.name: ReplayBackend,
 }
 DEFAULT_BACKEND = X11XcbBackend.name
 
@@ -2936,6 +3036,17 @@ def _check_kwin(cfg: dict) -> list[Check]:
                      f"{win.caption or wm_class} {win.width}x{win.height} "
                      f"logical, {state}"))
 
+    # Focus is an acceptance criterion in its own right, and X11 discovery
+    # cannot answer it: a mapped window and a focused one look identical
+    # through `xdotool search`.
+    if win.minimized:
+        out.append(Check("focus", WARN, "game window is minimised",
+                         "capture will fail until it is restored"))
+    else:
+        out.append(Check("focus", PASS,
+                         "game has focus" if win.active
+                         else "game visible but not focused"))
+
     pixels = window_size(find_window(wm_class, visible_only=False) or "")
     scale = kwin_scale(win, pixels) if pixels else None
     if scale is not None:
@@ -3206,11 +3317,21 @@ def run_doctor(cfg: dict, path: Path, requested_backend: str | None = None
     checks += _check_profile(cfg, path)
     checks += _check_kwin(cfg)
     game = GameInstance(cfg["window"]["wm_class"], backend=backend)
-    checks += _check_window(cfg, game)
-    checks += _check_regions(cfg, game)
-    checks += _check_grids(cfg, game)
-    checks += _check_capture(cfg, game)
-    checks += _check_ocr(cfg, game)
+    # Bind it, or checks that call `ocr`/`capture_array` directly fall back
+    # to ImageMagick against a handle the selected backend owns. The replay
+    # backend exposed this: `doctor --backend replay` reported "import timed
+    # out" because ImageMagick was being handed a fake window id.
+    set_active_game(game)
+    try:
+        checks += _check_window(cfg, game)
+        checks += _check_regions(cfg, game)
+        checks += _check_grids(cfg, game)
+        checks += _check_capture(cfg, game)
+        checks += _check_ocr(cfg, game)
+    finally:
+        # Leave no global behind: `run_doctor` is called from tests, and a
+        # stale instance would silently redirect their captures.
+        set_active_game(None)
     checks += _check_outputs()
     return checks
 
@@ -3242,6 +3363,43 @@ def cmd_backends(args) -> None:
     print(f"\n* selected: {selected.name}")
     if args.backend and selected.name != args.backend:
         print(f"  (requested {args.backend!r})")
+
+
+def cmd_record(args) -> None:
+    """Record full-window frames for later replay.
+
+    Full-window rather than per-region on purpose: a recording outlives the
+    region layout it was made under, so a later calibration change can be
+    tested against frames captured before it.
+    """
+    cfg = load_config(Path(args.config)) if args.config else load_config()
+    wm_class = cfg["window"]["wm_class"]
+    game = GameInstance(wm_class, backend=make_backend(args.backend))
+    if not game.acquire():
+        sys.exit(f"no window for class {wm_class!r}")
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    w, h = game.size
+    print(f"recording {args.frames} frames of {w}x{h} every "
+          f"{args.interval}s to {out}", flush=True)
+
+    written = 0
+    for i in range(args.frames):
+        game.begin_cycle(i)
+        try:
+            frame = game.frame((0, 0, w, h), None)
+        except CaptureError as e:
+            print(f"  frame {i}: {e}", flush=True)
+            continue
+        path = out / f"frame{i:05d}.png"
+        Image.fromarray(frame.astype(np.uint8)).save(path)
+        written += 1
+        if i + 1 < args.frames:
+            time.sleep(args.interval)
+    print(f"wrote {written} frames to {out}")
+    print(f"replay with: SCREEN_WATCHER_REPLAY={out} "
+          f"{sys.argv[0]} doctor --backend replay")
 
 
 def cmd_calibrate(args) -> None:
@@ -3765,6 +3923,16 @@ def main() -> None:
     dr = sub.add_parser("doctor",
                         help="PASS/WARN/FAIL diagnostics for the whole stack")
     dr.set_defaults(func=cmd_doctor)
+
+    rec = sub.add_parser("record",
+                         help="record full-window frames for replay")
+    rec.add_argument("--out", default="state/recording",
+                     help="directory to write frames to")
+    rec.add_argument("--frames", type=int, default=20,
+                     help="how many frames to record")
+    rec.add_argument("--interval", type=float, default=1.5,
+                     help="seconds between frames")
+    rec.set_defaults(func=cmd_record)
 
     c = sub.add_parser("calibrate"); c.add_argument("--scale", default="30%")
     c.set_defaults(func=cmd_calibrate)
