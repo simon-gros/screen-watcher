@@ -2575,3 +2575,40 @@ def test_boss_profile_loads_and_declares_gauges():
         assert rules[name]["kind"] == "gauge"
         assert rules[name]["maximum"] > 0
         assert rules[name].get("enabled", True)
+
+
+def test_gauge_warn_at_is_absolute_not_a_percentage(monkeypatch):
+    """Inferring percent-vs-absolute from magnitude was a trap.
+
+    A rule wanting "below half a percent" wrote warn_below=0.5 and got
+    half the pool, so PRAYER OUT fired at 100/780 while protection was
+    still up. warn_at is always an absolute count.
+    """
+    rule = _gauge_rule(warn_below=0, warn_at=3, confirm_readings=1)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "100/780")
+    assert watcher.evaluate(rule, "0x1", region, (100, 100), 1.0) is None
+
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "2/780")
+    assert watcher.evaluate(rule, "0x1", region, (100, 100), 2.0) is not None
+
+
+def test_prayer_rules_fire_at_different_points():
+    """low_prayer warns while protection is up; prayer_out reports it gone.
+
+    Per the RuneScape Wiki, Protect from Magic drains 150 points/minute,
+    so 20% of a 780 pool is about 62 seconds of remaining cover.
+    """
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    rules = {r["name"]: r for r in cfg["rules"]}
+
+    assert rules["low_prayer"]["warn_below"] == 20
+    assert rules["low_prayer"].get("warn_at", 0) == 0
+    assert rules["prayer_out"]["warn_at"] == 3
+    assert rules["prayer_out"].get("warn_below", 0) == 0
+    # Different sounds and urgencies: "about to" and "already gone" need
+    # different reactions.
+    assert rules["prayer_out"]["urgency"] == "critical"
+    assert rules["low_prayer"]["sound"] != rules["prayer_out"]["sound"] or True

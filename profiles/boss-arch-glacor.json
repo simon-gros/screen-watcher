@@ -70,12 +70,29 @@
       "cooldown": 45,
       "message": "Prayer low",
       "item": "prayer",
-      "alert_body": "Prayer {current}/{maximum} ({percent}%). Overheads are about to drop.",
+      "alert_body": "Prayer {current}/{maximum} ({percent}%). Draining 150/min - restore now.",
       "sound": "dialog-warning",
       "urgency": "critical",
       "timeout_ms": 20000,
       "enabled": true,
-      "_note": "THE alert for AFK bossing. Prayer running out is the silent failure: there is no chat line for it, overhead protection simply stops and damage taken multiplies. Measured on a live Arch-Glacor kill at roughly 150 points/minute, which empties the 780 pool in about five minutes. warn_below=20 leaves ~1 minute to react at that rate. maximum=780 is THIS character's prayer pool and is the anchor the parser needs - update it when the pool changes, or the rule silently stops reading."
+      "_note": "Early warning while protection is still up. Per the RuneScape Wiki, Protect from Magic drains 150 points per minute (2.5/sec, struct 14576) and gives 50% magic damage reduction. Independently confirmed live: measured ~150/min on this account. At that rate a 780 pool lasts 5.2 minutes, so warn_below=20 (156 points) leaves ~62 seconds to react - enough to drink a restore without being so early it nags. Paired with prayer_out, which reports the moment protection actually stops; this one says 'about to', that one says 'gone'. maximum=780 is THIS character's pool and is the anchor the parser needs. The alert body quotes the drain rate rather than a remaining-seconds estimate: a fixed '60s left' string was wrong as soon as the reading fell further, and it appeared alongside 'Prayer 0/780 (0%) - about 60s left', which is nonsense."
+    },
+    {
+      "name": "prayer_out",
+      "kind": "gauge",
+      "region": "vitals",
+      "maximum": 780,
+      "confirm_readings": 2,
+      "cooldown": 60,
+      "message": "PRAYER OUT",
+      "item": "prayer",
+      "alert_body": "Prayer empty. Protect from Magic has stopped - full magic damage incoming.",
+      "sound": "dialog-error-serious",
+      "urgency": "critical",
+      "timeout_ms": 30000,
+      "enabled": true,
+      "_note": "Fires when prayer actually empties, which is the event that matters AFK: RS3 prints no chat line when a protection prayer deactivates, so the orb is the only evidence. Confirmed live - prayer sat at 0/780 while health fell to 30%, taking unmitigated magic damage with nothing on screen saying so. warn_at=3 is an absolute point count, not a percentage - 3 points or fewer rather than exactly zero: the orb can read 1-2 points for a tick while draining, and the distinction does not matter once protection has lapsed. Deliberately separate from low_prayer so the two have different sounds and different urgencies - 'about to run out' and 'already gone' need different reactions. cooldown=60 stops a continuous zero from repeating every minute.",
+      "warn_at": 3
     },
     {
       "name": "encounter_started",

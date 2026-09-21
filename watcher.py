@@ -1827,6 +1827,7 @@ class Rule:
     # gauge
     maximum: int = 0
     warn_below: float = 0.0
+    warn_at: int = 0
     confirm_readings: int = 2
     # supply
     item: str = "supplies"
@@ -2454,7 +2455,7 @@ def _eval_gauge(rule: Rule, wid: str, box, now: float,
     that makes an alert worth ignoring. Two consecutive readings below the
     threshold are required by default.
     """
-    if rule.maximum <= 0 or rule.warn_below <= 0:
+    if rule.maximum <= 0 or (rule.warn_below <= 0 and rule.warn_at <= 0):
         return None
     frame = capture_array(wid, box, None, cycle)
     reading = parse_gauge(ocr_array(frame), rule.maximum)
@@ -2464,11 +2465,18 @@ def _eval_gauge(rule: Rule, wid: str, box, now: float,
         # genuine decline does not restart the confirmation count.
         return None
     current, maximum = reading
-    fraction = current / maximum if maximum else 1.0
-    threshold = (rule.warn_below / 100.0 if rule.warn_below > 1
-                 else rule.warn_below)
 
-    if fraction > threshold:
+    # `warn_below` is always a percentage, and `warn_at` is an absolute
+    # value. Inferring one from the other by magnitude was a trap: a rule
+    # wanting "below half a percent" wrote warn_below=0.5 and got half the
+    # pool, firing PRAYER OUT at 100/780. Two explicit fields cannot be
+    # misread that way.
+    if rule.warn_at > 0:
+        low = current <= rule.warn_at
+    else:
+        low = (current / maximum if maximum else 1.0) <= rule.warn_below / 100.0
+
+    if not low:
         rule._low_streak = 0
         rule._armed = True
         return None
@@ -2481,6 +2489,7 @@ def _eval_gauge(rule: Rule, wid: str, box, now: float,
     # Re-arms only when the gauge recovers above the threshold, so a long
     # decline produces one alert rather than one per poll.
     rule._armed = False
+    fraction = current / maximum if maximum else 0.0
     return rule.fire(
         now, rule.alert_body or f"{current:,}/{maximum:,}",
         source_text=f"{current}/{maximum}", current=f"{current:,}",
