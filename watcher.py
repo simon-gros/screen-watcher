@@ -40,7 +40,6 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.json"
-REGION_DIR = ROOT / "regions"
 STATE_DIR = ROOT / "state"
 ACTIVE_SKILL = ""
 
@@ -3292,7 +3291,6 @@ def cmd_watch(args) -> None:
 def main() -> None:
     ensure_x_env()
     STATE_DIR.mkdir(exist_ok=True)
-    REGION_DIR.mkdir(exist_ok=True)
     p = argparse.ArgumentParser(prog="watcher", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", type=Path, default=CONFIG_PATH,
