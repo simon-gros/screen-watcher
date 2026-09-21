@@ -150,6 +150,20 @@
       "_note": "Counts desert sole by icon colour rather than reading stack digits, for the reason the urn rule documents: digits are small, anti-aliased and drawn over the icon, and OCR of an unchanging stack was measured flickering between 6, 13 and 1. MEASURED on this pack: desert sole scores +64 to +66 red-minus-blue on the icon's bright pixels (+87 at the stricter luminance floor the counter actually uses), against -48 to +54 for every other item carried - potions, runes, scrolls. min_red=70 sits in that gap, and the count held at exactly 13 across thresholds from 60 to 80. min_cover=0.2 is required: a desert sole fills only 0.22 of its cell where a bulky urn fills 0.4, so the 0.30 default rejected all thirteen and counted one. confirm_seconds=6 rejects the overlay case, where a bank or loot window covering the backpack briefly reads as zero food."
     },
     {
+      "name": "rare_drop",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "\\breceived\\s+.{0,60}?\\bdrop\\b|\\bhas received\\b|\\bcompleted a Treasure Trail and received\\b|\\breceived\\s+\\w+,\\s*the\\s+\\w+\\s+pet\\b",
+      "cooldown": 0,
+      "message": "RARE DROP",
+      "alert_body": "{line}",
+      "sound": "complete-media-burn",
+      "urgency": "critical",
+      "timeout_ms": 60000,
+      "enabled": true,
+      "_note": "A rare drop announces itself as a broadcast, which is a different message from the routine reward-chest line and is missed entirely by loot_received. Wiki-verified templates: 'News: [Player] has received [item] drop!', 'News: [Player] completed a Treasure Trail and received [item]!', and 'News: [Player] has received [Name], the [Skill] pet drop at [number] XP!'. Directly relevant here: the wiki lists Ragefire, Steadfast and Glaiven boots - the Glacor boots - under drops announced to friends, so an Arch-Glacor boot drop produces exactly this line. The pattern deliberately does NOT anchor on the player name. Broadcasts also fire for other players, and seeing someone else's rare drop is harmless noise, whereas anchoring on an OCR'd name risks missing the player's own - and this is the one alert where a miss costs something real. It must not match the ordinary 'You receive: 12 x Glacor remnants' chest line, which is asserted in the tests. urgency=critical and a long timeout because a rare drop is the single most important thing that can happen in a session. UNVERIFIED against this account's live chat - the wording comes from the wiki, not from an observed drop. Confirm on the first broadcast."
+    },
+    {
       "name": "loot_received",
       "kind": "ocr",
       "region": "chat_tail",

@@ -2954,3 +2954,76 @@ def test_gauge_recovers_after_a_misread_mid_decline(monkeypatch):
     fired = [watcher.evaluate(rule, "0x1", region, (100, 100), float(n))
              for n in range(4)]
     assert sum(1 for a in fired if a is not None) == 1
+
+
+# --------------------------------------------------------------------------
+# Rare-drop broadcasts
+# --------------------------------------------------------------------------
+
+def _rare_pattern():
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    return {r["name"]: r for r in cfg["rules"]}["rare_drop"]["pattern"]
+
+
+def test_rare_drop_matches_the_wiki_broadcast_templates():
+    """Wiki-verified: 'News: [Player] has received [item] drop!'
+
+    The Glacor boots - Ragefire, Steadfast, Glaiven - are listed among
+    drops announced to friends, so an Arch-Glacor boot drop produces
+    exactly this line.
+    """
+    pat = _rare_pattern()
+    for line in ("News: SimonGros has received Ragefire boots drop!",
+                 "News: SimonGros has received Steadfast boots drop!",
+                 "News: SimonGros has received Glaiven boots drop!",
+                 "SimonGros has received Armadyl hilt drop!",
+                 "News: SimonGros has received Shamini, the Summoning pet drop!",
+                 "News: SimonGros completed a Treasure Trail and received Third age platebody!"):
+        assert re.search(pat, line, re.I), line
+
+
+def test_rare_drop_survives_ocr_mangling():
+    pat = _rare_pattern()
+    for line in ("News; SimonGros has received Ragefire boots drop!",
+                 "(16:02:11] News: SimonGros has received Glaiven boots drop!"):
+        assert re.search(pat, line, re.I), line
+
+
+def test_rare_drop_ignores_the_routine_chest_line():
+    """The ordinary reward-chest loot must not read as a rare drop.
+
+    Every kill produces "You receive: 12 x Glacor remnants"; treating
+    that as rare would make the alert meaningless.
+    """
+    pat = _rare_pattern()
+    for line in ("A golden beam shines over one of your items, "
+                 "You receive: 12 x Glacor remnants.",
+                 "You receive: 12 x Glacor remnants.",
+                 "You have killed 626 Arch-Glacor in normal mode.",
+                 "You are awarded 25 Marks of War and now have a total of 2,090.",
+                 "455 coins have been added to your money pouch."):
+        assert not re.search(pat, line, re.I), line
+
+
+def test_rare_drop_and_loot_rules_do_not_overlap(monkeypatch):
+    """Both watch chat; each must fire only on its own line."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    specs = {r["name"]: r for r in cfg["rules"]}
+    chat = "\n".join((
+        "[16:02:09] A golden beam shines over one of your items, "
+        "You receive: 12 x Glacor remnants.",
+        "[16:02:11] News: SimonGros has received Ragefire boots drop!"))
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: chat)
+    region = Region("top-left", 0, 0, 10, 10)
+
+    bodies = {}
+    for name in ("rare_drop", "loot_received"):
+        rule = watcher.Rule(**{k: v for k, v in specs[name].items()
+                               if not k.startswith("_")})
+        rule._primed = True
+        alert = watcher.evaluate(rule, "0x1", region, (100, 100), 100.0)
+        assert alert is not None, name
+        bodies[name] = alert.body
+
+    assert "Ragefire" in bodies["rare_drop"]
+    assert "golden beam" in bodies["loot_received"]
