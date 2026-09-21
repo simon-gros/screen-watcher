@@ -4208,3 +4208,38 @@ def test_portal_decoration_height_is_not_hardcoded():
             np.full((300, 200, 3), 120, dtype=np.uint8)])
         backend = watcher.WaylandPortalBackend()
         assert backend._measure_decoration(framed) == height
+
+
+# --------------------------------------------------------------------------
+# Module split: patches must still reach the code they target
+# --------------------------------------------------------------------------
+
+def test_extracted_module_is_reexported():
+    """`watcher.X` keeps resolving after a move.
+
+    The split is incremental, and the application and its tests address
+    these names through `watcher`. Re-exporting keeps that contract while
+    the implementation lives elsewhere.
+    """
+    from screen_watcher import kwin
+
+    for name in ("kwin_find", "kwin_windows", "kwin_available", "kwin_scale",
+                 "KWinWindow", "_parse_kwin_report", "_session_is_wayland"):
+        assert hasattr(watcher, name), name
+        assert getattr(watcher, name) is getattr(kwin, name), name
+
+
+def test_patching_an_extracted_name_reaches_its_caller(monkeypatch):
+    """The hazard the split has to avoid, asserted rather than assumed.
+
+    With `from module import name`, a caller binds the original function
+    at import time. Patching either module then silently does nothing:
+    the test passes while exercising unpatched code. This proves the
+    callers still resolve through the patched attribute.
+    """
+    sentinel = watcher.KWinWindow("game", "RuneScape", 0, 0, 800, 600,
+                                  True, False, False, "{id}")
+    monkeypatch.setattr(watcher, "kwin_find", lambda *a, **k: sentinel)
+
+    tracker = watcher.WindowTracker("game", "0x1", (800, 600), use_kwin=True)
+    assert tracker.describe_hidden() == "minimised"
