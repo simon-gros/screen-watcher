@@ -4487,3 +4487,32 @@ def test_patching_ocr_reaches_the_extracted_evaluators(monkeypatch):
     alert = watcher.evaluate(rule, "0x1", Region("top-left", 0, 0, 10, 10),
                              (100, 100), 100.0)
     assert alert is not None and "Attack level" in alert.body
+
+
+def test_persistence_reads_log_paths_through_watcher(monkeypatch, tmp_path):
+    """Redirecting a log must reach the extracted writers.
+
+    Binding OCCUPANCY_LOG in the persistence module would freeze the
+    repository path, and the suite would append test rows to the
+    player's real history - which is exactly what happened once before,
+    silently overwriting a coin total.
+    """
+    from screen_watcher import persistence
+
+    log = tmp_path / "counters.jsonl"
+    monkeypatch.setattr(watcher, "COUNTER_LOG", log)
+    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+
+    persistence.log_counter("coin_milestone", 1.0, 4242)
+
+    assert log.exists()
+    assert "4242" in log.read_text()
+    assert watcher.load_counter("coin_milestone") == 4242
+
+
+def test_persistence_is_reexported():
+    from screen_watcher import persistence
+
+    for name in ("log_counter", "load_counter", "log_occupancy",
+                 "load_cycles", "fill_rate"):
+        assert getattr(watcher, name) is getattr(persistence, name), name
