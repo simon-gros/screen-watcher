@@ -578,3 +578,61 @@ Stack-count reading still uses pixel counting rather than digit recognition.
 The live backpack had only two visible stack counts while this was built,
 which is not enough to validate a classifier - and the existing pixel-count
 approach is already reliable for the question `item_gained` asks.
+
+
+## Priority 0, step 10 — rules consume the capture stack
+
+`set_active_game()` binds a `GameInstance` for the process. `capture_array`
+and `ocr` route through it when the handle matches, so all fourteen call
+sites in the rule evaluators inherit the selected backend without changing
+a single signature.
+
+`cmd_watch` now builds a backend via `make_backend(args.backend)`, acquires
+the window through a `GameInstance`, binds it, and prints which backend is
+in use. Resize and reacquire keep the instance in sync, so the frame cache
+can never serve pixels from stale geometry or a dead window id.
+
+### Measured result, and what it did not fix
+
+| path | cycle cost |
+|---|---|
+| before (ImageMagick, unbound) | 1432.6 ms |
+| after (XCB via GameInstance) | 1292.0 ms |
+| speedup | **1.1x** |
+
+That is far below the 37x the scheduler benchmark suggested, and profiling
+says why:
+
+```text
+pack_nearly_full   inventory      6.6 ms
+level_up           ocr         1132.4 ms   <-- 99% of the cycle
+target_alerted     ocr            0.1 ms
+...
+TOTAL                          1141.3 ms
+```
+
+`level_up` is simply the first OCR rule to run, so it pays for the Tesseract
+pass over `chat_tail` that the other four then reuse from cache. Breaking
+that single call down:
+
+| stage | cost |
+|---|---|
+| XCB capture | 17.8 ms |
+| PNG encode to disk | 41.9 ms |
+| **Tesseract** | **1121.1 ms** |
+
+So capture is now ~1.5% of the cycle and Tesseract is ~98%. Step 10 removed
+the capture bottleneck completely; it simply revealed a larger one behind
+it.
+
+### Why the earlier benchmarks were not wrong
+
+Step 3 measured *capture* in isolation (42x) and step 6 measured *numeric
+OCR* in isolation (2516x). Both hold. The end-to-end figure is small because
+chat OCR - which neither step addressed - dominates everything else.
+
+The sprite OCR from step 6 cannot help here: chat is variable-width
+proportional text, not a fixed numeric readout. Making chat OCR cheaper is
+a separate problem, and the realistic options are reducing the region,
+running Tesseract less often than every poll, or a RuneScape-specific
+chat-font reader of the kind Alt1 uses.

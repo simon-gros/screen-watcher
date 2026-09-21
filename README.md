@@ -445,9 +445,13 @@ architectural limitations are documented in
   does not yet include complete quest or boss profiles.
 - `watcher.py` is still monolithic and is planned to be split into capture,
   profiles, signals, rules, events, notifications, and CLI modules. The
-  `CaptureBackend`/`GameInstance` seam (Priority 0, step 1) has landed, but
-  the existing rule evaluators still call `capture_array`/`ocr_cached`
-  directly rather than going through a `GameInstance`.
+  rule evaluators now route through a bound `GameInstance`, so they inherit
+  the selected capture backend, but they still call `capture_array`/`ocr`
+  rather than taking a scheduler or reader as a parameter.
+- **Chat OCR dominates the poll cycle.** Tesseract over the 0.39 MPx
+  `chat_tail` region costs ~1121 ms, against ~18 ms for the capture itself.
+  Native capture and sprite OCR removed the other bottlenecks; this one is
+  unaddressed and caps the practical poll rate.
 - Identical region/mask requests are reused within a polling cycle, and
   `FrameScheduler` keeps one pass coherent, but different regions are still
   captured independently. Detectors can therefore observe slightly different
