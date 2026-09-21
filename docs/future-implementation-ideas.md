@@ -446,6 +446,35 @@ Do not call the Linux foundation complete until all of these are true:
 
 After these criteria are met, broader skill coverage becomes the main priority.
 
+### Status: all Priority 0 criteria met (September 2026)
+
+| criterion | evidence |
+|---|---|
+| fishing/thieving work through the abstraction | 148 tests; `doctor` 35 pass on both profiles |
+| one shared frame feeds multiple readers | `FrameScheduler`, step 2 |
+| X11/XWayland capture benchmarked and stable | 42x over ImageMagick, step 3 |
+| `doctor` identifies backend/session/geometry/focus/health/OCR/outputs/deps | 36 checks; `focus` from KWin `active` |
+| reader health degrades on blank/frozen/lost frames | `FrameScheduler.health`, step 2 |
+| recovers from resize/recreation without restart | `WindowTracker`; 11 tests |
+| replay backend exercises the same reader/event code | `ReplayBackend` + `watcher.py record` |
+| portal/PipeWire proof of concept on KDE/CachyOS | `tools/portal_poc.py`, 16.8 ms median |
+| click-through overlay above the game | `tools/overlay.py`, verified by compositor screenshot |
+| no synthetic input | no input-injection call sites |
+| rules not coupled to ImageMagick | routed through `GameInstance`, step 10 |
+
+Steps 1-10 of the implementation order are complete. Step 11 - broader skill
+and profile coverage - is now the priority.
+
+Two things were deliberately **not** done, and should not be mistaken for
+oversights:
+
+- the portal/PipeWire path stays a proof of concept. Adopting it needs a
+  persistent session, restore-token storage, revocation handling, and a
+  `CaptureBackend` shaped around subscribing to a stream rather than
+  requesting a rectangle;
+- the overlay is not wired to `notify()`. Whether alerts belong on screen is
+  a product decision, not a foundation primitive.
+
 ## September 2026 research pass: strategic implications
 
 A broader research pass across Jagex's official RuneScape material, the

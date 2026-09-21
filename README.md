@@ -37,6 +37,12 @@ The current implementation is still centered on a single `watcher.py` module.
 The planned modular architecture is documented separately and should not be
 confused with functionality that has already landed.
 
+The **Priority 0 Linux technical foundation** is complete: capture backend
+abstraction, shared frame scheduler, native XCB capture, diagnostics, reader
+registry, layered OCR, KWin window discovery, a Wayland portal/PipeWire proof
+of concept, a click-through overlay prototype, and a replay backend. Broader
+skill and profile coverage is now the priority.
+
 ## Features
 
 Screen Watcher currently provides:
