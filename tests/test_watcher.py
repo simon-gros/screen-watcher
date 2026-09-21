@@ -4142,9 +4142,47 @@ def test_fingerprint_is_optional():
     assert watcher.check_fingerprint({}, (1, 1), "any") == []
 
 
+def test_woodcutting_pattern_survives_the_dropped_g():
+    """Tesseract reads "You get" as "You et" on this font often enough
+    to matter: measured over 852 live lines while chopping maples, the
+    strict spelling matched only 71%, "you g?et some \\w+ logs" reached
+    90%, and adding the hatchet line covered 100%. A rule missing three
+    lines in ten would keep declaring a stop mid-chop.
+    """
+    cfg = load_config(Path("profiles/woodcutting.json"))
+    rule = next(r for r in cfg["rules"] if r["name"] == "woodcutting_stopped")
+    pattern = re.compile(rule["pattern"], re.I)
+
+    # Captured live, OCR damage and all.
+    for line in ("[22:16:25] You get some maple logs.",
+                 "(22:16:42] You et some maple logs",
+                 "You et some maple logs. v",
+                 "You get some maple logs, y",
+                 "[22:16:23] You swing your hatchet at the tree.",
+                 "(22:17:16] You swing your hatchet at the tree"):
+        assert pattern.search(line), line
+
+    # Another tree must keep the rule working - hence \w+, not "maple".
+    assert pattern.search("[10:00:00] You get some yew logs.")
+
+    # Real chat that shared the screen during the same session.
+    for line in ("[22:14:51] You pick the target's pocket.",
+                 "[22:14:51] 350 coins have been added to your money pouch.",
+                 "# News: Zarosian demons have appeared near the Forgotten",
+                 "You need a hatchet to chop this tree."):
+        assert not pattern.search(line), line
+
+    # A full pack halts chopping, so log lines stop on every bank trip.
+    # Without suppression this rule fires once per trip.
+    suppress = re.compile(rule["suppress_pattern"], re.I)
+    for line in ("You can't carry any more logs.",
+                 "Your backpack is full."):
+        assert suppress.search(line), line
+
+
 def test_shipped_profiles_declare_their_calibration():
     """Each profile records the window it was measured on."""
-    for name in ("boss-arch-glacor", "thieving", "fishing"):
+    for name in ("boss-arch-glacor", "thieving", "fishing", "woodcutting"):
         cfg = load_config(Path(f"profiles/{name}.json"))
         assert cfg["schema_version"] == watcher.SCHEMA_VERSION
         fp = cfg["fingerprint"]

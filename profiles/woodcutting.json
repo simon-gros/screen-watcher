@@ -1,0 +1,108 @@
+{
+  "skill": "woodcutting",
+  "profile_type": "skill",
+  "schema_version": 1,
+  "fingerprint": {
+    "window_size": [
+      3840,
+      2058
+    ],
+    "capture_backend": "x11-xcb",
+    "ui_scale": 1.75,
+    "session": "CachyOS/KDE Plasma 6 Wayland, RS3 NXT via XWayland",
+    "_note": "Regions are pixel offsets measured on this exact window size. At any other size they resolve elsewhere and fail silently - OCR returns nothing, or reads a neighbouring panel. ui_scale 1.75 is the logical-to-physical factor KWin reports (2194 logical vs 3840 pixels); `doctor` detects it independently and reports it.",
+    "last_validated": "2026-09-21, maple trees"
+  },
+  "window": {
+    "wm_class": "steam_app_1343400",
+    "_comment": "RS3 NXT. WM_CLASS survives title changes and skips the Steam launcher window."
+  },
+  "interval": 1.5,
+  "_profile_note": "Basic Woodcutting profile: three alerts only - pack about to fill, chopping stopped, and the one-hour session milestone. Regions are reused verbatim from the fishing profile, which is safe because RS3 pins these panels to the window edges at a fixed size: the backpack, chat and Metrics panel sit in exactly the same place whatever skill is being trained. Verified here rather than assumed - `doctor` resolves every region and the occupancy grid was checked against the live pack.",
+  "_regions_help": "anchor + dx,dy offset from that corner + fixed w,h. RS3 pins panels to edges at fixed size rather than scaling them, so this survives a window resize. Negative dx/dy measure inward from a right/bottom edge.",
+  "regions": {
+    "chat_tail": {
+      "anchor": "bottom-left",
+      "dx": 5,
+      "dy": -36,
+      "w": 600,
+      "h": 650,
+      "_note": "Most recent ~32 lines of All Chat. Taken from the thieving profile rather than fishing's smaller box: woodcutting produces a log line roughly every 2-3s, so the taller region gives each line many more chances to be read before it scrolls off. dy=-36 is the largest offset that still excludes the chat input bar below it; at -57 the boundary falls mid-line and the NEWEST message - the one rules care about most - OCRs as garbage."
+    },
+    "backpack": {
+      "anchor": "bottom-right",
+      "dx": -13,
+      "dy": -38,
+      "w": 330,
+      "h": 560,
+      "grid": {
+        "x0": 17,
+        "y0": 86,
+        "cell_w": 61,
+        "cell_h": 55,
+        "cols": 5,
+        "rows": 6
+      },
+      "_note": "Full backpack panel; grid is relative to the region's top-left. VERIFIED live while chopping maples: per-cell occupancy signal read 21-47 for slots holding logs and 0.8-4.1 for empty ones, so the threshold of 8 sits far from both populations. The grid describes 5x6=30 cells while the pack holds 28; the two surplus cells are always empty and are simply never counted as occupied."
+    },
+    "session_timer": {
+      "anchor": "top-left",
+      "dx": 150,
+      "dy": 620,
+      "w": 210,
+      "h": 50,
+      "_note": "Elapsed-time readout at the bottom of the Metrics panel, between the settings/reset buttons on the left and pause on the right. Same geometry as every other profile - RS3 pins the panel top-left at a fixed size. Re-check with `shot session_timer` if the Metrics panel is moved or resized."
+    }
+  },
+  "rules": [
+    {
+      "name": "pack_nearly_full",
+      "kind": "inventory",
+      "region": "backpack",
+      "capacity": 28,
+      "mode": "lead",
+      "lead_seconds": 20,
+      "warn_free": 3,
+      "cooldown": 55,
+      "message": "Bank soon",
+      "alert_body": "{free} slots left - bank soon.",
+      "sound": "message-new-instant",
+      "_note": "Advance warning: fires when the projected time-to-full drops below lead_seconds, so it arrives while there is still time to act rather than after chopping has already stopped. lead_seconds=20 and warn_free=3 against a measured log rate of roughly one every 2-3s - three free slots is about 6-9 seconds of chopping, so the projection and the slot floor agree with each other. Deliberately paired with nothing: the fishing and thieving profiles also carry an 'overflow' backstop rule, but this is a basic profile and two inventory alerts per bank trip is the noise problem those profiles had to be retuned away from. If a full pack is being missed, add an overflow rule rather than lowering lead_seconds.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 10000
+    },
+    {
+      "name": "woodcutting_stopped",
+      "kind": "activity",
+      "region": "chat_tail",
+      "pattern": "you g?et some \\w+ logs|you swing your hatchet",
+      "suppress_pattern": "can'?t carry any more|do not have any space in your inventory|not have any space|your backpack is full",
+      "stop_seconds": 45,
+      "cooldown": 120,
+      "message": "Woodcutting stopped",
+      "alert_body": "No logs for {quiet:.0f}s - chopping has stopped.",
+      "sound": "dialog-warning",
+      "_note": "Fires when all evidence of chopping stops - the tree was felled, the pack filled, or the character was moved. VERIFIED against live chat while cutting maples: the two real lines are 'You get some maple logs.' and 'You swing your hatchet at the tree.'. The 'g?' in 'you g?et' is NOT a typo. MEASURED over 852 live lines: tesseract drops the g and reads 'You et some maple logs' often enough that the strict spelling matched only 71% of them, while 'you g?et some \\w+ logs' reached 90% and adding the hatchet line covered 100%. A rule that misses three lines in ten would keep declaring a stop mid-chop. '\\w+' rather than 'maple' so the rule survives a move to a different tree. suppress_pattern is essential for the same reason it is in the fishing profile: a full pack halts chopping outright, so log messages stop on EVERY bank trip - without it this rule fires once per trip, which is exactly the once-per-cycle noise the other profiles had to be retuned to avoid. pack_nearly_full already reports that case. stop_seconds=45 against a log arriving every 2-3s leaves a very wide margin for a garbled OCR run; lower it to ~20 if a faster stop report matters more than tolerance for unreadable frames.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000
+    },
+    {
+      "name": "session_hour",
+      "kind": "timer",
+      "region": "session_timer",
+      "step": 3600,
+      "cooldown": 60,
+      "milestone_message": "You've been woodcutting for {label} ({elapsed}).",
+      "message": "Session milestone",
+      "alert_body": "Woodcutting for {label} ({elapsed}).",
+      "sound": "completion-rotation",
+      "_note": "Reads the Metrics panel's own elapsed timer rather than tracking wall-clock time in the watcher. That is the better source: it is the number already on screen, it pauses when the player pauses it, and it survives a watcher restart because the game owns it. step=3600 fires once per hour. The parser anchors on [0-5] for the minute and second fields so a garbled frame like '00:82:09' is rejected rather than becoming a bogus elapsed time, and a timer reset rewinds the milestone counter so a fresh session starts clean.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000
+    }
+  ],
+  "_notification_note": "Rules use urgency 'normal' with an explicit timeout_ms so KDE auto-dismisses them. Setting urgency to 'critical' makes KDE keep the popup until it is closed by hand and ignore timeout_ms - only do that for an alert you must not miss."
+}
