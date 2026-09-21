@@ -64,6 +64,14 @@
       "w": 210,
       "h": 50,
       "_note": "Elapsed-time readout at the bottom of the Metrics panel. The same geometry as the skilling profiles - RS3 pins the panel top-left at a fixed size, so the bossing layout does not move it. VERIFIED here: read '00:24:17' through to '00:24:29' across five samples, advancing exactly +3s per 3-second interval with no misparse."
+    },
+    "metrics_panel": {
+      "anchor": "top-left",
+      "dx": 0,
+      "dy": 90,
+      "w": 520,
+      "h": 290,
+      "_note": "The whole Metrics panel body: four XP rows with their XP/h and ETA columns, and the Gain/Drops/GP-h row beneath them. Wider and taller than the skilling profiles' metrics_xp (20,100,410,105), which covers only the XP rows and cuts off the gold row entirely. Measured from a full-window capture at 3840x2058. NOT YET OCR-VERIFIED at native resolution - the readability check was done on a downscaled screenshot and is not representative; confirm with `shot metrics_panel` before relying on it."
     }
   },
   "rules": [
