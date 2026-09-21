@@ -64,12 +64,12 @@ Detailed detector behaviour, measurements, and tuning notes live in
 
 Screen Watcher currently expects:
 
-- Python 3.10+ (the current CI workflow tests Python 3.12)
+- Python 3.11+ (CI tests Python 3.11, 3.12, and 3.13)
 - `numpy`
 - Pillow
 - `xdotool`
 - `python-xcffib` — native XCB capture, measured 42x faster than ImageMagick
-- ImageMagick (`import`) — automatic fallback when xcffib is unavailable
+- ImageMagick (`import`) — optional automatic fallback when xcffib is unavailable
 - Tesseract OCR with English language data
 - `notify-send`
 - `paplay` for per-rule sounds
@@ -389,16 +389,16 @@ for the placeholder file.
 |---|---|
 | `state/watch.log` | stdout/stderr when started with the background example |
 | `state/alerts.jsonl` | structured notification history |
-| `state/occupancy.jsonl` | inventory transitions used by `stats` |
-| `state/counters.jsonl` | running `counter` totals, restored at startup |
+| `state/occupancy.jsonl` | profile-scoped inventory transitions with Unix timestamps, used by `stats` |
+| `state/counters.jsonl` | profile-scoped running `counter` totals with Unix timestamps, restored at startup |
 | `state/watcher.pid` | singleton process marker |
 | `calibrate.png` | default full-window calibration image written in the repository root |
 | `shot_<region>.png` | default output from `shot` when `--out` is not supplied |
 | system temporary directory | short-lived OCR/capture scratch files, removed automatically |
 
-`calibrate.png` is ignored by Git. Named `shot_<region>.png` files are useful
-for local diagnostics but should be treated as potentially account-specific
-captures.
+`calibrate.png` and default `shot_<region>.png` captures are ignored by
+Git. Named screenshots are useful for local diagnostics but should still be
+treated as potentially account-specific captures.
 
 Do not commit runtime screenshots, logs, or account-specific captures unless
 they have been deliberately sanitized and added as test fixtures.
@@ -418,9 +418,12 @@ Run the lint policy used by CI:
   --ignore=E226,E501,E702,W503,W504
 ```
 
-The GitHub Actions workflow compiles the Python sources, runs pytest, and runs Flake8 on pushes and pull requests.
-It does not run live capture tests because CI has no RuneScape window,
-X session, or desktop notification service.
+The GitHub Actions workflow tests Python 3.11–3.13, compiles the Python
+sources, checks installed dependencies, runs pytest, and runs Flake8 on pushes
+and pull requests. It uses read-only repository permissions. Live RuneScape
+capture is intentionally absent because hosted CI has no game window, desktop
+session, or notification service; backend behavior is exercised through fake
+and mocked capture implementations.
 
 Rule evaluation returns an `Alert` value, while notification delivery,
 sound playback, and alert logging happen afterward. This keeps part of the
@@ -445,12 +448,13 @@ architectural limitations are documented in
 - Only fishing and thieving profiles are currently included.
 - Quest and boss profile types are accepted by validation, but the repository
   does not yet include complete quest or boss profiles.
-- `watcher.py` is still monolithic and is planned to be split into capture,
-  profiles, signals, rules, events, notifications, and CLI modules. Rule
-  evaluators route through a bound `GameInstance`; chat-driven rules also
-  consume one shared `ChatReader` event stream per region/cycle. Pixel rules
-  still call the compatibility `capture_array` helper rather than taking a
-  scheduler directly.
+- `watcher.py` is still monolithic and should be split into capture, runtime,
+  profiles, readers/signals, rules, persistence, notifications, diagnostics,
+  and CLI modules. The live loop now lets `FrameScheduler` own each polling
+  cycle and prefetch required regions through a bound `GameInstance`.
+  Chat-driven rules consume one shared `ChatReader` event stream per
+  region/cycle; several pixel rule functions still use the compatibility
+  `capture_array` helper internally.
 - **Chat OCR dominates the poll cycle.** Tesseract over the 0.39 MPx
   `chat_tail` region costs ~1121 ms, against ~18 ms for the capture itself.
   Native capture and sprite OCR removed the other bottlenecks; this one is
@@ -463,12 +467,19 @@ architectural limitations are documented in
   because the live regions total 0.69 MPx against a 7.90 MPx window.
 - Capture and OCR scratch files use unique temporary paths, so the earlier
   shared-scratch-file contention issue has been removed.
-- Polling uses a monotonic deadline, but `main` does not yet skip missed
-  deadlines. If a cycle runs substantially late, subsequent cycles can run
-  back-to-back until the schedule catches up.
+- Polling uses monotonic deadlines and skips deadlines that were already
+  missed, avoiding bursts of back-to-back catch-up cycles after slow OCR.
+- Local RuneScape chat timestamps are strongly recommended. Timestamped lines
+  support safe fuzzy OCR-variant suppression. Without timestamps Screen Watcher
+  only deduplicates exact lines while they remain visible; repeated identical
+  unstamped messages are intrinsically harder to distinguish.
+- Native KDE Wayland capture, KWin metadata integration, replay input, reusable
+  inventory/buff/resource readers, schema versioning, and the read-only overlay
+  are not complete yet.
 
-See [docs/application-outline.md](docs/application-outline.md) for the planned
-architecture and delivery stages.
+See [docs/priority-0-status.md](docs/priority-0-status.md) for the authoritative
+implementation status and [docs/application-outline.md](docs/application-outline.md)
+for the planned architecture and delivery stages.
 
 ## Release archives
 
