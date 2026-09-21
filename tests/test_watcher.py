@@ -1291,3 +1291,92 @@ def test_registry_reports_reader_statistics(monkeypatch):
     reader.read(sched)
 
     assert registry.stats() == [("chat", "chat_tail", 1, 1)]
+
+
+# --------------------------------------------------------------------------
+# Priority 0, step 6: layered OCR
+# --------------------------------------------------------------------------
+
+def _render_digits(text, pad_left=3, gap=2):
+    """Render a string using the shipped templates, as the game would."""
+    cells = []
+    for ch in text:
+        if ch.isdigit():
+            cells.append(watcher.DIGIT_TEMPLATES[ch])
+        else:
+            colon = np.zeros((watcher._GLYPH_H, 2), dtype=bool)
+            colon[4, :] = True
+            colon[9, :] = True
+            cells.append(colon)
+    width = pad_left + sum(c.shape[1] + gap for c in cells)
+    canvas = np.zeros((watcher._GLYPH_H + 6, width, 3), dtype=np.int16)
+    x = pad_left
+    for cell in cells:
+        h, w = cell.shape
+        canvas[3:3 + h, x:x + w][cell] = 220
+        x += w + gap
+    return canvas
+
+
+def test_all_digits_have_templates():
+    assert sorted(watcher.DIGIT_TEMPLATES) == [str(d) for d in range(10)]
+    for template in watcher.DIGIT_TEMPLATES.values():
+        assert template.shape == (watcher._GLYPH_H, watcher._GLYPH_W)
+
+
+def test_sprite_ocr_reads_a_rendered_timer():
+    frame = _render_digits("01:23:45")
+    assert watcher.read_numeric(frame) == "01:23:45"
+
+
+def test_sprite_ocr_reads_every_digit():
+    for digit in "0123456789":
+        frame = _render_digits(digit * 2)
+        assert watcher.read_numeric(frame) == digit * 2, digit
+
+
+def test_segment_glyphs_marks_separators():
+    glyphs = watcher.segment_glyphs(_render_digits("12:34"))
+    kinds = ["sep" if g is None else "digit" for g in glyphs]
+    assert kinds == ["digit", "digit", "sep", "digit", "digit"]
+
+
+def test_sprite_ocr_refuses_non_numeric_input():
+    """Returning None is what makes the Tesseract fallback correct."""
+    assert watcher.read_numeric(np.zeros((20, 60, 3), dtype=np.int16)) is None
+
+    rng = np.random.default_rng(0)
+    noise = rng.integers(0, 255, (20, 60, 3)).astype(np.int16)
+    assert watcher.read_numeric(noise) is None
+
+
+def test_match_digit_reports_low_confidence():
+    glyph = np.zeros((watcher._GLYPH_H, watcher._GLYPH_W), dtype=bool)
+    glyph[::2, ::2] = True
+    digit, score = watcher.match_digit(glyph, min_score=0.99)
+    assert digit is None
+    assert 0.0 <= score <= 1.0
+
+
+def test_ocr_numeric_falls_back_to_tesseract(monkeypatch):
+    calls = []
+    monkeypatch.setattr(watcher, "ocr",
+                        lambda wid, box, psm=6: calls.append(psm) or "fallback")
+
+    blank = np.zeros((20, 60, 3), dtype=np.int16)
+    assert watcher.ocr_numeric("w", (0, 0, 60, 20), blank) == "fallback"
+    assert calls == [7]
+
+
+def test_ocr_numeric_skips_tesseract_when_sprites_match(monkeypatch):
+    monkeypatch.setattr(watcher, "ocr", lambda *a, **k: pytest.fail(
+        "tesseract must not run when sprite matching succeeds"))
+
+    frame = _render_digits("00:02:06")
+    assert watcher.ocr_numeric("w", (0, 0, 60, 20), frame) == "00:02:06"
+
+
+def test_parsed_sprite_timer_matches_parse_timer():
+    frame = _render_digits("01:00:02")
+    text = watcher.read_numeric(frame)
+    assert watcher.parse_timer(text) == 3602

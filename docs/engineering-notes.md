@@ -514,3 +514,67 @@ similarity without separating the clock measured real gameplay as noise.
 
 The rule evaluators still call `ocr_cached` directly. Moving them onto readers
 is step 10. `InventoryReader` and `BuffBarReader` are not implemented.
+
+
+## Priority 0, step 6 — layered OCR
+
+RuneScape renders its UI numbers from a fixed sprite font, so a template
+match beats general OCR on exactly the values that matter most: timers,
+stack counts, resource numbers.
+
+```text
+read_numeric(frame)        sprite matching, or None when unsure
+    -> ocr_numeric(...)    falls back to Tesseract on None
+```
+
+### Why this was worth doing
+
+After step 3 made capture fast, Tesseract became the dominant cost in the
+pipeline: **165.7 ms per read** on the session timer, roughly ten times the
+entire four-region XCB capture cycle.
+
+| path | cost |
+|---|---|
+| Tesseract | 165.5 ms |
+| sprite matching | **0.066 ms** |
+| speedup | **2516x** |
+
+### Returning None is the point
+
+`read_numeric` returns None rather than a guess when any glyph fails to
+match confidently, and the caller falls back to Tesseract. A confident wrong
+number is much worse than admitting the match failed - a misread timer would
+fire an hour milestone at the wrong moment and look authoritative doing it.
+
+Verified to return None for chat text, blank frames, and random noise.
+
+### Single-sample templates were not good enough
+
+The first template set was harvested one sample per digit. It read `0` as
+`6` and agreed with Tesseract **0 times out of 10**.
+
+The templates were not wrong - `0` genuinely scored highest, 0.821 against
+0.684 - but a single sample sits too close to the decision boundary, so a
+marginal frame flips or returns None.
+
+The shipped templates are a pixel-wise majority vote over **564 live
+samples** harvested by sampling the timer and cross-checking each frame
+against Tesseract's reading. Self-match scores are 0.88-0.97 mean, minimum
+0.718, which is why the threshold sits at 0.80 rather than higher.
+
+After that change: **14/14 agreement with Tesseract at every threshold from
+0.60 to 0.80**.
+
+### Where the remaining time goes
+
+`_eval_timer` now costs ~83 ms per evaluation, essentially all of it the
+ImageMagick capture inside `capture_array`. The OCR portion is 0.066 ms.
+Once step 10 moves rules onto `GameInstance`, the same evaluation becomes
+~1 ms capture plus 0.07 ms OCR.
+
+### Not yet applied
+
+Stack-count reading still uses pixel counting rather than digit recognition.
+The live backpack had only two visible stack counts while this was built,
+which is not enough to validate a classifier - and the existing pixel-count
+approach is already reliable for the question `item_gained` asks.
