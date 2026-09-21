@@ -504,12 +504,12 @@ class X11XcbBackend(CaptureBackend):
         return window_size(handle)
 
     def grab_array(self, handle: str, box) -> np.ndarray:
-        import xcffib.xproto as xproto
         if not handle:
             raise CaptureError("empty window id")
         x, y, w, h = (int(v) for v in box)
         if w <= 0 or h <= 0:
             raise CaptureError(f"degenerate capture box {box!r}")
+        import xcffib.xproto as xproto
         try:
             conn = self._connect()
             reply = conn.core.GetImage(
