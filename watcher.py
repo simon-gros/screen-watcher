@@ -2389,7 +2389,7 @@ _GAUGE_FIXUPS = str.maketrans({"[": "/", "]": "/", "I": "/", "|": "/",
                                "&": "8", "l": "1", "O": "0", "o": "0"})
 
 
-def parse_gauge(text: str, maximum: int, tolerance: int = 2
+def parse_gauge(text: str, maximum: int, tolerance: int | None = None
                 ) -> tuple[int, int] | None:
     """Read a ``current/maximum`` pair whose maximum is already known.
 
@@ -2400,18 +2400,35 @@ def parse_gauge(text: str, maximum: int, tolerance: int = 2
 
     Knowing the maximum makes it tractable: find that number in the stream
     and take the value immediately before it. `tolerance` allows the
-    maximum's own digits to be misread by a little, since a gauge maximum
-    is fixed for a given character and any near match is the right anchor.
+    maximum's own digits to be misread, since a gauge maximum is fixed for
+    a given character and any near match is the right anchor.
+
+    The default tolerance scales with the maximum - 0.5%, at least 2 - and
+    that matters. A 10,597 life pool was observed reading as both 10,597
+    and 10,557, because OCR confuses 9 and 5 in this font. A flat tolerance
+    of 2 dropped those frames entirely, and with `confirm_readings` needing
+    consecutive low readings, losing alternate frames delays a critical
+    health alert at exactly the moment it is needed.
 
     Returns ``(current, maximum)``, or None when no plausible pair is found.
     Values above the maximum are rejected rather than clamped: they mean the
     reading was wrong, and a confident wrong number is worse than silence.
     """
+    if tolerance is None:
+        tolerance = max(2, int(maximum * 0.005))
     fixed = text.translate(_GAUGE_FIXUPS)
     values = []
-    for m in re.finditer(r"\d[\d,]*", fixed):
+    # A period is accepted as a thousands separator. OCR renders the comma
+    # in "2,309" as a full stop often enough that ignoring it read the
+    # number as 309 - a tenfold underread that fires a false critical
+    # health alert. Only a period followed by exactly three digits is
+    # treated this way, so a genuine decimal is not silently multiplied.
+    for m in re.finditer(r"\d[\d,.]*\d|\d", fixed):
+        token = m.group(0)
+        if not re.fullmatch(r"\d+|\d{1,3}(?:[,.]\d{3})+", token):
+            continue
         try:
-            value = int(m.group(0).replace(",", ""))
+            value = int(token.replace(",", "").replace(".", ""))
         except ValueError:
             continue
         # A number followed by '%' is the adrenaline readout, not a gauge

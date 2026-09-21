@@ -64,17 +64,17 @@
       "kind": "gauge",
       "region": "vitals",
       "maximum": 10597,
-      "warn_below": 50,
+      "warn_below": 30,
       "confirm_readings": 2,
       "cooldown": 30,
       "message": "Health low",
       "item": "health",
-      "alert_body": "Life {current}/{maximum} ({percent}%). Eat or leave.",
+      "alert_body": "Life {current}/{maximum} ({percent}%). Eat now.",
       "sound": "dialog-error-serious",
       "urgency": "critical",
       "timeout_ms": 20000,
       "enabled": true,
-      "_note": "Now expressible as a gauge rule rather than an ocr rule, which could only match text and would have fired on every reading. warn_below=50 rather than lower because at Arch-Glacor an unattended player who is already halved is usually losing faster than they can react. confirm_readings=2 rejects a single bad frame: hitsplats and overlays draw over the digits and produce one wrong number, and waking someone for that is the false alarm that makes alerts worth ignoring. maximum=10597 is this character's life points."
+      "_note": "Requested threshold: 30% of a ~10,600 life pool, so it fires around 3,180 points. Expressible only as a gauge rule - the ocr kind matches text and cannot compare numbers, so a health rule written that way fires on every reading. confirm_readings=2 rejects a single bad frame: hitsplats and overlays draw over the digits and produce one wrong number, and waking someone for that is the false alarm that makes alerts worth ignoring - this rule already shipped 'Life 4/10,597' once at full health before the parser was fixed. maximum=10597 is THIS character's pool; OCR also reads it as 10,557 because it confuses 9 and 5 in this font, which the parser's scaled tolerance absorbs."
     },
     {
       "name": "low_prayer",

@@ -2752,3 +2752,64 @@ def test_loot_rule_reports_the_whole_line(monkeypatch):
                              (100, 100), 100.0)
     assert alert is not None
     assert "Glacor remnants" in alert.body
+
+
+def test_parse_gauge_tolerates_a_misread_maximum():
+    """A 10,597 pool reads as 10,557 too - OCR confuses 9 and 5.
+
+    A flat tolerance of 2 dropped those frames entirely, and with
+    confirm_readings needing consecutive low readings, losing alternate
+    frames delays a critical health alert exactly when it is needed.
+    """
+    text = "I§8,197[1o,557 @85% @0/7&0 @so/so"
+    assert watcher.parse_gauge(text, 10597) == (8197, 10597)
+
+
+def test_parse_gauge_tolerance_stays_tight_on_small_gauges():
+    """A 780 prayer pool must not absorb a genuinely different number."""
+    assert watcher.parse_gauge("515/700", 780) is None
+    assert watcher.parse_gauge("515/781", 780) == (515, 780)
+
+
+def test_low_health_fires_at_the_requested_threshold(monkeypatch):
+    """30% of a ~10,600 pool is about 3,180 points."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    spec = {r["name"]: r for r in cfg["rules"]}["low_health"]
+    assert spec["warn_below"] == 30
+
+    rule = watcher.Rule(**{k: v for k, v in spec.items()
+                           if not k.startswith("_")})
+    rule._armed = True
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    # Comfortably above the threshold: silent, however many readings.
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "3,500/10,597")
+    for now in (1.0, 2.0, 3.0):
+        assert watcher.evaluate(rule, "0x1", region, (100, 100), now) is None
+
+    # Below it: fires once confirmed.
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: "3,000/10,597")
+    assert watcher.evaluate(rule, "0x1", region, (100, 100), 4.0) is None
+    alert = watcher.evaluate(rule, "0x1", region, (100, 100), 5.0)
+    assert alert is not None and "28%" in alert.body
+
+
+def test_parse_gauge_accepts_a_period_thousands_separator():
+    """OCR renders the comma in "2,309" as a full stop.
+
+    Ignoring it read the number as 309 - a tenfold underread that fired a
+    false critical health alert at 95% health. Observed live as
+    "2.309/10,597" and "2.142/10597".
+    """
+    assert watcher.parse_gauge("I @ 2.309/10,597 y@x%", 10597) == (2309, 10597)
+    assert watcher.parse_gauge("I @ 2.142/10597 ,@7", 10597) == (2142, 10597)
+
+
+def test_parse_gauge_handles_every_observed_separator_style():
+    """Commas, periods, and none at all, in either position."""
+    for text, expected in (
+            ("9,309/10,597 55% 0/780", (9309, 10597)),
+            ("I © 2177/10597 y@x%", (2177, 10597)),
+            ("I§9,347[1o,597 @85%", (9347, 10597))):
+        assert watcher.parse_gauge(text, 10597) == expected
