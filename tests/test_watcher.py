@@ -4142,6 +4142,70 @@ def test_fingerprint_is_optional():
     assert watcher.check_fingerprint({}, (1, 1), "any") == []
 
 
+def _wood_box_sequence(rule, monkeypatch):
+    """Replay a real wood-box occupancy run; return (occ, body) alerts.
+
+    Captured live while chopping maples with a Magic wood box: storing
+    logs drops the pack in batches, so occupancy falls without any
+    banking. Times are 3s apart, matching the observed poll spacing.
+    """
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: np.zeros((10, 10, 3), dtype=np.int16))
+    fired, now = [], 1000.0
+    for occ in (7, 7, 7, 1, 1, 7, 7, 7, 2, 2, 10, 10, 14, 20, 20, 24, 26, 27):
+        monkeypatch.setattr(watcher, "count_occupied",
+                            lambda *a, occ=occ, **k: (occ, 30))
+        alert = watcher.evaluate(rule, "w", region, (100, 100), now)
+        if alert:
+            fired.append((occ, alert.body))
+        now += 3.0
+    return fired
+
+
+def _lead_rule(**over):
+    base = dict(name="pack_nearly_full", kind="inventory", region="backpack",
+                capacity=28, mode="lead", lead_seconds=20, warn_free=3,
+                cooldown=55, log_occupancy=False, message="Bank soon",
+                alert_body="{free} slots left - bank soon.")
+    base.update(over)
+    return Rule(**base)
+
+
+def test_wood_box_emptying_does_not_trigger_a_bogus_fill_projection(monkeypatch):
+    """A wood box empties the pack mid-grind, which corrupts the ETA.
+
+    Any drop over two slots is treated as banking and clears the fill
+    history, so the rapid gains straight after a box store look like an
+    explosive fill rate. Replaying the measured sequence without the
+    guard fired "18 slots left" at 10/28 - and, having disarmed, then
+    stayed silent through 27/28 when the pack genuinely was filling.
+    """
+    fired = _wood_box_sequence(_lead_rule(min_occupancy=18), monkeypatch)
+
+    assert fired, "a near-full pack must still warn"
+    for occ, _body in fired:
+        assert occ >= 18, f"projection fired at {occ}/28"
+
+
+def test_min_occupancy_does_not_gag_the_free_slot_floor(monkeypatch):
+    """The floor reads the live count, so it must fire regardless.
+
+    min_occupancy suppresses a *projection* built on a corrupted
+    history. It must not suppress "3 slots left", which is true however
+    the rule got there - otherwise the guard would trade a false alarm
+    for a missed pack.
+    """
+    rule = _lead_rule(min_occupancy=99, lead_seconds=0)  # projection off
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: np.zeros((10, 10, 3), dtype=np.int16))
+    monkeypatch.setattr(watcher, "count_occupied", lambda *a, **k: (26, 30))
+
+    alert = watcher.evaluate(rule, "w", region, (100, 100), 1000.0)
+    assert alert is not None and "2 slots left" in alert.body
+
+
 def test_woodcutting_pattern_survives_the_dropped_g():
     """Tesseract reads "You get" as "You et" on this font often enough
     to matter: measured over 852 live lines while chopping maples, the
@@ -4159,7 +4223,15 @@ def test_woodcutting_pattern_survives_the_dropped_g():
                  "You et some maple logs. v",
                  "You get some maple logs, y",
                  "[22:16:23] You swing your hatchet at the tree.",
-                 "(22:17:16] You swing your hatchet at the tree"):
+                 "(22:17:16] You swing your hatchet at the tree",
+                 # Second live session: capital-I for l, a comma or full
+                 # stop inside "your hatchet", and a hyphenated "get-some".
+                 # These were 2.4% of activity lines over 498 samples.
+                 "[09:36:34] You get some maple ogs,",
+                 "You get some maple Iogs. K",
+                 "You swing your, hatchet at the tree.",
+                 "You swing your. hatchet at the tree. i",
+                 "You get-some maple logs. )"):
         assert pattern.search(line), line
 
     # Another tree must keep the rule working - hence \w+, not "maple".
@@ -4169,7 +4241,15 @@ def test_woodcutting_pattern_survives_the_dropped_g():
     for line in ("[22:14:51] You pick the target's pocket.",
                  "[22:14:51] 350 coins have been added to your money pouch.",
                  "# News: Zarosian demons have appeared near the Forgotten",
-                 "You need a hatchet to chop this tree."):
+                 "You need a hatchet to chop this tree.",
+                 "[09:35:21] Your restful sleep increases your rested XP.",
+                 "[09:35:11] Welcome to RuneScape.",
+                 # The loosened pattern must not swallow other "get some"
+                 # lines, nor the wood box's own messages.
+                 "You get some flowers.",
+                 "You get some water.",
+                 "Your wood box is full.",
+                 "You fill your wood box with maple logs."):
         assert not pattern.search(line), line
 
     # A full pack halts chopping, so log lines stop on every bank trip.

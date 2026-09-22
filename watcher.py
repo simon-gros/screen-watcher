@@ -894,9 +894,18 @@ def cmd_watch(args) -> None:
     claim_singleton()
     cfg = load_config(args.config)
     ACTIVE_SKILL = cfg.get("skill", "unnamed")
-    wid, size = resolve_window(cfg)
     # Bind the capture stack built in steps 1-3 so every rule inherits the
     # selected backend instead of spawning ImageMagick per region.
+    #
+    # The backend is asked for the window FIRST. `resolve_window` goes
+    # straight to xdotool, so calling it before this exited on "window not
+    # found" whenever the backend was not X11 - `watch --backend replay`
+    # was unusable even though `doctor --backend replay` ran the whole
+    # stack happily. That left rules impossible to exercise end to end
+    # without the game running, which is what the replay fixtures exist
+    # for. Backends that own a synthetic handle (replay, portal) resolve
+    # it through `find`/`size` here; the X11 path below stays the
+    # fallback for a backend that has no window of its own.
     backend = make_backend(getattr(args, "backend", None))
     game = GameInstance(cfg["window"]["wm_class"], backend=backend)
     if game.acquire():
@@ -904,6 +913,7 @@ def cmd_watch(args) -> None:
         set_active_game(game)
     else:
         game = None
+        wid, size = resolve_window(cfg)
     regs = cfg["_regions"]
     rules = [Rule(**{k: v for k, v in r.items() if not k.startswith("_")})
              for r in cfg["rules"] if r.get("enabled", True)]

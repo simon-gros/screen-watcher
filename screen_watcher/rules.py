@@ -66,6 +66,11 @@ class Rule:
     capacity: int = 28
     lead_seconds: float = 90.0
     warn_free: int = 3
+    # Minimum occupancy before a projected-fill alert may fire. 0 disables
+    # the guard. For a grind where something empties the pack mid-run (a
+    # wood box, a bank preset), this stops a reset fill-history producing
+    # a bogus ETA at low occupancy. The warn_free floor ignores it.
+    min_occupancy: int = 0
     cell_threshold: float = 8.0
     # "lead" warns ahead of time from the projected fill rate; "overflow" waits
     # until the pack has actually been full for overflow_seconds. Short cycles
@@ -239,6 +244,18 @@ def _eval_inventory(rule: Rule, wid: str, region: "_w().Region", box, now: float
         return
     hit_lead = eta <= rule.lead_seconds
     hit_floor = free <= rule.warn_free
+    # An ETA alone is not enough when something empties the pack mid-grind.
+    # A Magic wood box swallows logs in batches, so occupancy falls 7->1
+    # without any banking; that clears the fill history, and the next few
+    # rapid gains look like an explosive fill rate. MEASURED against a real
+    # wood-box sequence: the rule fired "18 slots left - bank soon" at
+    # 10/28 and was then disarmed all the way to 27/28, so it cried wolf
+    # early and stayed silent when the pack genuinely was about to fill.
+    # `min_occupancy` requires the pack to actually be filling up before a
+    # projection may fire. The slot floor is unaffected: it reads the
+    # current count, which is true whatever the history says.
+    if rule.min_occupancy > 0 and occ < rule.min_occupancy:
+        hit_lead = False
     if (hit_lead or hit_floor) and rule.ready(now):
         rule._armed = False
         if hit_lead and eta != float("inf"):
