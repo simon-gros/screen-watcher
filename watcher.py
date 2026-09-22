@@ -1004,6 +1004,10 @@ def cmd_watch(args) -> None:
                         # window size and the full region table.
                         rule._corroborate_box = regs[
                             rule.corroborate_region].resolve(size)
+                    if rule.require_items_region:
+                        items = regs[rule.require_items_region]
+                        rule._items_box = items.resolve(size)
+                        rule._items_grid = items.grid
                     alert = evaluate(rule, wid, regs[rule.region], size, now, cycle)
                     if alert is not None:
                         notify(alert.title, alert.body, alert.urgency,

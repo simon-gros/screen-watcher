@@ -214,6 +214,22 @@ def validate_config(cfg: object) -> None:
                 raise ValueError(
                     f"rule {name!r} references unknown corroborate_region "
                     f"{corroborate_region!r}")
+        items_region = rule.get("require_items_region")
+        if items_region is not None:
+            # Only `activity` reads these fields; elsewhere they would be
+            # silently ignored, which is worse than refusing the profile.
+            if kind != "activity":
+                raise ValueError(
+                    f"rule {name!r}: require_items_region is only valid for "
+                    "activity rules")
+            if items_region not in regions:
+                raise ValueError(
+                    f"rule {name!r} references unknown require_items_region "
+                    f"{items_region!r}")
+            if not regions[items_region].grid:
+                raise ValueError(
+                    f"rule {name!r}: require_items_region {items_region!r} "
+                    "needs a grid to count items")
         for key in ("pattern", "suppress_pattern", "trip_pattern", "out_pattern",
                     "item_pattern", "ignore_pattern", "corroborate_pattern"):
             pattern = rule.get(key)

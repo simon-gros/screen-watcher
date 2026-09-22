@@ -4336,45 +4336,81 @@ def test_total_fires_exactly_once_per_step_over_a_long_climb(monkeypatch):
         ["2", "3", "4", "5"]
 
 
-def test_fire_burnout_never_matches_the_routine_burning_lines():
-    """The burnout rule shares its vocabulary with the activity lines.
+def test_fire_burnout_is_detected_from_silence_not_a_chat_line():
+    """RS3 says NOTHING when a bonfire burns out - player-confirmed.
 
-    "You add a log to the fire" and "The fire catches and the logs begin
-    to burn" both contain "fire" and a burn word, and they run several
-    times a second - a loose burnout pattern would alert continuously
-    while the fire is perfectly healthy. That makes the negative cases
-    the important half of this test.
+    The first version of this rule watched chat for a burnout message
+    and could never have fired: the same dead-rule failure as the
+    impling pattern, which sat in three profiles matching nothing.
+    Chat silence is the only available signal, so the rule is an
+    `activity` kind watching the burning lines stop.
     """
     cfg = load_config(Path("profiles/firemaking.json"))
     rules = {r["name"]: r for r in cfg["rules"]}
-    burnout = re.compile(rules["fire_burnt_out"]["pattern"], re.I)
+    rule = rules["fire_burnt_out"]
 
-    for line in ("The fire burns out.",
-                 "Your fire burns out.",
-                 "The bonfire burns out.",
-                 "The fire has burnt out.",
-                 "The fire goes out.",
-                 "The fire burns out, leaving a heap of ashes.",
-                 "A heap of ashes remains."):
-        assert burnout.search(line), line
+    assert rule["kind"] == "activity", "a chat-line rule can never fire here"
 
+    # It watches the lines that prove burning, and must match them -
+    # the inverse of the old test, which required it NOT to.
+    pattern = re.compile(rule["pattern"], re.I)
     for line in ("You add a log to the fire.",
-                 "The fire catches and the logs begin to burn.",
-                 "You attempt to light the logs.",
-                 "A fire spirit emerges from the bonfire.",
-                 "1,200 coins have been added to your money pouch.",
-                 "Congratulations, you've just advanced a Firemaking level!"):
-        assert not burnout.search(line), line
+                 "The fire catches and the logs begin to burn."):
+        assert pattern.search(line), line
 
-    # The alert must say what to do: collect the ashes, relight.
-    body = rules["fire_burnt_out"]["alert_body"].lower()
+    # What makes it specific rather than a duplicate of
+    # firemaking_stopped: logs must still be in the pack.
+    assert rule["require_items_region"] == "backpack"
+    assert rule["require_items_above"] >= 1
+
+    body = rule["alert_body"].lower()
     assert "ash" in body and ("pick" in body or "collect" in body)
     assert "light" in body or "new fire" in body
 
-    # If the burnout turns out to be silent in chat, this rule never
-    # fires - so the chat-silence fallback must still exist.
-    assert "firemaking_stopped" in rules
+
+def test_activity_rule_holds_fire_when_the_supply_ran_out(monkeypatch):
+    """A dead fire and an empty pack look identical in chat.
+
+    Both stop the "You add a log" line. Logs still in the pack mean the
+    supply is not the cause, so the fire died on its own - and only
+    then is "pick up the ashes and relight" the right advice. With the
+    pack empty this must stay silent and let logs_running_out report
+    the real cause, or the two events share one misleading message.
+    """
+    region = Region("top-left", 0, 0, 10, 10)
+
+    def run(items_left):
+        rule = Rule(name="fire_burnt_out", kind="activity", region="chat_tail",
+                    pattern="you add a log to the fire",
+                    require_items_region="backpack", require_items_above=1,
+                    stop_seconds=20, cooldown=0, message="Fire burnt out",
+                    alert_body="burnt out")
+        rule._items_box = (0, 0, 10, 10)
+        rule._items_grid = (0, 0, 5, 5, 2, 2)
+        monkeypatch.setattr(watcher, "capture_array",
+                            lambda *a, **k: np.zeros((10, 10, 3), dtype=np.int16))
+        monkeypatch.setattr(watcher, "count_occupied",
+                            lambda *a, **k: (items_left, 30))
+        # Burning, then silence for longer than stop_seconds.
+        monkeypatch.setattr(watcher, "ocr_cached",
+                            lambda *a, **k: "[10:00:00] You add a log to the fire.")
+        watcher.evaluate(rule, "0x1", region, (100, 100), 1000.0)
+        monkeypatch.setattr(watcher, "ocr_cached",
+                            lambda *a, **k: "[10:00:30] nothing is happening")
+        return watcher.evaluate(rule, "0x1", region, (100, 100), 1040.0)
+
+    assert run(8) is not None, "logs remain: the fire itself died"
+    assert run(0) is None, "pack empty: logs_running_out owns this"
+
+
+def test_firemaking_keeps_a_general_stop_rule_as_well():
+    """The burnout rule is deliberately narrow, so the net stays."""
+    cfg = load_config(Path("profiles/firemaking.json"))
+    rules = {r["name"]: r for r in cfg["rules"]}
+
     assert rules["firemaking_stopped"]["kind"] == "activity"
+    assert not rules["firemaking_stopped"].get("require_items_region"), (
+        "the general rule must still fire when the pack is empty")
 
 
 def test_firemaking_has_no_gold_milestone_rule():

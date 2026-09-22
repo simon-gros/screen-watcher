@@ -104,6 +104,11 @@ class Rule:
     absent_seconds: float = 12.0
     corroborate_region: str | None = None
     corroborate_pattern: str | None = None
+    # An `activity` rule may require supplies to still be present before it
+    # reports a stop. Distinguishes "the activity died on its own" from
+    # "the consumable ran out", which look identical in chat.
+    require_items_region: str | None = None
+    require_items_above: int = 1
     # stack
     stack_tolerance: int = 3
     new_slot_only: bool = False
@@ -144,6 +149,8 @@ class Rule:
     _elapsed: int = field(default=0, repr=False)
     _absent_since: float = field(default=0.0, repr=False)
     _corroborate_box: tuple | None = field(default=None, repr=False)
+    _items_box: tuple | None = field(default=None, repr=False)
+    _items_grid: tuple | None = field(default=None, repr=False)
     _total: int = field(default=0, repr=False)
     _milestone: int = field(default=0, repr=False)
     _level_since: float = field(default=0.0, repr=False)
@@ -354,11 +361,23 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
         return
 
     quiet = now - rule._last_activity
-    if rule._armed and quiet >= rule.stop_seconds and rule.ready(now):
-        rule._armed = False
-        return rule.fire(now, f"No matching activity for {quiet:.0f}s. "
-                         f"Check the game.",
-                         source_text=rule._last_activity_source, quiet=quiet)
+    if not (rule._armed and quiet >= rule.stop_seconds and rule.ready(now)):
+        return
+    # Optionally require supplies to still be present. A bonfire dying and
+    # the pack running empty both stop the chat line, and chat alone cannot
+    # tell them apart - the RS3 burnout is silent, confirmed by the player.
+    # Items still in the pack mean the supply is not the cause, so the
+    # activity stopped on its own. Without this the two events share one
+    # message and neither names its own remedy.
+    if rule.require_items_region and rule._items_box:
+        frame = _w().capture_array(wid, rule._items_box, cycle=cycle)
+        occupied, _cells = _w().count_occupied(frame, rule._items_grid)
+        if occupied < max(1, int(rule.require_items_above)):
+            return
+    rule._armed = False
+    return rule.fire(now, f"No matching activity for {quiet:.0f}s. "
+                     f"Check the game.",
+                     source_text=rule._last_activity_source, quiet=quiet)
 
 
 def count_by_colour(frame: np.ndarray, grid: tuple, min_blue: float,
