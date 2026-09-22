@@ -393,6 +393,18 @@ def seen_before(key: str, seen) -> bool:
         if difflib.SequenceMatcher(None, letters,
                                    other_letters).ratio() >= 0.93:
             return True
+
+    # A timestamp-anchored fuzzy match was tried here and REJECTED. The
+    # idea was sound - RS3 stamps every line, and `norm_line` keeps those
+    # six digits at the front, so lines sharing a second are the same
+    # moment. But the numbers refuse it: a duplicate mangled into
+    # "A aolden beam st r one of your items" scores 0.887 against its
+    # clean twin, while two genuinely DIFFERENT drops in the same second
+    # - "receive: 1 x Large" against "4 x Huge" - score 0.932. The
+    # different drops look more alike than the duplicate does, so no
+    # threshold separates them and any setting either keeps the
+    # duplicate or loses a real drop. Losing a drop is far worse, so
+    # heavy OCR damage is left to produce an occasional double alert.
     return False
 
 

@@ -280,10 +280,25 @@
       "_note": "VERIFIED from live chat: 'Welcome to your session against: Arch-Glacor.' Marks the start of an instance, which is the anchor every per-kill statistic needs. Deliberately matches the generic prefix rather than the boss name, so the same rule works for any instanced encounter."
     },
     {
+      "name": "caught_by_ice",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "get up.{0,3}\\s*keep fighting",
+      "cooldown": 20,
+      "message": "Caught by the ice",
+      "alert_body": "Knocked down by Creeping Ice - move to the clear strip before it shatters.",
+      "sound": "battery-caution",
+      "_note": "Creeping Ice is THE mechanic at 0 mechanics: per the RuneScape Wiki it 'is always enabled and cannot be disabled', while all four togglable mechanics - and all 19 warning lines the wiki quotes - are off. So this is the only mechanic alert this profile can have, which makes it the most useful one here. The wiki describes the hit: 'If the player gets caught in the big icicles, they will be pushed towards the middle and take melee damage in the process.' The icicles then stand for ~9.6 seconds before shattering, leaving a strip eight game squares wide - hence the advice in the body. VERIFIED live: 'Get up. Keep fighting!' appeared 8 times in one sample. It is NOT a death - that reading was wrong and was corrected by the player; player_died covers real deaths separately. urgency stays normal and the sound is distinct, because being knocked down is recoverable and routine, not an emergency. cooldown=20 is just above the ~9.6s icicle cycle so a single knockdown reports once.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 12000,
+      "_sound_note": "battery-caution rather than message-attention, which adrenaline_full already owns. Creeping Ice fires often enough that sharing a tone with an unrelated alert would make both unreadable without looking."
+    },
+    {
       "name": "player_died",
       "kind": "ocr",
       "region": "chat_tail",
-      "pattern": "get up.{0,3}keep fighting|oh dear, you are dead|you have died|you died",
+      "pattern": "oh dear, you are dead|you have died|you died",
       "cooldown": 30,
       "message": "You died",
       "alert_body": "{line}",
@@ -291,7 +306,7 @@
       "urgency": "critical",
       "timeout_ms": 20000,
       "enabled": true,
-      "_note": "VERIFIED LIVE at Arch-Glacor, and the previous pattern would have MISSED every death here. Per the RuneScape Wiki, 'Deaths in normal mode fights are considered safe; Azzanadra will teleport the player out if this occurs' - so the usual 'Oh dear, you are dead!' never appears. The real line is 'Get up. Keep fighting!', seen 8 times in one live sample while the old pattern matched none of them. The generic death lines are kept for hard mode and for anywhere else this profile might be reused. '.{0,3}' absorbs the comma-for-period substitution this font produces constantly. Checked against six real Arch-Glacor lines including 'Get up and keep your distance', which must stay silent."
+      "_note": "Genuine death only. 'Get up. Keep fighting!' was briefly added here and that was WRONG: corrected by the player, it is the Creeping Ice knockdown, not a death - the wiki's Creeping Ice section says a caught player is 'pushed towards the middle and take melee damage', and they get straight back up. It now has its own rule, caught_by_ice. UNVERIFIED against a real death here: the wiki notes normal-mode deaths are safe and Azzanadra teleports the player out, so the wording may differ from the generic lines kept above. Confirm on the next actual death."
     },
     {
       "name": "food_gone",

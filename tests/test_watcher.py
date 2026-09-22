@@ -3516,32 +3516,66 @@ def test_level_up_ignores_requirement_and_total_lines():
         assert not re.search(pat, line, re.I), line
 
 
-def test_arch_glacor_death_uses_the_line_the_game_actually_sends():
-    """The death rule would have missed every death at this boss.
+def test_ice_knockdown_is_not_treated_as_a_death():
+    """"Get up. Keep fighting!" is Creeping Ice, not dying.
 
-    Per the RuneScape Wiki, "Deaths in normal mode fights are considered
-    safe; Azzanadra will teleport the player out if this occurs" - so
-    the usual "Oh dear, you are dead!" never appears. The real line is
-    "Get up. Keep fighting!", seen 8 times in one live sample while the
-    shipped pattern matched none of them.
+    I first read that line as a safe-death teleport and put it in
+    `player_died` under a critical "You died" alert. The player
+    corrected it: getting caught by the ice that builds along the floor
+    knocks you down, and the wiki agrees - a caught player is "pushed
+    towards the middle and take melee damage in the process", then
+    carries on.
+
+    The distinction matters because the two need opposite handling. A
+    knockdown is routine and recoverable, so it is a normal-urgency
+    alert with its own sound; a death is not. Conflating them meant a
+    critical "You died" several times a fight, which is the kind of
+    false alarm that gets every alert ignored.
     """
     cfg = load_config(Path("profiles/boss-arch-glacor.json"))
-    rule = next(r for r in cfg["rules"] if r["name"] == "player_died")
-    pattern = re.compile(rule["pattern"], re.I)
+    rules = {r["name"]: r for r in cfg["rules"]}
+
+    ice = re.compile(rules["caught_by_ice"]["pattern"], re.I)
+    death = re.compile(rules["player_died"]["pattern"], re.I)
 
     for line in ("Get up. Keep fighting!",
                  "Get up, Keep fighting!",     # period read as comma
-                 "Get up; Keep fighting!",
-                 "Oh dear, you are dead!"):    # kept for hard mode
-        assert pattern.search(line), line
+                 "Get up; Keep fighting!"):
+        assert ice.search(line), line
+        assert not death.search(line), (
+            f"{line!r} is a knockdown, not a death")
 
-    # Real Arch-Glacor chat that must stay silent.
+    assert death.search("Oh dear, you are dead!")
+    assert not ice.search("Oh dear, you are dead!")
+
+    # A knockdown is recoverable: it must not shout like an emergency.
+    assert rules["caught_by_ice"]["urgency"] == "normal"
+    assert (rules["caught_by_ice"]["sound"]
+            != rules["player_died"].get("sound"))
+
+    # Real Arch-Glacor chat that must stay silent for both.
     for line in ("Azzanadra: The Arch-Glacor has been bested.",
                  "The foe is beaten - but it will return.",
                  "You have killed 650 Arch-Glacor in normal mode.",
                  "You eat the desert sole.",
                  "Get up and keep your distance from the fighting area"):
-        assert not pattern.search(line), line
+        assert not ice.search(line), line
+        assert not death.search(line), line
+
+
+def test_creeping_ice_is_the_only_mechanic_this_profile_can_watch():
+    """At 0 mechanics, Creeping Ice is the whole mechanic surface.
+
+    The wiki quotes 19 warning lines for this boss and every one belongs
+    to a togglable mechanic - Flurry, Pillars of Ice, Exposed Core,
+    Frost Cannon - all of which are off. Creeping Ice "is always enabled
+    and cannot be disabled" and announces nothing itself; the knockdown
+    is the only observable trace of it.
+    """
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    names = {r["name"] for r in cfg["rules"] if r.get("enabled", True)}
+    assert "caught_by_ice" in names, (
+        "the one mechanic that cannot be disabled has no alert")
 
 
 def test_marks_cap_warns_only_when_the_allowance_runs_low():
