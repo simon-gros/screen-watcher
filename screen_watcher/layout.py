@@ -189,7 +189,23 @@ def find_chat(frame: np.ndarray, step: int = 60) -> PanelBox | None:
 
 
 def scan(frame: np.ndarray) -> dict:
-    """One full layout scan of a captured window."""
+    """One full layout scan of a captured window.
+
+    PRECISION: positions are accurate to about one scan step, so ~24px
+    vertically. Measured against an interface-scaling change, which
+    moves and resizes every panel while the window stays the same size:
+    the Backpack header was reported at y=1584 against a true 1560.
+
+    That is fine for the job this does - deciding whether the layout
+    CHANGED - and not fine for calibrating a region, where 24px is
+    enough to clip a row of chat or straddle two panels. Use `shot` to
+    measure a region; use this to learn that measuring is needed.
+
+    Interface scaling is the case that motivates scanning at all. The
+    window stays 3840x2058 and KWin still reports ui_scale 1.75, so the
+    profile fingerprint sees nothing wrong, while every panel has moved
+    and shrunk. Nothing else in the application can notice that.
+    """
     height, width = frame.shape[:2]
     titles = find_titles(frame)
     panels = {name: {"x": x, "y": y} for name, (x, y) in titles.items()}
