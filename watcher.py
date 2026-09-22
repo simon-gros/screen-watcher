@@ -750,6 +750,49 @@ def cmd_counter(args) -> None:
     print("restart the watcher for this to take effect")
 
 
+def cmd_layout(args) -> None:
+    """Scan where the interface panels are, and compare with last time.
+
+    Exists because a profile's regions are fixed offsets while the
+    interface is not: the wiki notes every window "may be moved and
+    resized". This is how a player checks what the watcher believes
+    before trusting its alerts, and how a second player on a different
+    layout sees what theirs looks like.
+    """
+    from screen_watcher import layout as layout_mod
+    cfg = load_config(args.config)
+    backend = make_backend(getattr(args, "backend", None))
+    game = GameInstance(cfg["window"]["wm_class"], backend=backend)
+    if not game.acquire():
+        sys.exit("window not found - is the game running?")
+    frame = game.backend.grab_array(game.handle,
+                                    (0, 0, game.size[0], game.size[1]))
+    found = layout_mod.scan(frame)
+    moved = layout_mod.changed_since(STATE_DIR, found)
+
+    print(f"window {found['window'][0]}x{found['window'][1]}")
+    titles = found.get("titles") or {}
+    for name, pos in sorted(titles.items(), key=lambda kv: (kv[1]["y"],
+                                                            kv[1]["x"])):
+        print(f"  {name:12s} x={pos['x']:>5} y={pos['y']:>5}")
+    chat = found.get("chat")
+    if chat:
+        print(f"  {'chat':12s} x={chat['x']:>5} y={chat['y']:>5} "
+              f"{chat['w']}x{chat['h']}  (found by its timestamps)")
+    if not titles and not chat:
+        print("  no panels recognised - title bars may be hidden")
+
+    if moved:
+        print("\nLAYOUT CHANGED since the last scan. Any region whose panel "
+              "moved is now reading whatever occupies those pixels; "
+              "re-measure it with `shot <region>`.")
+    elif layout_mod.load(STATE_DIR):
+        print("\nunchanged since the last scan")
+    if args.save:
+        layout_mod.save(STATE_DIR, found)
+        print("remembered")
+
+
 def cmd_regions(args) -> None:
     cfg = load_config(args.config)
     wid, size = resolve_window(cfg)
@@ -1148,6 +1191,12 @@ def main() -> None:
     ct.add_argument("--set", help="new total, e.g. 2300000")
     ct.add_argument("--name", help="counter rule name (default: the first)")
     ct.set_defaults(func=cmd_counter)
+
+    la = sub.add_parser("layout",
+                        help="scan where the interface panels are")
+    la.add_argument("--save", action="store_true",
+                    help="remember this layout as the new baseline")
+    la.set_defaults(func=cmd_layout)
 
     r = sub.add_parser("regions",
                        help="show regions and rules resolved against the "

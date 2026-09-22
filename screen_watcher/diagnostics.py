@@ -351,6 +351,47 @@ def _check_panel_identity(cfg: dict, game: GameInstance) -> list[Check]:
     return out
 
 
+def _check_layout(cfg: dict, game: GameInstance) -> list[Check]:
+    """Scan where the interface panels actually are, and remember it.
+
+    A profile's regions are fixed offsets; the wiki is explicit that
+    "every window on the screen may be moved and resized". Scanning the
+    live window means one profile can serve several players with
+    different layouts, and can notice when one person rearranges theirs
+    mid-session.
+
+    Reported, never enforced: the scan is evidence for the operator, and
+    a failed scan must not stop a watcher whose regions are still fine.
+    """
+    from screen_watcher import layout as layout_mod
+    if not game.handle or not game.size:
+        return []
+    try:
+        frame = game.backend.grab_array(game.handle,
+                                        (0, 0, game.size[0], game.size[1]))
+    except (CaptureError, ValueError, OSError):
+        return []
+    found = layout_mod.scan(frame)
+    names = sorted(found.get("titles") or {})
+    if found.get("chat"):
+        names.append("chat")
+    if not names:
+        return [Check("layout", WARN, "no interface panels recognised",
+                      "title bars may be hidden; regions are unverified")]
+
+    out = [Check("layout", PASS, f"{len(names)} panels found: "
+                 + ", ".join(names))]
+    state = Path(_w().STATE_DIR)
+    if layout_mod.changed_since(state, found):
+        out.append(Check(
+            "layout:changed", WARN,
+            "the interface has moved since the last scan",
+            "re-measure any region whose panel moved - its rules are "
+            "reading whatever now occupies those pixels"))
+    layout_mod.save(state, found)
+    return out
+
+
 def _check_capture(cfg: dict, game: GameInstance) -> list[Check]:
     """Actually capture each region and judge the frames.
 
@@ -537,6 +578,7 @@ def run_doctor(cfg: dict, path: Path, requested_backend: str | None = None
         checks += _check_regions(cfg, game)
         checks += _check_grids(cfg, game)
         checks += _check_panel_identity(cfg, game)
+        checks += _check_layout(cfg, game)
         checks += _check_capture(cfg, game)
         checks += _check_ocr(cfg, game)
     finally:

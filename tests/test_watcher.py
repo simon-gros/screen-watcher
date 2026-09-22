@@ -6224,3 +6224,76 @@ def test_persistence_is_reexported():
     for name in ("log_counter", "load_counter", "log_occupancy",
                  "load_cycles", "fill_rate"):
         assert getattr(watcher, name) is getattr(persistence, name), name
+
+
+# --------------------------------------------------------------------------
+# Interface layout detection
+# --------------------------------------------------------------------------
+
+def test_layout_fingerprint_ignores_when_it_was_scanned():
+    """Only panel positions decide whether a layout changed.
+
+    The scan records a timestamp for the operator's benefit. Including
+    it in the fingerprint would make every single scan look like a
+    rearranged interface, and the warning would be ignored within a day.
+    """
+    from screen_watcher import layout as layout_mod
+
+    base = {"window": [3840, 2058], "scanned_at": 1.0,
+            "titles": {"BACKPACK": {"x": 3225, "y": 1392}}, "chat": None}
+    later = {**base, "scanned_at": 9999.0}
+    moved = {**base, "titles": {"BACKPACK": {"x": 2000, "y": 900}}}
+
+    assert (layout_mod.fingerprint(base)
+            == layout_mod.fingerprint(later))
+    assert (layout_mod.fingerprint(base)
+            != layout_mod.fingerprint(moved))
+
+
+def test_layout_change_is_detected_and_then_remembered(tmp_path):
+    """The point of the cache: notice a move once, not for ever."""
+    from screen_watcher import layout as layout_mod
+
+    first = {"window": [3840, 2058], "scanned_at": 1.0,
+             "titles": {"BACKPACK": {"x": 3225, "y": 1392}}, "chat": None}
+    moved = {**first, "titles": {"BACKPACK": {"x": 2000, "y": 900}}}
+
+    layout_mod.save(tmp_path, first)
+    assert not layout_mod.changed_since(tmp_path, first)
+    assert layout_mod.changed_since(tmp_path, moved)
+
+    layout_mod.save(tmp_path, moved)
+    assert not layout_mod.changed_since(tmp_path, moved), (
+        "a remembered layout must stop warning once it is the new normal")
+
+
+def test_first_run_does_not_claim_the_layout_changed(tmp_path):
+    """With nothing remembered there is no change to report.
+
+    A fresh install, or a new machine, would otherwise open with a
+    warning about a rearrangement that never happened.
+    """
+    from screen_watcher import layout as layout_mod
+
+    current = {"window": [3840, 2058], "scanned_at": 1.0,
+               "titles": {"BACKPACK": {"x": 3225, "y": 1392}}, "chat": None}
+    assert not layout_mod.changed_since(tmp_path, current)
+
+
+def test_panel_box_anchors_to_the_nearest_corner():
+    """Detected panels become regions in the profile's own format.
+
+    Storing absolute pixels would break on the next window resize, which
+    is the failure the anchor format already exists to prevent.
+    """
+    from screen_watcher.layout import PanelBox
+
+    win = (3840, 2058)
+    bottom_right = PanelBox("backpack", 3225, 1392, 330, 560).as_region(win)
+    assert bottom_right["anchor"] == "bottom-right"
+    assert bottom_right["dx"] == 3225 + 330 - 3840
+    assert bottom_right["dy"] == 1392 + 560 - 2058
+
+    top_left = PanelBox("metrics", 0, 0, 520, 290).as_region(win)
+    assert top_left["anchor"] == "top-left"
+    assert top_left["dx"] == 0 and top_left["dy"] == 0
