@@ -34,12 +34,19 @@ are not the product boundary.
 
 ## Immediate implementation priority — Priority 0 Linux foundation
 
-When development resumes, **implement the Linux technical foundation before
-expanding broadly into additional skills**. The detailed research and package
-choices are recorded at the top of
-[`future-implementation-ideas.md`](future-implementation-ideas.md).
+**Status update, 22 September 2026:** the core Linux foundation described here
+has moved from design into the live implementation. XCB capture, KWin metadata,
+the portal/PipeWire backend, overlay delivery, replay support, profile
+fingerprints, runtime frame-health checks, and the first large module split are
+implemented. Broader reader/event normalization and wider replay/soak coverage
+remain incomplete, so practical validation still takes precedence over
+speculative expansion. The authoritative implementation checklist is
+[`priority-0-status.md`](priority-0-status.md).
 
-The immediate sequence is:
+The detailed research and package choices remain recorded at the top of
+[`future-implementation-ideas.md`](future-implementation-ideas.md). The
+sequence below is retained as the design order that produced the current
+foundation:
 
 1. `GameInstance` / `CaptureBackend` abstraction.
 2. Shared-frame scheduler/cache.
@@ -189,13 +196,15 @@ inspectable so the operator can see exactly why a rule exists.
 
 ### Observation backends
 
-The current ImageMagick/X11 capture path is an acceptable prototype but should
-not remain the long-term high-frequency architecture. The backend should resolve
-the game window, maintain geometry, detect resize/reacquisition, expose frames,
-and know nothing about Fishing, Thieving, bosses, or skill semantics.
+The high-frequency capture path is no longer centered on ImageMagick.
+`GameInstance` / `CaptureBackend` is implemented; native XCB is the default
+for X11/XWayland, ImageMagick is a fallback, replay is a first-class backend,
+and XDG ScreenCast + PipeWire is integrated for native Wayland. The backend
+still owns window/stream acquisition, geometry, resize/reacquisition, frame
+health, and pixels while remaining unaware of Fishing, Thieving, bosses, or
+other activity semantics.
 
-Define a `GameInstance`/observation-backend interface before capture
-assumptions spread further. Candidate backends:
+Current and future observation backends include:
 
 - native X11/XComposite/XShm capture;
 - XWayland-compatible capture where appropriate;
@@ -555,17 +564,30 @@ multi-client support possible without cross-contaminating alerts.
 
 ### Current foundation
 
-- Anchored region capture and calibration
-- ImageMagick/X11 subprocess capture suitable for the prototype stage
-- OCR, pixel, inventory, activity, and idle detectors
-- Explicit skill profiles for fishing and thieving
-- Profile validation and skill-aware alert logs
-- Quest/boss profile type support and development tests
+- Anchored region capture and calibration with profile compatibility
+  fingerprints.
+- Native XCB capture by default on X11/XWayland, ImageMagick fallback, replay,
+  and an integrated Wayland portal/PipeWire backend.
+- Read-only KWin window-state/focus discovery on KDE Wayland.
+- OCR, visual, inventory, activity, gauge, percentage, total, timer, presence,
+  stack, supply, and named-item drop detectors.
+- Chat-specific scrolling OCR, 2x upscale/inversion preprocessing, and
+  adaptive Sauvola thresholding; numeric gauges stay on a separate path.
+- Runtime blank/frozen-region health monitoring and `doctor` diagnostics.
+- Click-through layer-shell alert delivery through `watch --overlay`.
+- Versioned profile schemas/fingerprints and sanitized replay fixtures.
+- Shipped profiles for Fishing, Thieving/Pickpocketing, Woodcutting,
+  Firemaking, Arch-Glacor, and Giant Mole.
+- The first large module split under `screen_watcher/`, with `watcher.py`
+  retained as the CLI/compatibility surface.
 
-### Priority 0 engineering stage — implement before broad profile expansion
+### Priority 0 engineering stage — implemented baseline and remaining gaps
 
-This is the next coding stage and should be read before the broader coverage
-section.
+Most of the baseline below landed during 21–22 September 2026. It is retained
+here as the architectural checklist, while
+[`priority-0-status.md`](priority-0-status.md) records the exact live state.
+The important remaining gaps are broader reusable readers/normalized events,
+expanded fixture and soak coverage, and continued practical validation.
 
 - Split the monolithic script into observation backends, profiles, calibration/
   health, extractors, normalized events, activity/session state, rules, alerts,
