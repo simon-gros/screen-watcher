@@ -2138,6 +2138,90 @@ def test_sauvola_is_used_for_chat_but_never_for_the_gauges():
         "fires a critical health alert at full health")
 
 
+def test_batched_ocr_matches_separate_calls_and_is_faster():
+    """One tesseract process for several regions, same text.
+
+    Every call pays a ~72 ms process-startup floor, so four regions
+    spend ~290 ms on subprocess overhead before recognising anything.
+    Tesseract's `imagelist` input does them in one run: measured 876 ms
+    against 630 ms on the fixture, a 28% saving.
+
+    Correctness first - a faster reader that returns different text is
+    worthless, so this asserts identical output before it asserts speed.
+    """
+    import shutil
+    import time
+    if not shutil.which("tesseract"):
+        pytest.skip("tesseract not installed")
+
+    from PIL import Image
+    from screen_watcher import ocr as ocr_mod
+    fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/glacor"
+    frames = sorted(fixture.glob("*.png"))
+    if not frames:
+        pytest.skip("replay fixture not present")
+
+    full = np.asarray(Image.open(frames[0]).convert("RGB"))
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    size = (full.shape[1], full.shape[0])
+    names = ["chat_tail", "vitals", "session_timer", "gold_row"]
+    crops = []
+    for name in names:
+        x, y, w, h = cfg["_regions"][name].resolve(size)
+        crops.append(full[y:y + h, x:x + w])
+
+    start = time.perf_counter()
+    separate = [watcher.ocr_array(c) for c in crops]
+    apart = time.perf_counter() - start
+
+    start = time.perf_counter()
+    batched = ocr_mod.ocr_many(crops)
+    together = time.perf_counter() - start
+
+    assert len(batched) == len(crops), "a page must map to each region"
+    for name, one, many in zip(names, separate, batched):
+        assert one.strip() == many.strip(), f"{name} read differently"
+
+    assert together < apart * 0.85, (
+        f"batching saved nothing: {together * 1000:.0f} ms against "
+        f"{apart * 1000:.0f} ms")
+
+
+def test_batched_ocr_never_shifts_regions_onto_wrong_text():
+    """A missing page must not slide every later region along.
+
+    Pages come back form-feed separated in input order. If tesseract
+    emits fewer pages than it was given - an empty region, a failure -
+    a naive split would hand region N the text of region N+1, and a
+    rule would then match another region's chat. Padding keeps the
+    mapping, at the cost of an empty string.
+    """
+    import shutil
+    if not shutil.which("tesseract"):
+        pytest.skip("tesseract not installed")
+
+    from screen_watcher import ocr as ocr_mod
+
+    # Three regions, but tesseract is made to return only two pages.
+    calls = {}
+
+    def short_run(path, psm, env=None, sauvola=False):
+        calls["ran"] = True
+        return "first\fsecond"
+
+    original = ocr_mod._run_tesseract
+    ocr_mod._run_tesseract = short_run
+    try:
+        blank = np.zeros((20, 60), dtype=np.uint8)
+        got = ocr_mod.ocr_many([blank, blank, blank])
+    finally:
+        ocr_mod._run_tesseract = original
+
+    assert calls.get("ran"), "the batched path did not run"
+    assert got == ["first", "second", ""], (
+        f"a short result shifted regions onto the wrong text: {got}")
+
+
 def test_preprocessing_cuts_real_character_errors():
     """Upscale-and-invert, measured against known chat, not eyeballed.
 

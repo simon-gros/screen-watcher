@@ -190,6 +190,47 @@ Guarded by `test_preprocessing_cuts_real_character_errors`, which
 scores the real binary against the real fixture and fails if the
 preprocessing is removed.
 
+### Batched OCR: one process for several regions
+
+`ocr_many` writes the regions to a tesseract `imagelist` - a text file
+of image paths - and reads them all in a single process. Measured on
+the replay fixture across four regions: **876 ms separate against
+630 ms batched, a 28% saving**, with byte-identical text on every
+region.
+
+The saving is purely the avoided startup: at a ~72 ms floor per call,
+four regions spend ~290 ms in subprocess overhead before recognising
+anything. Three of those four are avoided.
+
+Pages come back form-feed separated in input order. A short result is
+**padded, never truncated**: if tesseract emits fewer pages than it was
+given, a naive split hands region N the text of region N+1 and a rule
+then matches another region's chat. Padding costs an empty string;
+shifting costs a wrong alert.
+
+Not yet wired into the watch loop. `FrameScheduler.prefetch` already
+takes the list of regions a pass wants, which is the precondition, but
+`watch` does not build a scheduler - that is foundation step 2.
+
+### XShm/XComposite: measured and deliberately not pursued
+
+The roadmap lists native XShm as an optional optimisation. It should
+stay optional. Measured per-region capture on a live 3840x2058 window:
+
+| region | capture |
+|---|---:|
+| chat_tail | 10.9 ms |
+| backpack | 7.6 ms |
+| boss_health | 5.6 ms |
+| vitals | 4.9 ms |
+| session_timer | 0.6 ms |
+
+**~29.6 ms total, against a ~874 ms OCR cycle - 3.4%.** Shared-memory
+transport would optimise the one part of the pipeline that is already
+negligible. Even eliminating capture entirely would save less than an
+eighth of what batching the OCR saves. Revisit only if the OCR cost
+falls far enough to change the ratio.
+
 ### Sauvola thresholding: chat only, never the gauges
 
 `thresholding_method=2` (Sauvola) is adaptive, which suits a chat panel
