@@ -272,6 +272,85 @@ def _check_grids(cfg: dict, game: GameInstance) -> list[Check]:
     return out
 
 
+#: Panel title expected above each region, keyed by region name. RS3 draws
+#: a title bar on every movable window, so the header is the cheapest proof
+#: that a region still points at the panel it was calibrated against.
+#: Panel titles RS3 draws that a region might land on by mistake. Used to
+#: say WHICH panel a misplaced region is reading, rather than only that
+#: the expected one is absent.
+_KNOWN_PANELS = ("SKILLS", "BACKPACK", "ALL CHAT", "EQUIPMENT", "PRAYER",
+                 "MAGIC", "MINIMAP", "NOTES", "FRIENDS", "QUEST")
+
+_EXPECTED_PANEL = {
+    "backpack": ("BACKPACK",),
+    "chat_tail": ("ALL CHAT", "CHAT"),
+}
+
+
+def _check_panel_identity(cfg: dict, game: GameInstance) -> list[Check]:
+    """Is each region still looking at the panel it was calibrated on?
+
+    Regions are fixed pixel offsets, and the wiki is explicit that
+    "every window on the screen may be moved and resized, and almost all
+    of them can be removed". So a rearranged interface silently points a
+    region at whatever now occupies those pixels.
+
+    That is the dangerous failure, not a crash. Observed live: with the
+    Skills panel docked beside the Backpack, the `backpack` region read
+    the SKILLS panel and `count_occupied` returned 28/30 - a confident
+    "pack full" built from skill-level digits. Every inventory rule
+    would have acted on it, and nothing in `doctor` said a word.
+
+    RS3 draws a title bar above each movable window, so reading the
+    strip just above a region is a cheap identity check. A missing
+    header is a warning rather than a failure: the panel may simply be
+    configured without title bars, which is a legitimate setting.
+    """
+    out = []
+    if not game.handle or not game.size:
+        # No window: `_check_window` already reports that, and every
+        # region check below it is skipped for the same reason.
+        return out
+    for name, expected in _EXPECTED_PANEL.items():
+        region = cfg["_regions"].get(name)
+        if region is None:
+            continue
+        x, y, w, h = region.resolve(game.size)
+        top = max(0, y - 46)
+        if y - top < 8:
+            continue                      # region is flush with the top edge
+        try:
+            strip = game.backend.grab_array(game.handle, (x, top, w, y - top))
+        except (CaptureError, ValueError, OSError):
+            continue
+        if strip.size == 0:
+            continue
+        seen = _w().ocr_array(strip).upper()
+        if any(title in seen for title in expected):
+            out.append(Check(f"panel:{name}", PASS,
+                             f"{expected[0]} header found above the region"))
+            continue
+        # Naming the panel actually found is the difference between a
+        # warning someone can act on and one they learn to ignore. Live,
+        # this read "SKILLS" above the backpack region - which is the
+        # whole diagnosis in one word.
+        other = [t for t in _KNOWN_PANELS
+                 if t in seen and t not in expected]
+        if other:
+            detail = (f"reading the {other[0]} panel, not "
+                      f"{expected[0]}")
+            remedy = (f"the panels have been rearranged - re-measure "
+                      f"{name} with `shot {name}`; its rules are acting "
+                      f"on the wrong pixels")
+        else:
+            shown = " ".join(seen.split())[:40] or "nothing readable"
+            detail = f"expected {expected[0]} header, read {shown!r}"
+            remedy = (f"the {name} panel may have moved, or title bars "
+                      f"are hidden - check with `shot {name}`")
+        out.append(Check(f"panel:{name}", WARN, detail, remedy))
+    return out
+
+
 def _check_capture(cfg: dict, game: GameInstance) -> list[Check]:
     """Actually capture each region and judge the frames.
 
@@ -457,6 +536,7 @@ def run_doctor(cfg: dict, path: Path, requested_backend: str | None = None
         checks += _check_window(cfg, game)
         checks += _check_regions(cfg, game)
         checks += _check_grids(cfg, game)
+        checks += _check_panel_identity(cfg, game)
         checks += _check_capture(cfg, game)
         checks += _check_ocr(cfg, game)
     finally:
