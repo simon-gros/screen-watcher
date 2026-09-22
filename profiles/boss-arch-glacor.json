@@ -283,7 +283,7 @@
       "name": "player_died",
       "kind": "ocr",
       "region": "chat_tail",
-      "pattern": "oh dear, you are dead|you have died|you died",
+      "pattern": "get up.{0,3}keep fighting|oh dear, you are dead|you have died|you died",
       "cooldown": 30,
       "message": "You died",
       "alert_body": "{line}",
@@ -291,7 +291,7 @@
       "urgency": "critical",
       "timeout_ms": 20000,
       "enabled": true,
-      "_note": "UNVERIFIED for this encounter, but 'Oh dear, you are dead!' is RS3's long-standing death message and is worth having armed from the start. Critical urgency because a death inside an instance costs the run and, without a gravestone reclaim, potentially the kit."
+      "_note": "VERIFIED LIVE at Arch-Glacor, and the previous pattern would have MISSED every death here. Per the RuneScape Wiki, 'Deaths in normal mode fights are considered safe; Azzanadra will teleport the player out if this occurs' - so the usual 'Oh dear, you are dead!' never appears. The real line is 'Get up. Keep fighting!', seen 8 times in one live sample while the old pattern matched none of them. The generic death lines are kept for hard mode and for anywhere else this profile might be reused. '.{0,3}' absorbs the comma-for-period substitution this font produces constantly. Checked against six real Arch-Glacor lines including 'Get up and keep your distance', which must stay silent."
     },
     {
       "name": "food_gone",
@@ -306,6 +306,20 @@
       "timeout_ms": 15000,
       "enabled": true,
       "_note": "UNVERIFIED wording. Running out of food mid-fight is the attrition failure that ends a session, so this is armed early even though the exact lines are unconfirmed. Reuses the shape of the fishing profile's out_of_supplies rule, which was written from the same family of messages."
+    },
+    {
+      "name": "marks_cap_near",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "earn\\s+\\d{1,2}\\s+more before war.{0,3}\\s*is satisfied",
+      "cooldown": 600,
+      "message": "Marks of War nearly capped",
+      "alert_body": "{line}",
+      "sound": "dialog-question",
+      "_note": "Per the RuneScape Wiki, a maximum of 1,000 Marks of War can be earned per hour: 'After defeating a boss, a one-hour timer begins counting down, during which a maximum of 1,000 Marks of War can be earned. An hour after the first boss was defeated, this timer resets regardless of the number of marks earned during that time.' Past the cap, kills still cost time and supplies but earn no marks, and nothing announces that you have stopped gaining - so this is the only warning you get. The game already reports the remaining allowance; VERIFIED live, the line reads 'You can earn 625 more before War is satisfied.' (captured with the leading 'You c' clipped by the region edge, hence no anchor on it). Matching \\d{1,2} rather than parsing the number is deliberate: there is no rule kind for 'alert when a number in chat FALLS below a threshold' - gauge needs current/maximum and counter accumulates - and a two-digit remainder means under 100 of 1,000 left, which is the point worth knowing. '.{0,3}' after 'war' absorbs the period-for-comma substitution this font produces. cooldown=600 because the allowance resets hourly; one warning per cap is enough. Note the cap rises with War's Blessing - 1,500 at tier 3, 2,000 at tier 4 - but the game's own 'X more' line accounts for that, which is why this reads the remainder rather than counting marks.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000
     },
     {
       "name": "session_hour",

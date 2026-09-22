@@ -3516,6 +3516,62 @@ def test_level_up_ignores_requirement_and_total_lines():
         assert not re.search(pat, line, re.I), line
 
 
+def test_arch_glacor_death_uses_the_line_the_game_actually_sends():
+    """The death rule would have missed every death at this boss.
+
+    Per the RuneScape Wiki, "Deaths in normal mode fights are considered
+    safe; Azzanadra will teleport the player out if this occurs" - so
+    the usual "Oh dear, you are dead!" never appears. The real line is
+    "Get up. Keep fighting!", seen 8 times in one live sample while the
+    shipped pattern matched none of them.
+    """
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    rule = next(r for r in cfg["rules"] if r["name"] == "player_died")
+    pattern = re.compile(rule["pattern"], re.I)
+
+    for line in ("Get up. Keep fighting!",
+                 "Get up, Keep fighting!",     # period read as comma
+                 "Get up; Keep fighting!",
+                 "Oh dear, you are dead!"):    # kept for hard mode
+        assert pattern.search(line), line
+
+    # Real Arch-Glacor chat that must stay silent.
+    for line in ("Azzanadra: The Arch-Glacor has been bested.",
+                 "The foe is beaten - but it will return.",
+                 "You have killed 650 Arch-Glacor in normal mode.",
+                 "You eat the desert sole.",
+                 "Get up and keep your distance from the fighting area"):
+        assert not pattern.search(line), line
+
+
+def test_marks_cap_warns_only_when_the_allowance_runs_low():
+    """1,000 Marks of War per hour, then kills earn nothing.
+
+    The wiki is explicit that the hourly timer "resets regardless of the
+    number of marks earned", and nothing announces that you have stopped
+    gaining. The game reports the remaining allowance, so the rule reads
+    that rather than counting marks - which also survives the cap rising
+    with War's Blessing.
+    """
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    rule = next(r for r in cfg["rules"] if r["name"] == "marks_cap_near")
+    pattern = re.compile(rule["pattern"], re.I)
+
+    # Under 100 left: worth knowing.
+    for remaining in (0, 25, 75, 99):
+        line = f"You can earn {remaining} more before War is satisfied."
+        assert pattern.search(line), line
+
+    # Plenty left: silence. These are the live-captured values.
+    for remaining in (100, 625, 650, 675, 1000):
+        line = f"You can earn {remaining} more before War is satisfied."
+        assert not pattern.search(line), line
+
+    # The award line itself is a different event and must not match.
+    assert not pattern.search(
+        "You are awarded 25 Marks of War and now have a total of 2,690.")
+
+
 def test_gauge_rejects_a_dropped_leading_digit(monkeypatch):
     """8,899 read as 899 slipped past a strict one-tenth threshold.
 
