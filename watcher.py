@@ -424,7 +424,8 @@ from screen_watcher.ocr import (          # noqa: E402,F401
     _GLYPH_H, _GLYPH_W, _SCROLL_MAX, _SCROLL_OVERLAP, _best_template_score,
     _load_digit_templates, _row_signature, _run_tesseract, _stitch,
     detect_scroll, is_readable, match_digit, ocr, ocr_array, ocr_cached,
-    ocr_many, ocr_numeric, ocr_scrolling, read_numeric, segment_glyphs,
+    ocr_frame_cached, ocr_many, ocr_numeric, ocr_scrolling, read_numeric,
+    segment_glyphs,
 )
 # --------------------------------------------------------------------------
 # notification

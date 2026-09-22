@@ -188,6 +188,33 @@ Guarded by `test_preprocessing_cuts_real_character_errors`, which
 scores the real binary against the real fixture and fails if the
 preprocessing is removed.
 
+### The numeric regions had no per-cycle cache
+
+The chat path has cached per cycle since five rules watching `chat_tail`
+were each running their own pass. The numeric path never got one, and
+it had exactly the same problem: at Arch-Glacor `low_health`,
+`low_prayer`, `prayer_out` and `adrenaline_full` all read the vitals
+row, so it was OCR'd **four times per cycle** over identical pixels.
+
+Measured on the replay fixture: **585 ms for four reads against 151 ms
+cached - 435 ms saved per cycle, 74%.** That is larger than the
+batching win below and much simpler, because each of the avoided calls
+also pays the ~72 ms process-startup floor.
+
+`ocr_frame_cached` is deliberately separate from `ocr_cached`, which
+routes through `ocr_scrolling`. That optimiser assumes scrolling text
+and stitches a strip onto cached lines; a vitals bar does neither, so
+feeding it there would compare unrelated frames and fall back to a full
+read anyway.
+
+**Cycle 0 bypasses the cache.** `evaluate` defaults `cycle` to 0 and
+several callers never advance one, so keying on it would pin the first
+reading forever and a gauge would stop following the game - worse than
+the duplicate work it saves. The watch loop always passes a real,
+increasing cycle. Found because 26 tests failed when the cache was
+first added: they drive several readings through one box without a
+cycle, and they were right to fail.
+
 ### Batched OCR: one process for several regions
 
 `ocr_many` writes the regions to a tesseract `imagelist` - a text file

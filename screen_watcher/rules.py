@@ -894,7 +894,8 @@ def _eval_percent(rule: Rule, wid: str, box, now: float,
     """
     if rule.warn_at_or_above <= 0:
         return None
-    value = parse_percent(_w().ocr_array(_w().capture_array(wid, box, None, cycle)))
+    value = parse_percent(_w().ocr_frame_cached(
+        _w().capture_array(wid, box, None, cycle), box, cycle))
     if value is None:
         return None
 
@@ -947,7 +948,8 @@ def _eval_gauge(rule: Rule, wid: str, box, now: float,
     if rule.maximum <= 0 or (rule.warn_below <= 0 and rule.warn_at <= 0):
         return None
     frame = _w().capture_array(wid, box, None, cycle)
-    reading = parse_gauge(_w().ocr_array(frame), rule.maximum)
+    reading = parse_gauge(_w().ocr_frame_cached(frame, box, cycle),
+                          rule.maximum)
     if reading is None:
         # An unreadable frame is not evidence of a low gauge. Hold the
         # streak rather than resetting it, so a single bad frame in a
@@ -1317,7 +1319,8 @@ def _eval_total(rule: Rule, wid: str, box, now: float,
     clean; a small one is discarded as noise.
     """
     step = max(1, int(rule.step))
-    text = _w().ocr_array(_w().capture_array(wid, box, None, cycle))
+    text = _w().ocr_frame_cached(
+        _w().capture_array(wid, box, None, cycle), box, cycle)
     total = parse_total(text, column=rule.column)
     if total is None:
         return None

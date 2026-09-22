@@ -2138,6 +2138,60 @@ def test_sauvola_is_used_for_chat_but_never_for_the_gauges():
         "fires a critical health alert at full health")
 
 
+def test_numeric_region_is_ocrd_once_per_cycle(monkeypatch):
+    """Four gauge rules on one vitals row meant four tesseract passes.
+
+    At Arch-Glacor `low_health`, `low_prayer`, `prayer_out` and
+    `adrenaline_full` all read the same bar. The chat path has had a
+    per-cycle cache since five rules watching `chat_tail` each ran their
+    own pass; the numeric path never got one. Measured on the fixture:
+    585 ms for four reads against 151 ms cached - 435 ms a cycle.
+
+    Every rule in a pass must also see the SAME reading, or low_health
+    and low_prayer could disagree about one instant.
+    """
+    from screen_watcher import ocr as ocr_mod
+
+    calls = []
+    monkeypatch.setattr(watcher, "ocr_array",
+                        lambda frame, psm=6: calls.append(1) or "9,000/10,597")
+    ocr_mod._OCR_CACHE.clear()
+
+    frame = np.zeros((10, 10, 3), dtype=np.int16)
+    reads = [watcher.ocr_frame_cached(frame, (0, 0, 10, 10), 5)
+             for _ in range(4)]
+
+    assert len(calls) == 1, f"tesseract ran {len(calls)} times for one region"
+    assert len(set(reads)) == 1, "rules in one pass saw different readings"
+
+    # A new cycle must re-read: a cached gauge would stop seeing damage.
+    watcher.ocr_frame_cached(frame, (0, 0, 10, 10), 6)
+    assert len(calls) == 2
+
+
+def test_numeric_cache_does_not_pin_readings_without_a_cycle(monkeypatch):
+    """cycle 0 means "no counter", and must not freeze the reading.
+
+    `evaluate` defaults `cycle` to 0 and several callers never advance
+    one. Keying the cache on that would return the first reading
+    forever, so a gauge would stop following the game - which is worse
+    than the duplicate work it saves.
+    """
+    from screen_watcher import ocr as ocr_mod
+
+    readings = iter(["9,000/10,597", "1,000/10,597", "500/10,597"])
+    monkeypatch.setattr(watcher, "ocr_array",
+                        lambda frame, psm=6: next(readings))
+    ocr_mod._OCR_CACHE.clear()
+
+    frame = np.zeros((10, 10, 3), dtype=np.int16)
+    got = [watcher.ocr_frame_cached(frame, (0, 0, 10, 10), 0)
+           for _ in range(3)]
+
+    assert got == ["9,000/10,597", "1,000/10,597", "500/10,597"], (
+        f"a gauge stopped following the game: {got}")
+
+
 def test_batched_ocr_matches_separate_calls_and_is_faster():
     """One tesseract process for several regions, same text.
 
