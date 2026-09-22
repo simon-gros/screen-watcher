@@ -1301,6 +1301,13 @@ def _eval_total(rule: Rule, wid: str, box, now: float,
     if reached <= rule._milestone:
         return None
     rule._milestone = reached
+    # Persist so a restart does not re-announce a milestone already
+    # passed. The game owns the running figure, so only the milestone
+    # matters here - but it is watcher state, and without this every
+    # restart replayed it. `counter` has always written; `total` did
+    # not, which is why three consecutive woodcutting runs each fired
+    # "1M" at a higher and higher gold figure.
+    _w().log_counter(rule.name, now, total)
     if not rule.ready(now):
         return None
     fields = {"total": f"{total:,}", "n": reached, "step": f"{step:,}",

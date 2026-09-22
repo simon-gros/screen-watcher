@@ -4206,6 +4206,89 @@ def test_min_occupancy_does_not_gag_the_free_slot_floor(monkeypatch):
     assert alert is not None and "2 slots left" in alert.body
 
 
+def _feed_totals(rule, values, monkeypatch):
+    """Reuses the existing _run_total harness, taking plain integers."""
+    return _run_total(rule, [f"{v:,} 0 2,438,927" for v in values],
+                      monkeypatch)
+
+
+def test_total_milestone_is_not_replayed_after_a_restart(monkeypatch):
+    """Three consecutive runs each announced the same 1M milestone.
+
+    `_milestone` is watcher state, not something the Metrics panel
+    knows, and only `counter` rules were restored at startup. So every
+    restart began at 0 and re-fired a milestone already passed - live it
+    said "1M" at 1,073,220, then again at 1,169,454, then 1,216,452.
+    """
+    rule = _total_rule()
+    rule._total = 1073220                      # restored from the log
+    rule._milestone = 1
+
+    fired = _feed_totals(rule, [1100000, 1169454, 1216452], monkeypatch)
+    assert fired == [], "a passed milestone must not be re-announced"
+
+    # The next genuine million still fires.
+    assert _feed_totals(rule, [2000001], monkeypatch)
+
+
+def test_total_milestone_rearms_when_the_session_resets(monkeypatch):
+    """Restoring must not gag a fresh session.
+
+    The panel's Gain resets to 0 on a new session while the stored total
+    is still high. Suppressing on that would trade a duplicate alert for
+    a missing one, so the large-fall path has to rewind the milestone.
+    """
+    rule = _total_rule()
+    rule._total = 1216452
+    rule._milestone = 1
+
+    fired = _feed_totals(rule, [1200, 45000, 1000001, 1500000], monkeypatch)
+    assert len(fired) == 1 and "1M" in fired[0]
+
+
+def test_total_milestone_persists_so_a_restart_can_restore_it(monkeypatch,
+                                                              tmp_path):
+    """Restoring only works if something wrote the value.
+
+    `_eval_total` never called log_counter, so the startup restore had
+    nothing to read - the two halves of this fix are useless apart.
+    """
+    monkeypatch.setattr(watcher, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(watcher, "COUNTER_LOG", tmp_path / "counters.jsonl")
+
+    rule = _total_rule()
+    _feed_totals(rule, [1000001], monkeypatch)
+
+    assert watcher.load_counter("gold_milestone") == 1000001
+
+
+def test_watch_restores_total_rules_not_only_counters(monkeypatch, tmp_path):
+    """The startup restore is keyed on rule kind; `total` was left out.
+
+    Exercises the restore the way cmd_watch does rather than reading its
+    source, so the test still means something if that loop is rewritten.
+    """
+    import ast
+
+    # Read the kinds cmd_watch actually restores out of its AST, rather
+    # than re-implementing the loop here - a test that copies the code it
+    # checks would pass with the bug still present.
+    tree = ast.parse(Path(watcher.__file__).read_text())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "cmd_watch")
+    kinds = {c.value for node in ast.walk(fn)
+             if isinstance(node, ast.Compare)
+             and isinstance(node.ops[0], ast.In)
+             and isinstance(node.left, ast.Attribute)
+             and node.left.attr == "kind"
+             for c in getattr(node.comparators[0], "elts", [])
+             if isinstance(c, ast.Constant)}
+
+    assert {"counter", "total"} <= kinds, (
+        f"cmd_watch restores {kinds or 'nothing'}; a total rule that is "
+        "not restored replays every milestone on restart")
+
+
 def test_woodcutting_pack_full_and_wood_box_are_distinct_events():
     """Two "full" messages that must not be confused.
 

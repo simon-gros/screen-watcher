@@ -920,7 +920,13 @@ def cmd_watch(args) -> None:
     if not rules:
         sys.exit("no enabled rules")
     for r in rules:
-        if r.kind == "counter":
+        # `total` restores alongside `counter`. It reads a figure the game
+        # already owns, so its _total is refreshed from the panel on the
+        # first poll - but _milestone is pure watcher state, and starting
+        # it at 0 made every restart re-announce a milestone already
+        # passed. Observed live: three consecutive runs each fired "1M"
+        # at 1,073,220, then 1,169,454, then 1,216,452.
+        if r.kind in ("counter", "total"):
             r._total = load_counter(r.name)
             r._milestone = int(r._total // max(1, int(r.step)))
             if r._total:
