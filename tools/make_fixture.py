@@ -61,6 +61,11 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="directory to write the fixture to")
     ap.add_argument("--keep", type=int, default=3,
                     help="how many frames to keep, evenly spaced")
+    ap.add_argument("--consecutive", action="store_true",
+                    help="keep adjacent frames instead of spacing them out, "
+                         "so the fixture can exercise scroll detection")
+    ap.add_argument("--start", type=int, default=0,
+                    help="index of the first frame to keep")
     args = ap.parse_args()
 
     cfg = watcher.load_config(Path(args.config))
@@ -74,10 +79,18 @@ def main() -> int:
         print(f"no frames in {args.frames}", file=sys.stderr)
         return 1
 
-    # Evenly spaced rather than the first N, so a short fixture still spans
-    # the recording's range of states instead of one moment repeated.
-    step = max(1, len(sources) // max(1, args.keep))
-    chosen = sources[::step][:args.keep]
+    if args.consecutive:
+        # Adjacent frames, because `ocr_scrolling` can only reuse cached text
+        # when the chat moved less than _SCROLL_MAX (200px). Evenly spaced
+        # frames from a long recording scroll far past that, so the optimiser
+        # falls back to a full re-read and the fixture silently measures the
+        # slow path - which is how a 3.7x saving went untested.
+        chosen = sources[args.start:args.start + args.keep]
+    else:
+        # Evenly spaced rather than the first N, so a short fixture still spans
+        # the recording's range of states instead of one moment repeated.
+        step = max(1, len(sources) // max(1, args.keep))
+        chosen = sources[args.start::step][:args.keep]
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

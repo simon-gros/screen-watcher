@@ -70,6 +70,53 @@ OCR results are cached for a polling cycle by region and Tesseract page
 segmentation mode. Several OCR rules watching the same chat region therefore
 reuse one Tesseract result.
 
+### OCR cost breakdown (measured 2026-09-22, tesseract 5.5.3)
+
+Measured against the replay fixture at 3840x2058, so it reproduces with
+no game running:
+
+| region | size | median |
+|---|---|---:|
+| `chat_tail` | 580x660 | 570 ms |
+| `vitals` | 800x70 | 136 ms |
+| `gold_row` | 420x46 | 90 ms |
+| `session_timer` | 210x50 | 78 ms |
+
+Two findings that shape where optimisation is worth spending effort.
+
+**Process startup is a hard floor of ~72 ms.** A blank 60x20 image costs
+that much, which is why the three small regions all land near 80-140 ms
+regardless of their size. Four regions per cycle therefore pay roughly
+290 ms in subprocess overhead alone, before any recognition happens.
+
+**Tesseract flags barely move the number.** `--oem 1` (LSTM only) saved
+2%, `--psm 4` saved 13% but dropped six lines, and `--psm 11` produced
+105 lines against 52. `--oem 0` (legacy) was 4.5x *slower*. None of
+these is worth taking; the cost is startup plus the size of the image,
+not engine configuration.
+
+The optimisation that actually works is the one already shipped:
+`ocr_scrolling` re-reads only the rows that moved. Measured end to end
+on real captured pixels, a two-line scroll costs **123 ms against 582 ms**
+for a full read - 4.7x - because it OCRs 68px instead of 660px. That is
+now guarded by `test_scroll_optimiser_saves_real_time_on_real_pixels`,
+which runs the real binary rather than a mock: every other scroll test
+fakes `ocr_array`, so they prove the strip is smaller but never that
+tesseract costs less.
+
+**Unclaimed saving: batch the regions into one Tesseract call.** It
+accepts an `imagelist` - a text file of image paths - and processes them
+in a single process. Measured 865 ms for four separate calls against
+632 ms batched, a 27% saving with byte-identical output (221 words both
+ways). Not implemented, because the evaluators currently pull regions
+independently and batching needs the watch loop to know every region
+wanted this cycle before any of them is read. Worth doing when the
+scheduler owns the cycle (foundation step 2).
+
+An in-process binding (`tesserocr`) would remove the startup floor
+entirely, but it is not installed here and adding a dependency is a
+decision for the operator, not a silent one.
+
 ## Capture benchmark
 
 An earlier 4K-window measurement produced approximately:

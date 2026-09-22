@@ -2054,6 +2054,66 @@ def test_stitch_discards_clipped_garbage():
         "[11:03:17] You find a nest."]
 
 
+def test_scroll_optimiser_saves_real_time_on_real_pixels(monkeypatch):
+    """The 3.7x saving, measured through the real path - not a mock.
+
+    Every other test here fakes `ocr_array`, so they prove the strip is
+    smaller but never that tesseract actually costs less. This runs the
+    real binary over a real captured chat region, scrolled by a realistic
+    amount, and compares against a forced full read.
+
+    Why it matters: benchmarking the shipped replay fixture showed the
+    optimiser never engaging - every cycle paid the full ~580 ms. The
+    cause was the fixture, whose frames are evenly spaced across a long
+    recording and so scroll far past _SCROLL_MAX, not the optimiser. But
+    nothing would have caught the reverse: a regression that quietly
+    disabled the optimiser would look identical.
+    """
+    import shutil
+    import time
+    if not shutil.which("tesseract"):
+        pytest.skip("tesseract not installed")
+
+    fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/glacor"
+    frames = sorted(fixture.glob("*.png"))
+    if not frames:
+        pytest.skip("replay fixture not present")
+
+    from PIL import Image
+    from screen_watcher import ocr as ocr_mod
+
+    full = np.asarray(Image.open(frames[0]).convert("RGB"))
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    x, y, w, h = cfg["_regions"]["chat_tail"].resolve(
+        (full.shape[1], full.shape[0]))
+    first = full[y:y + h, x:x + w]
+
+    # Scroll by two chat lines, which is what a 1.5s poll actually sees.
+    shift = 44
+    second = np.zeros_like(first)
+    second[:-shift] = first[shift:]
+    second[-shift:] = first[:shift]
+
+    frames_iter = iter([first, second])
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: next(frames_iter))
+    ocr_mod._SCROLL_CACHE.clear()
+
+    box = (0, 0, w, h)
+    start = time.perf_counter()
+    watcher.ocr_scrolling("0x1", box, cycle=1)      # cold: full read
+    cold = time.perf_counter() - start
+
+    start = time.perf_counter()
+    text = watcher.ocr_scrolling("0x1", box, cycle=2)   # warm: strip only
+    warm = time.perf_counter() - start
+
+    assert text.strip(), "the stitched result must still carry the chat"
+    assert warm < cold * 0.75, (
+        f"scroll optimiser gave no real saving: {warm * 1000:.0f} ms warm "
+        f"against {cold * 1000:.0f} ms cold")
+
+
 def test_ocr_scrolling_reads_only_the_new_strip(monkeypatch):
     """The whole point: a scrolled frame must not re-OCR the full region."""
     lines = [30, 60, 90, 120, 150, 180, 45, 75]
