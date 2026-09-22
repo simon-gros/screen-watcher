@@ -143,16 +143,16 @@
       "name": "impling",
       "kind": "ocr",
       "region": "chat_tail",
-      "pattern": "a creature is discovered while skilling|an impling (has )?appear",
+      "pattern": "a creature is discovered while skilling|(an?|the)\\s+\\w*\\s*impling\\s+(has\\s+)?(appear|spawn|flutter|arriv)|impling (has )?(appeared|spawned)|you (spot|notice|see) an? \\w*\\s*impling",
       "cooldown": 30,
       "message": "Impling spawned",
       "alert_body": "An impling appeared. Naturally, while you were busy stealing.",
       "sound": "message-highlight",
-      "_note": "DISABLED pending live verification: the wording has never been seen in this session's chat, so the pattern is unconfirmed. Enable once an impling message has been observed and the pattern matched against it. Implings spawn silently and despawn; the message is easy to miss mid-grind. Rare enough to deserve its own sound - message-highlight is distinct from the warning tones used by pack_filling and xp_stalled, so it is recognisable without looking. Long timeout because the impling despawns: the popup should still be on screen when you glance over.",
+      "_note": "REWRITTEN after the rule was reported not firing - and the alert log confirmed it had NEVER fired, in any profile, across fishing, thieving and woodcutting. Two separate faults. First, per the RuneScape Wiki the message 'A creature is discovered while skilling.' is specific to skilling IN MENAPHOS; outside Menaphos it never appears, so that alternative alone could not fire here. Second, the fallback 'an impling (has )?appear' required the literal words 'an impling' - but implings are always NAMED by type (baby, young, gourmet, earth, essence, eclectic, spirit, nature, magpie, ghost, ninja, pirate, dragon, kingly, crystal, divine, zombie, snow), so a real spawn line naming the type could never match either. The pattern now allows an optional type word before 'impling' and accepts appear/spawn/flutter/arrive plus a 'you spot/notice/see' form. Checked against ten plausible phrasings and seven real non-impling lines from live chat. STILL UNVERIFIED against a real spawn: the wiki documents the Menaphos message but does not quote the wording used elsewhere, so tighten this the first time an impling actually fires.",
       "enabled": false,
       "urgency": "normal",
       "timeout_ms": 20000,
-      "_disabled_note": "Implings spawn from skilling, but the message was only verified during fishing. Re-enable once confirmed it appears while thieving - the pattern itself ('A creature is discovered while skilling') is already proven correct in live chat."
+      "_disabled_note": "Stays DISABLED in this profile. The pattern was rewritten (see _note) because it could never have matched, but pickpocketing is not a skill that spawns implings for this account and the rule has no verified sighting here. It also shares message-highlight with item_gained, which the distinct-sound check rejects. Enable it only alongside a sound of its own."
     },
     {
       "name": "level_up",

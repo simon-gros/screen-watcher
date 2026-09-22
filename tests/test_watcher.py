@@ -4336,6 +4336,42 @@ def test_total_fires_exactly_once_per_step_over_a_long_climb(monkeypatch):
         ["2", "3", "4", "5"]
 
 
+def test_impling_pattern_matches_named_impling_types():
+    """The impling rule had never fired, in any profile, ever.
+
+    Two faults. Per the RuneScape Wiki, "A creature is discovered while
+    skilling." is specific to skilling in MENAPHOS, so outside Menaphos
+    that alternative cannot fire at all. The fallback then required the
+    literal words "an impling" - but implings are always named by type
+    (baby, young, gourmet, dragon, crystal...), so a real spawn line
+    naming the type could not match either.
+
+    Same class as the boss_defeated rule that had never fired: a pattern
+    written from assumption, silently matching nothing.
+    """
+    for profile in ("woodcutting", "fishing", "thieving"):
+        cfg = load_config(Path(f"profiles/{profile}.json"))
+        rule = next(r for r in cfg["rules"] if r["name"] == "impling")
+        pattern = re.compile(rule["pattern"], re.I)
+
+        for line in ("A creature is discovered while skilling.",
+                     "A baby impling has appeared nearby.",
+                     "A Young impling has appeared.",
+                     "A Dragon impling appears!",
+                     "A crystal impling has spawned.",
+                     "An impling has appeared!",
+                     "You spot a magpie impling."):
+            assert pattern.search(line), f"{profile}: {line}"
+
+        # Real lines that shared the screen during live sessions.
+        for line in ("You get some maple logs.",
+                     "You manage to catch the impling.",
+                     "Your backpack is too full to hold anything more.",
+                     "# News: Zarosian demons have appeared near the Forgotten",
+                     "You swing your hatchet at the tree."):
+            assert not pattern.search(line), f"{profile}: {line}"
+
+
 def test_woodcutting_value_alert_does_not_claim_gold_was_earned():
     """The Metrics Gain column is log VALUE, not coins received.
 
