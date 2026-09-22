@@ -104,8 +104,10 @@ Soak validation looks for failures that short sessions hide:
 Test:
 
 - normal launch with default Thieving config;
-- explicit Fishing config;
+- explicit Fishing, Woodcutting, Firemaking, Arch-Glacor, and Giant Mole
+  profiles;
 - explicit `--backend x11-xcb`;
+- explicit `--backend wayland-portal` on a supported Wayland session;
 - explicit ImageMagick fallback;
 - game absent at startup;
 - invalid backend;
@@ -165,6 +167,17 @@ For ImageMagick fallback:
 - same commands that claim fallback support;
 - compare basic geometry and color correctness;
 - ensure fallback errors surface through the same health path.
+
+For the Wayland portal/PipeWire backend:
+
+- first-run source selection and user consent;
+- restore-token reuse in a fresh process;
+- token storage permissions;
+- portal window decoration stripping and calibration compatibility;
+- sustained streaming through an ordinary session;
+- source revocation/disconnect and recovery behavior;
+- `doctor --backend wayland-portal` against the same regions/OCR checks used
+  by the XCB path.
 
 Record:
 
@@ -259,13 +272,40 @@ Specifically verify the corrected `item_gained` semantics:
 - occupied -> larger stack is not a "new slot";
 - a temporary visual overlay does not become a persistent item gain.
 
+### Additional shipped profiles added during 21–22 September 2026
+
+**Woodcutting:** validate activity continuation/stop behavior, wood-box related
+signals, level-up/impling alerts, Metrics-panel total milestones, restart
+persistence, and cooldown behavior around milestone boundaries.
+
+**Firemaking:** validate bonfire activity, fire-spirit and impling/level-up
+events, and especially the burnt-out-fire detector. The latter must be verified
+as a silence/activity-state condition rather than by waiting for a chat line the
+game does not emit.
+
+**Arch-Glacor:** validate life/prayer gauges, adrenaline percentage, session and
+gain milestones, kill/drop rules, wrapped loot lines, quantity parsing,
+own-player rare-drop filtering, the 0-mechanics assumptions, and the corrected
+Creeping Ice knockdown semantics. A routine ice knockdown must never be reported
+as a death.
+
+**Giant Mole:** validate all chamber mechanics against the live fight, including
+calls for aid, stun windows, rockfall warnings/landings, kill lines, and
+own-player special-drop filtering. Cross-rule confusion is a specific failure
+mode: one mechanic's wording must not satisfy a different mechanic rule.
+
+For every new profile, preserve the same standard already established by the
+first validation session: wiki/documentation research can define a hypothesis,
+but the shipped rule should be treated as verified only when live evidence
+confirms the actual rendered wording and gameplay meaning.
+
 ### 7. Persistence and restart behavior
 
 Test:
 
 - stop/start watcher during active activity;
 - restart after counters have accumulated;
-- switch Fishing -> Thieving -> Fishing;
+- switch among Fishing, Thieving, Woodcutting, Firemaking, and boss profiles;
 - inspect occupancy/counter records for profile separation;
 - simulate old legacy records without `skill`;
 - append malformed/truncated JSONL rows;
@@ -291,9 +331,14 @@ Test:
 - missing `paplay`;
 - repeated cooldown behavior;
 - two different rules close together;
-- notification history matches what was actually delivered.
+- notification history matches what was actually delivered;
+- `watch --overlay` on KDE Wayland, including an overlay process that exits
+  unexpectedly while the watcher continues delivering through the other
+  channels;
+- click-through/focus behavior: the overlay must not take keyboard focus or
+  intercept gameplay clicks.
 
-No sound failure should stop notification delivery.
+No sound or overlay failure should stop the remaining notification channels.
 
 ### 9. Process lifecycle
 
@@ -320,7 +365,9 @@ Run and inspect output from:
 - `probe`;
 - `inv`;
 - `stats`;
-- `alerts`.
+- `alerts`;
+- `backends`;
+- `record` plus replay/fixture diagnostics.
 
 A command counts as validated only if its output is not merely non-crashing but
 actually consistent with the visible game state and documented semantics.
