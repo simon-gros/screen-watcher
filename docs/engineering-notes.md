@@ -6,21 +6,53 @@ for the main README.
 
 ## Current architecture
 
-The current application is implemented primarily in `watcher.py`.
+The first major module split is complete. `watcher.py` now serves primarily as
+the CLI and compatibility surface, while focused implementation modules under
+`screen_watcher/` own capture, window/KWin integration, diagnostics,
+configuration, scheduling/readers, runtime, rules, persistence, OCR, and
+overlay behavior.
 
-The long-term architecture is documented in
-[application-outline.md](application-outline.md) and separates:
+The architecture still follows the broader separation documented in
+[application-outline.md](application-outline.md):
 
 ```text
 profile management
     -> capture and observation
-    -> signal extraction
+    -> signal extraction / readers
     -> rule evaluation
     -> evidence/events
     -> outputs
 ```
 
-That modular split is planned work, not the current code layout.
+The remaining architectural gap is not the absence of modules, but incomplete
+normalization: inventory, buff, target, and several resource observations still
+live partly inside rule evaluators rather than flowing through reusable readers
+and normalized events.
+
+## 21–22 September 2026 engineering checkpoint
+
+The 24-hour implementation window ending 22 September materially changed both
+the platform foundation and detector reliability:
+
+- native XCB remained the fast X11/XWayland path while the XDG ScreenCast
+  portal + PipeWire backend became a production Wayland option;
+- KWin read-only discovery, runtime frozen/blank-region checks, overlay
+  delivery, replay fixtures, and profile fingerprints moved into the live
+  implementation;
+- chat OCR gained measured 2x upscale/inversion preprocessing and chat-only
+  Sauvola thresholding, while numeric gauges were explicitly kept on a
+  different preprocessing path after live corruption tests;
+- wrapped chat reconstruction was extended to ordinary OCR rules so long loot
+  lines no longer lose their trailing item names;
+- live numeric sampling hardened the gauge collapse guard against dropped
+  leading digits;
+- Arch-Glacor semantics were corrected for Creeping Ice, Marks of War, rare-drop
+  attribution, wrapped loot, and quantity parsing;
+- Woodcutting and Firemaking were trained against live sessions and Giant Mole
+  was added as a live-trained boss profile.
+
+See [validation-session-2026-09-22.md](validation-session-2026-09-22.md) for
+the evidence summary and the remaining duplicate-drop limitation.
 
 ## Reliability fixes already implemented
 
