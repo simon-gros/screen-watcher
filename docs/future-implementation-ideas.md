@@ -26,6 +26,279 @@ The target development environment is CachyOS/Arch Linux, especially KDE Plasma
 6 with KWin, while keeping the architecture portable enough for other Linux
 desktops.
 
+### PRIORITY 0A — adaptive interface localization and scale-independent detection
+
+**Promoted 22 September 2026: this is now an immediate architecture priority.**
+Screen Watcher must stop assuming that a detector-grade region can be represented
+by one fixed pixel rectangle plus a window-edge anchor. The existing edge anchors
+are useful fallbacks, and `screen_watcher/layout.py` is already able to notice
+coarse layout changes, but its documented ~24 px scan precision is intentionally
+insufficient for chat lines, inventory cells, gauges, icons, or OCR crops.
+
+This work is required before Screen Watcher can be considered portable between
+players. RuneScape supports interface scaling from 70% to 300%, players can move
+and resize interface windows, high-DPI desktop scaling changes the captured pixel
+geometry, and chat text has its own independent size setting. Existing RuneScape
+screen-reading software such as Alt1 documents substantial failures when in-game
+interface scaling is not 100%, which is exactly the class of limitation Screen
+Watcher should avoid rather than inherit.
+
+#### Core design rule
+
+A profile should describe **what interface element it needs**, not merely **where
+that element happened to be on the developer's monitor**.
+
+Replace the fixed-region assumption with a resolver pipeline:
+
+1. capture the full client frame when the layout is first seen or invalidated;
+2. generate panel/element candidates from several independent signals;
+3. estimate interface scale from the pixels themselves rather than trusting only
+   OS/KWin DPI metadata;
+4. refine each candidate to a detector-grade bounding box;
+5. derive rule subregions in panel-local coordinates;
+6. attach a confidence score and semantic validation result;
+7. cache the resolved layout, track it temporally, and rescan only when confidence
+   drops or the interface changes.
+
+Rules should consume a `ResolvedRegion` (or equivalent) containing the raw
+capture rectangle, panel identity, estimated local scale, confidence, provenance
+(OCR/template/structure/manual), and optional canonical-normalized image. A region
+that cannot be located confidently must fail visibly; it must never silently read
+a neighbouring panel.
+
+#### Use several locators and fuse their evidence
+
+Do not make one technique responsible for every RuneScape interface. The resolver
+should support interchangeable locators and combine them when possible:
+
+- **OCR/text anchors.** Continue the current title-bar and chat-timestamp work,
+  but run a coarse-to-fine pass. First find a likely band, then OCR smaller
+  candidate strips and return OCR word/line boxes rather than a ~24 px scan row.
+  Known labels such as Backpack, Skills, Metrics, Prayer and All Chat are strong
+  semantic anchors. Use fuzzy matching for predictable RuneScape-font damage and
+  Tesseract page-segmentation modes appropriate to a single line/word instead of
+  treating each UI crop like a document.
+- **Multi-scale template matching.** Maintain small masked templates for stable
+  pieces of interface chrome and distinctive icons. First estimate a rough global
+  UI scale, then search only a narrow scale pyramid around it with normalized
+  OpenCV template matching. Do not brute-force 70-300% on every frame. Masks
+  should ignore animated, transparent, or scene-dependent pixels.
+- **Feature matching + geometric verification.** For larger distinctive panels or
+  icons where scale changes defeat ordinary templates, test ORB/AKAZE/SIFT-style
+  keypoints and descriptor matching, then use RANSAC/homography inliers to verify
+  the transform. This is a fallback for textured elements, not a requirement for
+  tiny flat glyphs where feature descriptors may be weak.
+- **Structural geometry.** Detect shapes that have stronger geometry than visual
+  texture: repeated inventory-slot lattices, progress rings, horizontal gauges,
+  panel borders, tab rows and repeated icon spacing. These are often more robust
+  to scaling than exact RGB templates.
+- **Content signatures.** Keep semantic signatures such as repeated chat
+  timestamps, numeric XP rows, orb/gauge arrangements and known inventory
+  occupancy structure. Require more than one positive clue for ambiguous panels.
+- **User-assisted calibration fallback.** If automatic confidence is insufficient,
+  provide a GUI/CLI calibration mode where the user clicks or boxes the relevant
+  panel once. Save the panel identity plus local geometry/template evidence, not
+  only absolute screen coordinates, so later resizing can still be resolved.
+
+Each locator should report a normalized score. Panel identity should be accepted
+only when the score clears a detector-specific threshold and semantic validators
+agree. When two methods disagree materially, mark the region unhealthy and rescan
+instead of choosing the first result.
+
+#### Estimate scale from RuneScape itself
+
+Desktop DPI scale, capture-pixel scale and RuneScape interface scale are distinct
+variables. Store them separately.
+
+At startup, estimate an **in-game UI scale** from multiple stable measurements,
+for example title-bar height, known icon diameter, tab/button spacing and
+inventory-cell pitch. Use a robust median across anchors and retain an uncertainty
+range. A single icon should not define the scale.
+
+Once scale is known, normalize a located panel into a canonical coordinate system
+(for example the 100% reference geometry) before applying legacy detectors where
+that is beneficial. Keep both images available:
+
+- raw pixels for OCR or methods harmed by an extra resampling step;
+- canonical-normalized pixels for template banks, grids, thresholds and readers
+  that were calibrated at one reference scale.
+
+Do not assume one scale applies to every sub-interface. Chat font size is
+independently configurable, so `ChatReader` should estimate text line height/font
+scale separately from the global interface scale.
+
+#### Make panel-local geometry dynamic
+
+**Backpack / inventory**
+
+- Detect the inventory panel first.
+- Infer the slot lattice from repeated horizontal/vertical spacing instead of
+  permanently storing `x0`, `y0`, `cell_w`, `cell_h`, rows and columns.
+- Derive capacity from the expected 28-slot topology plus visible lattice shape;
+  reject impossible geometry rather than producing an occupancy count.
+- Convert each detected slot to normalized panel-local coordinates so item-count
+  and change detectors survive panel resizing and different column counts.
+
+**Chat**
+
+- Use timestamp/text baselines to locate the actual text body.
+- Estimate line height from repeated baselines and derive the newest-line crop
+  dynamically.
+- Detect left/right and top/bottom text extents rather than assuming a 600x650
+  rectangle.
+- Treat chat font size as a separate calibration variable and normalize OCR
+  preprocessing to it.
+- Preserve the existing scrolling/dedup logic after localization; this work should
+  improve where pixels come from, not replace proven event semantics.
+
+**Metrics, gauges, orbs, action bars and activity icons**
+
+- Locate a containing panel or stable semantic anchor first.
+- Define child regions as fractions/offsets of the resolved parent, optionally
+  scaled by the measured local UI scale.
+- Verify expected geometry before reading values (for example a row of resource
+  orbs rather than a similarly coloured scene patch).
+
+#### Temporal tracking and cheap steady-state operation
+
+Full-frame discovery should be exceptional, not the poll-loop hot path. After a
+high-confidence startup solve:
+
+- track panel boxes with the previous frame as a prior;
+- search only a padded neighbourhood around the last location;
+- use lightweight frame differences/optical flow or anchor rechecks to detect
+  motion;
+- require several low-confidence frames before discarding a good lock;
+- immediately invalidate on window resize, interface-scale change, panel
+  disappearance, implausible semantic output, or a strong layout-fingerprint
+  change;
+- periodically perform a low-frequency verification scan so a slowly drifting
+  error cannot become permanent.
+
+This keeps expensive OCR/template/feature discovery out of normal 1-2 second
+rule cycles while still surviving a layout edited during play.
+
+#### Layout cache and profile schema changes
+
+Extend the layout cache beyond `window size -> coarse title positions`.
+
+Persist, per detected layout:
+
+- client pixel size and capture backend;
+- desktop logical-to-physical scale when available;
+- estimated RuneScape UI scale + uncertainty;
+- chat font/line scale when measurable;
+- panel bounding boxes in normalized window coordinates;
+- local panel scale and resolver confidence;
+- which locator(s) produced each result;
+- title-bar visibility/state where relevant;
+- a compact visual/structural fingerprint for revalidation.
+
+Cache keys must not be window size alone: the same 3840x2058 client can contain
+many different RuneScape layouts and interface scales. A cache hit must be
+verified against live anchors before detector regions are trusted.
+
+Profiles should gradually migrate from:
+
+`region -> fixed anchor/dx/dy/w/h`
+
+to:
+
+`semantic element -> locator -> panel-local child region -> validation`.
+
+Retain the current coordinate format as an explicit legacy/manual fallback so
+existing profiles continue to work during migration.
+
+#### Failure behaviour and diagnostics
+
+Resolution independence is primarily a **silent-failure prevention** project.
+`doctor`, `regions`, debug overlay and the live health monitor should expose:
+
+- requested semantic element;
+- resolved x/y/w/h;
+- estimated global/local scale;
+- locator method and confidence;
+- validation checks that passed/failed;
+- distance from the previous/cached position;
+- whether canonical normalization was applied;
+- screenshots with the candidate/accepted boxes drawn for debugging.
+
+Add a strict mode in which a rule is disabled when its region confidence is below
+threshold. A missed alert is diagnosable; confidently reading the wrong interface
+and emitting a false alert is much worse.
+
+#### Test corpus and acceptance matrix
+
+Build a reusable sanitized screenshot/replay corpus specifically for layout
+localization. It should include at least:
+
+- 1920x1080, 2560x1440/ultrawide and 3840x2160-class client sizes;
+- representative RuneScape interface scales (minimum, 100%, modest >100%, high
+  DPI/high-scale), expanding toward the full supported 70-300% range over time;
+- Linux/KDE scaling variants and, when Windows support lands, Windows 100/125/
+  150/200% DPI cases;
+- default and heavily rearranged layouts;
+- narrow/wide/tall chat boxes and multiple chat text sizes;
+- title bars visible and hidden;
+- Backpack resized to different grid widths;
+- panels moved mid-session;
+- temporary bank/loot/level-up/dialogue overlays;
+- partially occluded/closed panels and deliberately invalid regions.
+
+Record ground-truth boxes and scale values. Tests should measure localization
+error/IoU, identity accuracy, confidence calibration, false-positive panel
+acceptance and time-to-reacquire after a move/scale change. Add replay tests that
+change resolution/layout between frames rather than validating only static images.
+
+Suggested acceptance targets for promotion from experimental to default:
+
+- no silent substitution of one known panel for another in the corpus;
+- panel identity and detector region stay valid after a client resize without
+  editing the profile;
+- interface-scale changes trigger automatic reacquisition;
+- moved panels are reacquired during the same session;
+- inventory/chat child geometry is derived from the detected panel rather than
+  copied from the developer's calibration;
+- steady-state localization adds negligible work compared with OCR because
+  expensive discovery is cached and event-driven.
+
+#### Implementation order for Priority 0A
+
+1. Formalize `ResolvedRegion`, locator confidence and semantic validators.
+2. Upgrade `layout.py` from coarse change detection to coarse-to-fine candidate
+   discovery while preserving its fast scan as the first stage.
+3. Add scale estimation from several RuneScape UI anchors.
+4. Add multi-scale masked template matching and a small versioned template bank.
+5. Add panel-local child-region resolution and canonical scale normalization.
+6. Make ChatReader consume a dynamically located chat text body and infer line
+   height/font scale.
+7. Make inventory readers detect their own slot lattice from a resolved Backpack.
+8. Add temporal tracking, invalidation and confidence hysteresis.
+9. Add feature/homography fallback for elements that remain unreliable under
+   large scale changes.
+10. Add the multi-resolution/layout replay corpus and hard acceptance tests.
+11. Add user-assisted calibration only as a fallback when automatic confidence
+    cannot meet the acceptance threshold.
+12. Only then treat one developer calibration as portable to arbitrary players.
+
+Do **not** begin with a heavyweight learned object detector. Classical methods are
+explainable, cheap, easy to test and already fit RuneScape's strongly structured
+UI. If a later screenshot corpus demonstrates systematic cases that the hybrid
+classical resolver cannot solve, an optional lightweight ONNX/OpenVINO detector
+can be evaluated behind the same locator interface without changing rules.
+
+Research references:
+- RuneScape graphics/interface scaling: https://support.runescape.com/hc/en-gb/articles/207223015-RuneScape-Graphics-Settings
+- RuneScape interface/chat scaling history and independent chat font sizes: https://runescape.wiki/w/Update%3AInterface_Scaling_%26_Camera_Offset_Beta
+- RuneScape interface layouts: https://runescape.wiki/w/User%3ABox/Interfaces
+- Alt1 capture/DPI limitations: https://runeapps.org/help_alt1_capture
+- Alt1 scaling limitation discussions: https://runeapps.org/forums/viewtopic.php?id=1696
+- Alt1 image/interface-reader library: https://github.com/skillbert/alt1
+- OpenCV template matching: https://docs.opencv.org/4.x/d4/dc6/tutorial_py_template_matching.html
+- OpenCV feature matching + homography: https://docs.opencv.org/4.x/d1/de0/tutorial_py_feature_homography.html
+- OpenCV AKAZE/ORB tracking: https://docs.opencv.org/4.x/dc/d16/tutorial_akaze_tracking.html
+- Tesseract region/page segmentation guidance: https://tesseract-ocr.github.io/tessdoc/ImproveQuality.html
+
 ### Priority 0 implementation order
 
 Implement in this order unless live testing proves a dependency must move:
@@ -37,19 +310,24 @@ Implement in this order unless live testing proves a dependency must move:
    ImageMagick subprocess capture.
 4. Add backend/frame health diagnostics and make them part of
    `screen-watcher doctor`.
-5. Introduce a reusable interface-reader registry, beginning with `ChatReader`
-   and then inventory/resource/buff readers.
-6. Add a layered OCR abstraction: specialized numeric/sprite OCR first where
+5. Implement **Priority 0A adaptive interface localization**: semantic panel
+   discovery, in-game scale estimation, detector-grade region refinement,
+   confidence/validation, and dynamic child regions. The existing `layout.py`
+   coarse scan is the seed, not the finished locator.
+6. Introduce a reusable interface-reader registry, beginning with `ChatReader`
+   and then inventory/resource/buff readers; readers should request semantic
+   resolved regions rather than own fixed pixel boxes.
+7. Add a layered OCR abstraction: specialized numeric/sprite OCR first where
    appropriate, Tesseract as fallback.
-7. Add read-only KWin window discovery/state support for native KDE Wayland.
-8. Prototype native Wayland capture through XDG ScreenCast portal + PipeWire,
+8. Add read-only KWin window discovery/state support for native KDE Wayland.
+9. Prototype native Wayland capture through XDG ScreenCast portal + PipeWire,
    first using the simplest reliable Python/Qt/GStreamer path.
-9. Add a native KDE/Wayland overlay prototype with PySide6/Qt and
-   `layer-shell-qt`, remaining click-through and read-only.
-10. Convert current rules to consume normalized reader/events rather than owning
+10. Add a native KDE/Wayland overlay prototype with PySide6/Qt and
+    `layer-shell-qt`, remaining click-through and read-only.
+11. Convert current rules to consume normalized reader/events rather than owning
     capture/OCR loops directly.
-11. Only after these primitives are stable, accelerate broader skill/profile
-    implementation.
+12. Only after these primitives and Priority 0A portability tests are stable,
+    accelerate broader skill/profile implementation.
 
 ### Architecture target
 
