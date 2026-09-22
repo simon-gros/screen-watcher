@@ -3516,6 +3516,55 @@ def test_level_up_ignores_requirement_and_total_lines():
         assert not re.search(pat, line, re.I), line
 
 
+def test_no_rule_alerts_on_another_players_broadcast():
+    """Global broadcasts are about strangers, not the player.
+
+    `rare_drop` matched any line containing "has received", which is by
+    definition a server-wide announcement - it fired live on "# News:
+    Walton39 has received a Stalker's Charm drop". Useless noise, and it
+    arrives constantly on a busy world.
+
+    A broadcast carries no "you" marker, so the only way to attribute
+    one is the name it quotes. These five were all captured live.
+    """
+    others = [
+        "# News: Walton39 has received a Stalker's Charm drop",
+        "# News: Saroset has received a Savage spear shaft drop",
+        "# News: John Falls has earned the Guildmaster qualification "
+        "at the Archaeology Guild",
+        "# News: Jaspariey has just achieved at least level 99 in all skills",
+        "# News: Maplelaena just died for the last time in Hardcore "
+        "Ironman mode",
+    ]
+    root = Path(__file__).resolve().parents[1]
+    for profile in sorted((root / "profiles").glob("*.json")):
+        cfg = load_config(profile)
+        for rule in cfg["rules"]:
+            if not rule.get("enabled", True):
+                continue
+            pattern = rule.get("pattern") or rule.get("item_pattern")
+            if not pattern:
+                continue
+            for line in others:
+                assert not re.search(pattern, line, re.I), (
+                    f"{profile.name}:{rule['name']} alerts on another "
+                    f"player's broadcast: {line!r}")
+
+
+def test_rare_drop_still_reports_this_account():
+    """Filtering by name must not silence the player's own drops."""
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    rule = next(r for r in cfg["rules"] if r["name"] == "rare_drop")
+    pattern = re.compile(rule["pattern"], re.I)
+
+    for line in ("# News: SimonGros has received a Stalker's Charm drop!",
+                 "# News: SimonGros completed a Treasure Trail and "
+                 "received Third age platebody!",
+                 "News: SimonGros has received Muncher, the pet!",
+                 "# News: Simon Gros has received a rare drop!"):
+        assert pattern.search(line), line
+
+
 def test_ice_knockdown_is_not_treated_as_a_death():
     """"Get up. Keep fighting!" is Creeping Ice, not dying.
 

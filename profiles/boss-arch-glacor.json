@@ -195,7 +195,7 @@
       "name": "rare_drop",
       "kind": "ocr",
       "region": "chat_tail",
-      "pattern": "\\breceived\\s+.{0,60}?\\bdrop\\b|\\bhas received\\b|\\bcompleted a Treasure Trail and received\\b|\\breceived\\s+\\w+,\\s*the\\s+\\w+\\s+pet\\b",
+      "pattern": "\\bsimon\\s?gros\\b.{0,80}?\\b(received|completed)\\b|\\b(received|completed)\\b.{0,40}?\\bsimon\\s?gros\\b",
       "cooldown": 0,
       "message": "RARE DROP",
       "alert_body": "{line}",
@@ -203,7 +203,8 @@
       "urgency": "critical",
       "timeout_ms": 60000,
       "enabled": true,
-      "_note": "A rare drop announces itself as a broadcast, which is a different message from the routine reward-chest line and is missed entirely by loot_received. Wiki-verified templates: 'News: [Player] has received [item] drop!', 'News: [Player] completed a Treasure Trail and received [item]!', and 'News: [Player] has received [Name], the [Skill] pet drop at [number] XP!'. Directly relevant here: the wiki lists Ragefire, Steadfast and Glaiven boots - the Glacor boots - under drops announced to friends, so an Arch-Glacor boot drop produces exactly this line. The pattern deliberately does NOT anchor on the player name. Broadcasts also fire for other players, and seeing someone else's rare drop is harmless noise, whereas anchoring on an OCR'd name risks missing the player's own - and this is the one alert where a miss costs something real. It must not match the ordinary 'You receive: 12 x Glacor remnants' chest line, which is asserted in the tests. urgency=critical and a long timeout because a rare drop is the single most important thing that can happen in a session. UNVERIFIED against this account's live chat - the wording comes from the wiki, not from an observed drop. Confirm on the first broadcast."
+      "_note": "ONLY this account's drops. The previous pattern matched any broadcast containing 'has received', which is by definition a SERVER-WIDE announcement about someone else - it fired live on '# News: Walton39 has received a Stalker's Charm drop', which is no use at all. Rare-drop broadcasts always name the player, so the rule now requires this account's name. Wiki-verified templates it still covers: 'News: [Player] has received [item] drop!', 'News: [Player] completed a Treasure Trail and received [item]!' and the pet form. Both name orders are accepted because the name can appear before or after the verb, and '\\s?' absorbs the space OCR sometimes inserts mid-name ('Simon Gros'). Checked against five real broadcasts about other players captured live - Walton39, John Falls, Jaspariey, Saroset and Maplelaena - all of which must stay silent. CHANGING ACCOUNT: this name is the filter. On another character the rule goes silent until the name here is updated.",
+      "_account_note": "Character name is 'SimonGros'. It appears here because a broadcast cannot be attributed any other way - the line itself carries no 'you' marker."
     },
     {
       "name": "glacor_remnants",
