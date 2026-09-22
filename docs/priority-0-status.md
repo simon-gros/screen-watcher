@@ -25,16 +25,19 @@ version number.
 
 ## Immediate validation priority
 
-Before additional Priority 0 architecture is allowed to dominate development,
-the **already implemented Linux version must be exercised in real use**.
+The **already implemented Linux version must continue to be exercised in real
+use**. The last 24 hours moved several former Priority 0 gaps into production:
+Wayland portal capture, overlay delivery, runtime frame-health checks, profile
+fingerprints, sanitized replay fixtures, and the first large module split.
 Automated tests prove code paths under controlled inputs; they do not prove that
-RuneScape capture, OCR, window lifecycle, notifications, timing, and persistence
-behave correctly together on the actual CachyOS desktop.
+RuneScape capture, OCR, window lifecycle, notifications, timing, persistence,
+and profile-specific semantics behave correctly together on the actual CachyOS
+desktop.
 
 Current development priority is therefore:
 
 1. reproduce and measure the current implementation in ordinary Fishing,
-   Thieving, and Arch-Glacor sessions;
+   Thieving, Woodcutting, Firemaking, Arch-Glacor, and Giant Mole sessions;
 2. record false positives, false negatives, capture/OCR failures, lifecycle
    failures, persistence problems, performance regressions, and usability
    problems;
@@ -60,6 +63,15 @@ Session records:
   main finding: of five rule patterns written from assumption, four were
   wrong when finally checked against real chat.
 
+- **22 September 2026 live profile expansion** — Woodcutting and Firemaking
+  were trained against ordinary live sessions, while Arch-Glacor received
+  further live correction of gauge, loot, death/ice, broadcast, wrapping and
+  quantity handling. Giant Mole was then added as a second boss profile with
+  twelve rules derived from documented mechanics and checked against live chat.
+  The recurring lesson is unchanged: profile rules are not considered reliable
+  merely because a plausible pattern can be written; live evidence must confirm
+  both the wording and the semantic meaning of the event.
+
 ## Ordered foundation
 
 | Step | Status | Current state |
@@ -67,7 +79,7 @@ Session records:
 | 1. `GameInstance` / `CaptureBackend` abstraction | **Complete** | Live capture and interactive capture commands use the backend abstraction. |
 | 2. Shared frame scheduler/cache | **Partial** | `GameInstance` owns per-cycle frame reuse, which is what makes one capture serve several rules, and `doctor` drives `FrameScheduler` directly. The watch loop does **not** build a scheduler - it calls `evaluate` and relies on the per-cycle cache - so scheduler-level prefetch and per-region isolation are not exercised during a real run. Corrected after reading the code: this row previously claimed `watch` let the scheduler own the cycle. |
 | 3. Native X11 capture | **Complete for XCB GetImage** | `X11XcbBackend` is the default and is benchmarked against ImageMagick. The shipped implementation uses persistent XCB `GetImage`; XComposite/XShm remain optional future optimizations, not completed work. |
-| 4. Backend/frame diagnostics | **Partial** | `doctor` covers dependencies, backend selection, window/geometry, regions/grids, real captures, OCR, outputs, profile structure, KWin focus/window state, and detected logical-to-pixel scale. Long-duration frozen-frame diagnosis and compatibility fingerprints remain outstanding. |
+| 4. Backend/frame diagnostics | **Complete for current Linux backends** | `doctor` covers dependencies, backend selection, window/geometry, regions/grids, real captures, OCR, outputs, profile structure, KWin focus/window state, and detected logical-to-pixel scale. Compatibility fingerprints are validated, and `RegionHealth` now runs inside the live watch loop to report blank or frozen regions rather than leaving those checks confined to diagnostics. |
 | 5. Interface-reader registry | **Partial** | `ChatReader` is live and shared by chat-driven rules. Inventory, buff/action-bar, target, RuneMetrics, and other reusable readers remain to be implemented. |
 | 6. Layered OCR | **Complete for current numeric path** | RuneScape numeric/sprite OCR is used where applicable with Tesseract fallback. General chat OCR remains the dominant poll-cycle cost, now measured rather than asserted: 570 ms of a ~874 ms four-region cycle, against a ~72 ms process-startup floor that every call pays regardless of image size. Tesseract flag tuning was benchmarked and rejected - `--oem 1` saved 2%, faster page-segmentation modes changed the output, and legacy `--oem 0` was 4.5x slower. The shipped `ocr_scrolling` path is what carries the win: 123 ms against 582 ms on real pixels, now guarded by a timing test that runs the real binary. The remaining unclaimed saving is batching all regions into one Tesseract `imagelist` call - measured 27% - which needs the scheduler to own the cycle first (step 2). See [engineering notes](engineering-notes.md). |
 | 7. Read-only KWin window metadata | **Complete** | KWin scripting/D-Bus discovery is implemented read-only, reports window state/focus/geometry, participates in diagnostics, and is used by runtime lifecycle handling when available. |
@@ -165,9 +177,11 @@ Until the remaining work is complete:
    only.
 5. Reproducible defects found in the current working implementation take
    precedence over new architectural or profile work.
-6. Broad skill/profile expansion remains secondary to practical validation,
-   reusable readers, replay/fixtures, schema/versioning, Wayland support, and
-   modularization.
+6. Broad skill/profile expansion remains evidence-led and secondary to
+   practical validation, reusable readers/normalized events, replay/fixture
+   coverage, and soak testing. Schema/versioning, production Wayland capture,
+   overlay delivery, and the first module split have already landed and should
+   be treated as the current baseline rather than future gates.
 
 ## Next major roadmap target — cross-platform desktop application
 
