@@ -3516,6 +3516,57 @@ def test_level_up_ignores_requirement_and_total_lines():
         assert not re.search(pat, line, re.I), line
 
 
+def test_gauge_rejects_a_dropped_leading_digit(monkeypatch):
+    """8,899 read as 899 slipped past a strict one-tenth threshold.
+
+    Losing a leading digit divides by ten but KEEPS the rest, so the
+    ratio is 0.101 - just outside `current < previous * 0.1`. Measured
+    live at Arch-Glacor: three of twelve samples did exactly this
+    (8899->899, 8898->898, 8844->844), and at a 10,597 pool that reads
+    as 8% health and fires a false critical alert.
+    """
+    rule = _gauge_rule(maximum=10597, warn_below=30, confirm_readings=2)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    # confirm_readings=1 so a single bad frame is enough to alert. With
+    # the default 2 this test passes whatever the threshold is, because
+    # one low reading never fires - which is how the first version of
+    # this test proved nothing.
+    rule.confirm_readings = 1
+    readings = iter(["8,899/10,597", "899/10,597", "898/10,597"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    alerts = [watcher.evaluate(rule, "0x1", region, (100, 100), now)
+              for now in (1.0, 2.0, 3.0)]
+    assert not any(alerts), (
+        "a dropped leading digit must not alert: 899 of 10,597 is 8% "
+        "health, and the real value was 8,899")
+
+
+def test_gauge_still_alerts_on_a_genuine_near_death_drop(monkeypatch):
+    """The guard delays one frame; it must not silence an emergency.
+
+    Widening the threshold to 0.12 rejects a real fall to ~10% health
+    for a single frame. That is the accepted cost - the next reading
+    decides - but a sustained low must still fire, or the guard has
+    traded a false alarm for a missed death.
+    """
+    rule = _gauge_rule(maximum=10597, warn_below=30, confirm_readings=2)
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    # Healthy, then a genuine collapse that persists.
+    readings = iter(["9,000/10,597", "1,100/10,597", "1,050/10,597",
+                     "1,020/10,597", "1,010/10,597"])
+    monkeypatch.setattr(watcher, "ocr_array", lambda *a, **k: next(readings))
+
+    alerts = [watcher.evaluate(rule, "0x1", region, (100, 100), now)
+              for now in (1.0, 2.0, 3.0, 4.0, 5.0)]
+    assert any(a is not None for a in alerts), (
+        "a sustained genuine low must still alert, just a frame later")
+
+
 def test_gauge_rejects_an_implausible_collapse(monkeypatch):
     """A digit lost to a hitsplat turns 8,000 into 8 and parses cleanly.
 

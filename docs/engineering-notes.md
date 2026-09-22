@@ -177,6 +177,55 @@ The lesson worth keeping: a thresholding change that looks like a pure
 accuracy win on prose can silently corrupt a number, and the numbers
 are what the safety-critical rules read.
 
+### The numeric readouts, audited live (22 September 2026)
+
+Chat accuracy had been measured carefully; the counters had not. Audited
+every numeric region against a live Arch-Glacor session, twelve samples
+of the vitals row and six each of the others:
+
+| region | parsed | notes |
+|---|---|---|
+| `vitals` (life) | 11/12 | current path best of four tried |
+| `gold_row` | 6/6 | stable, no drift |
+| `session_timer` | 6/6 | strictly monotonic |
+| `kill_timer` | n/a | empty between kills; no enabled rule |
+| `boss_health` | n/a | empty between kills; no enabled rule |
+
+**The preprocessing that helps chat must not be applied here.** On the
+vitals row a 2x upscale returns *nothing at all* - every upscaled
+variant OCR'd to an empty string, where raw greyscale reads the numbers.
+The chat path and the gauge path genuinely need different treatment, and
+`ocr_array` already keeps them apart.
+
+Two candidate "improvements" were rejected after measuring:
+
+- **Blue channel.** The life readout is drawn over a red bar, so the
+  blue channel looked like a clean separation, and it parsed 12/12
+  against the current path's 11/12. But it was *wrong* three times,
+  dropping the leading digit: 8899 read as 899, 8898 as 898, 8844 as
+  844. A higher parse rate with corrupted values is worse than an
+  occasional miss.
+- **Greyscale without upscaling.** Also 11/12, but corrupted two
+  readings outright (9219 as 2219, 9088 as 2088).
+
+### The 0.1 collapse threshold had a gap
+
+The gauge rule already rejects a reading that collapses to under a tenth
+of the previous one, which is what a lost leading digit usually looks
+like. But losing a leading digit divides by ten *and keeps the remaining
+digits*: 8,899 becomes 899, a ratio of **0.1010** - just outside a
+strict tenth.
+
+Three of twelve live samples did exactly this. At a 10,597 pool, 899
+reads as 8% health and fires a false critical alert. The threshold is
+now 0.12, which covers the whole family (0.100-0.111 for any leading
+digit) while leaving a genuine catastrophic hit free to alert.
+
+The accepted cost, stated explicitly: a real fall to ~10% health is now
+rejected for one frame. The guard discards that frame and the next one
+decides, so a sustained emergency still alerts about a second later -
+pinned by `test_gauge_still_alerts_on_a_genuine_near_death_drop`.
+
 ### Near-match deduplication
 
 Found live during an Arch-Glacor encounter: one drop alerted twice, four

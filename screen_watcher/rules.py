@@ -966,10 +966,19 @@ def _eval_gauge(rule: Rule, wid: str, box, now: float,
     # halving the pool, still alerts, and a small gauge such as prayer -
     # which really can go from full to nearly empty when a restore wears
     # off - is left alone. The frame is discarded; the next one decides.
+    # The threshold is 0.12, not 0.1. A dropped leading digit divides the
+    # value by ten *and keeps the remaining digits*, so 8,899 becomes 899 -
+    # a ratio of 0.1010, which sits just OUTSIDE a strict tenth and slipped
+    # through. Measured live at Arch-Glacor: three of twelve samples lost
+    # their leading digit that way (8899->899, 8898->898, 8844->844), and
+    # at a 10,597 pool that reads as 8% health, firing a false critical
+    # alert. 0.12 covers the whole family (0.100-0.111 for any leading
+    # digit) while still leaving a genuine catastrophic hit - anything
+    # above an eighth of the previous reading - free to alert.
     previous = rule._last_reading
     if (previous is not None and maximum >= 1000
             and previous >= maximum * 0.2
-            and current < previous * 0.1):
+            and current < previous * 0.12):
         return None
 
     # The same guard, for the first reading of a run. With no previous value
