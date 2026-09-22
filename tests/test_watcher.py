@@ -4289,6 +4289,76 @@ def test_watch_restores_total_rules_not_only_counters(monkeypatch, tmp_path):
         "not restored replays every milestone on restart")
 
 
+def test_total_milestone_blocked_by_cooldown_is_delayed_not_lost(monkeypatch):
+    """`_milestone` advanced before the cooldown was checked.
+
+    A milestone reached while the rule was still cooling was marked as
+    reported and then never fired, so that million vanished rather than
+    arriving late. Latent at a 60s cooldown against a million every ~25
+    minutes, but it silently drops an alert the moment the two overlap.
+    """
+    rule = _total_rule(cooldown=60)
+    rule._total, rule._milestone = 1_476_060, 1
+    rule._last_fired = 9000.0                  # just fired
+
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    def at(now, value):
+        monkeypatch.setattr(watcher, "ocr_array",
+                            lambda *a, v=value, **k: f"{v:,} 0 2,549,815")
+        return watcher.evaluate(rule, "0x1", region, (100, 100), now)
+
+    assert at(9010.0, 2_000_300) is None       # inside the cooldown
+    alert = at(9070.0, 2_200_000)              # past it
+    assert alert is not None and "(2M)" in alert.body
+
+
+def test_total_fires_exactly_once_per_step_over_a_long_climb(monkeypatch):
+    """Four millions crossed must produce four alerts, no more."""
+    rule = _total_rule(cooldown=60)
+    rule._total, rule._milestone = 1_476_060, 1
+
+    region = Region("top-left", 0, 0, 10, 10)
+    monkeypatch.setattr(watcher, "capture_array", lambda *a, **k: None)
+
+    fired, now = [], 9000.0
+    for value in range(1_600_000, 5_200_000, 100_000):
+        monkeypatch.setattr(watcher, "ocr_array",
+                            lambda *a, v=value, **k: f"{v:,} 0 2,549,815")
+        alert = watcher.evaluate(rule, "0x1", region, (100, 100), now)
+        if alert:
+            fired.append(alert.body)
+        now += 120.0
+
+    assert len(fired) == 4, fired
+    assert [b[b.index("(") + 1:b.index("M)")] for b in fired] == \
+        ["2", "3", "4", "5"]
+
+
+def test_woodcutting_value_alert_does_not_claim_gold_was_earned():
+    """The Metrics Gain column is log VALUE, not coins received.
+
+    Nothing is sold while chopping and Drops reads 0, so the figure is
+    what the logs are worth, not money in the pouch. Saying "gold
+    gained" describes income the player does not have.
+
+    The rule keeps its `gold_milestone` name on purpose:
+    state/counters.jsonl is keyed by rule name, so renaming it would
+    orphan the stored total and replay every milestone already passed.
+    """
+    cfg = load_config(Path("profiles/woodcutting.json"))
+    rule = next(r for r in cfg["rules"] if r["name"] == "gold_milestone")
+
+    for field in ("message", "alert_body", "milestone_message"):
+        text = rule[field].lower()
+        assert "gold gained" not in text, f"{field} claims gold income"
+        assert "gold milestone" not in text, f"{field} claims gold income"
+
+    body = rule["alert_body"].format(n=1, total="1,476,060")
+    assert "logs cut" in body and "1M" in body
+
+
 def test_woodcutting_pack_full_and_wood_box_are_distinct_events():
     """Two "full" messages that must not be confused.
 

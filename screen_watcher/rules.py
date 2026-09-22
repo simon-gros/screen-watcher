@@ -1300,6 +1300,13 @@ def _eval_total(rule: Rule, wid: str, box, now: float,
     reached = total // step
     if reached <= rule._milestone:
         return None
+    # Check the cooldown BEFORE claiming the milestone. Advancing first
+    # meant a milestone blocked by the cooldown was marked as reported
+    # and never fired - silently losing that million rather than
+    # delaying it. Returning without claiming leaves it pending, so the
+    # next poll past the cooldown announces it.
+    if not rule.ready(now):
+        return None
     rule._milestone = reached
     # Persist so a restart does not re-announce a milestone already
     # passed. The game owns the running figure, so only the milestone
@@ -1308,8 +1315,6 @@ def _eval_total(rule: Rule, wid: str, box, now: float,
     # not, which is why three consecutive woodcutting runs each fired
     # "1M" at a higher and higher gold figure.
     _w().log_counter(rule.name, now, total)
-    if not rule.ready(now):
-        return None
     fields = {"total": f"{total:,}", "n": reached, "step": f"{step:,}",
               "item": rule.item}
     template = rule.milestone_message or rule.alert_body or "{total}"
