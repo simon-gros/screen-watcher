@@ -136,14 +136,12 @@ which runs the real binary rather than a mock: every other scroll test
 fakes `ocr_array`, so they prove the strip is smaller but never that
 tesseract costs less.
 
-**Unclaimed saving: batch the regions into one Tesseract call.** It
-accepts an `imagelist` - a text file of image paths - and processes them
-in a single process. Measured 865 ms for four separate calls against
-632 ms batched, a 27% saving with byte-identical output (221 words both
-ways). Not implemented, because the evaluators currently pull regions
-independently and batching needs the watch loop to know every region
-wanted this cycle before any of them is read. Worth doing when the
-scheduler owns the cycle (foundation step 2).
+**Batching the regions into one Tesseract call** is now implemented as
+`ocr_many` - see "Batched OCR" below for the measurements. It is not yet
+wired into the watch loop, because the evaluators still pull regions
+independently; `FrameScheduler.prefetch` already receives the region
+list that makes it possible, but `watch` does not build a scheduler
+(foundation step 2).
 
 An in-process binding (`tesserocr`) would remove the startup floor
 entirely, but it is not installed here and adding a dependency is a
