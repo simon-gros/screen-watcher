@@ -49,10 +49,14 @@ Current development priority is therefore:
 2. record false positives, false negatives, capture/OCR failures, lifecycle
    failures, persistence problems, performance regressions, and usability
    problems;
-3. fix confirmed current-version defects before adding more speculative
-   architecture;
-4. convert reproducible practical failures into regression tests/replay fixtures;
-5. rerun practical smoke/session/soak tests after material runtime fixes.
+3. fix confirmed current-version defects before adding speculative architecture;
+4. when current-version blockers are clear, implement **Priority 0A adaptive
+   interface localization** before broad new profile expansion, so detectors can
+   survive different resolutions, DPI/interface scales and player layouts;
+5. convert reproducible practical failures and localization failures into
+   regression tests/replay fixtures;
+6. rerun practical smoke/session/soak tests after material runtime or locator
+   fixes.
 
 A green CI run is a baseline, **not** sufficient evidence that the current
 application works correctly in practice.
@@ -82,6 +86,46 @@ Session records:
   The recurring lesson is unchanged: profile rules are not considered reliable
   merely because a plausible pattern can be written; live evidence must confirm
   both the wording and the semantic meaning of the event.
+
+## New Priority 0A — adaptive interface localization
+
+**Status: Partial; promoted to immediate priority on 22 September 2026.**
+
+The repository now contains `screen_watcher/layout.py`, which can discover known
+title text and locate chat coarsely from timestamps, cache a layout fingerprint,
+and detect that an interface arrangement changed. That is useful infrastructure,
+but the module explicitly documents ~24 px positional precision and says the
+result is suitable for detecting change rather than calibrating detector regions.
+The current profiles still ultimately depend on fixed pixel offsets/sizes and
+fixed inner grids, so a different player's interface scale, chat font size,
+panel arrangement, or Backpack shape can still make a rule read the wrong pixels.
+
+Priority 0A upgrades this into a detector-grade semantic resolver. It now gates
+the claim that profiles are portable across players/resolutions. The detailed
+design and research references are in
+[future-implementation-ideas.md](future-implementation-ideas.md#priority-0a--adaptive-interface-localization-and-scale-independent-detection).
+
+Immediate requirements:
+
+1. introduce `ResolvedRegion`/locator-confidence semantics and refuse low-
+   confidence regions instead of silently using a neighbouring panel;
+2. refine coarse title/chat discovery to precise panel boxes;
+3. estimate RuneScape interface scale from several visual anchors, independently
+   of OS/KWin DPI scale;
+4. add multi-scale masked templates plus structural/content validators;
+5. derive child regions in panel-local coordinates and optionally normalize them
+   to a canonical reference scale;
+6. dynamically infer chat line/font scale and Backpack slot geometry;
+7. track resolved panels across frames and reacquire them after moves, resizes or
+   interface-scale changes;
+8. build sanitized multi-resolution/multi-layout replay fixtures with ground
+   truth and regression tests;
+9. retain fixed coordinates only as an explicit legacy/manual fallback.
+
+This priority is deliberately higher than adding more speculative skill profiles.
+Existing profile validation and confirmed-defect fixes still come first when they
+find a real regression; otherwise, new screen-reading architecture should advance
+Priority 0A before broad profile expansion.
 
 ## Ordered foundation
 
