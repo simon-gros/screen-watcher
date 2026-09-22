@@ -4336,6 +4336,42 @@ def test_total_fires_exactly_once_per_step_over_a_long_climb(monkeypatch):
         ["2", "3", "4", "5"]
 
 
+def test_fire_spirit_covers_every_documented_variant():
+    """Which spirit spawns depends on gear the profile cannot see.
+
+    The wiki documents four: fire spirit, divine fire spirit (Fairy Fire
+    perk), forge phoenix (Orthen furnace core) and divine forge phoenix
+    (both). A pattern matching only the plain one would silently miss
+    the others - the impling failure, where naming variants broke the
+    match, repeated.
+
+    The wording is not first-hand verified, so the pattern anchors on
+    the noun plus an emergence verb rather than one exact sentence.
+    """
+    cfg = load_config(Path("profiles/firemaking.json"))
+    rule = next(r for r in cfg["rules"] if r["name"] == "fire_spirit")
+    pattern = re.compile(rule["pattern"], re.I)
+
+    for line in ("A fire spirit emerges from the bonfire.",
+                 "A divine fire spirit emerges from the bonfire.",
+                 "A forge phoenix emerges from the bonfire.",
+                 "A divine forge phoenix emerges from the bonfire!",
+                 "A fire spirit appears.",
+                 "A fire spirit rises from your fire."):
+        assert pattern.search(line), line
+
+    # Real firemaking chat, captured live. The activity lines run several
+    # times a second, so a false match here would alert constantly - and
+    # the coin line is a spirit REWARD, not the spawn.
+    for line in ("You add a log to the fire.",
+                 "The fire catches and the logs begin to burn.",
+                 "You attempt to light the logs.",
+                 "1,200 coins have been added to your money pouch.",
+                 "Your preset is being withdrawn.",
+                 "You get some maple logs."):
+        assert not pattern.search(line), line
+
+
 def test_firemaking_activity_lines_are_the_ones_seen_live():
     """All three were read from real bonfire chat, not guessed.
 

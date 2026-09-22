@@ -90,6 +90,20 @@
       "_note": "Fires when all evidence of burning stops. This covers the event the wiki calls out as unavoidable: 'Bonfires will die away after a set amount of time, even if players keep adding logs to it.' When the bonfire dies the adding simply stops, with no announcement, so chat silence is the only signal. VERIFIED live on a bonfire - all three lines were read from real chat: 'You add a log to the fire.' (the dominant one, 59 reads in a 75s sample), 'You attempt to light the logs.' and 'The fire catches and the logs begin to burn.' The [lI1|] classes absorb the usual OCR damage on lowercase l, which this font drops or substitutes constantly - the woodcutting profile measured that at 2.4% of activity lines. stop_seconds=30 against a MEASURED log every ~3.3s leaves about nine missed logs of margin, so a garbled OCR run cannot false-fire. Keep this comfortably above the drain interval if a slower log type is used."
     },
     {
+      "name": "fire_spirit",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "(fire spirit|forge phoenix)\\s+(emerg|appear|rise|burst|spawn)|a\\s+(divine\\s+)?(fire spirit|forge phoenix)|(emerges|appears|rises) from (the|your) (bonfire|fire)",
+      "cooldown": 10,
+      "message": "Fire spirit!",
+      "alert_body": "A fire spirit appeared - click it within a minute for loot and a 50% XP boost.",
+      "sound": "message-highlight",
+      "_note": "Fire spirits are the reason to watch a bonfire at all. Per the RuneScape Wiki they last only ONE MINUTE before disappearing, and clicking one gives rewards plus a 50% base-XP boost on the next one to five sets of logs - so a missed spirit is both loot and experience lost. They are visible only to the player they spawn for. urgency and a long timeout are set so the popup is still on screen when you glance over, because a minute is not long. cooldown=10 because several spirits can be active at once and each is worth reporting. PATTERN: anchors on the noun plus an emergence verb rather than one exact sentence. It covers all FOUR variants the wiki documents - fire spirit, divine fire spirit (Fairy Fire perk), forge phoenix (Orthen furnace core) and divine forge phoenix (both) - since which one spawns depends on gear the profile cannot see. WORDING IS NOT FIRST-HAND VERIFIED. The wiki confirms an 'emerging message' exists in chat but never quotes it; a third-party chat-alert tool records it as 'A fire spirit emerges from the bonfire'. Live sampling here caught the REWARD ('1,200 coins have been added to your money pouch', which is the wiki's 50-2200 coin drop) but never the spawn line, so it may be filtered out of this chat tab or may simply not have been on screen. Confirm and tighten the first time this actually fires - and if it never fires while spirit rewards keep arriving, check the Game/Filtered chat tab rather than assuming the pattern is wrong.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 30000
+    },
+    {
       "name": "session_hour",
       "kind": "timer",
       "region": "session_timer",
