@@ -4336,6 +4336,82 @@ def test_total_fires_exactly_once_per_step_over_a_long_climb(monkeypatch):
         ["2", "3", "4", "5"]
 
 
+def test_firemaking_activity_lines_are_the_ones_seen_live():
+    """All three were read from real bonfire chat, not guessed.
+
+    "You add a log to the fire." dominates - 59 reads in a 75s sample -
+    with the light/catch pair appearing once per new fire. The [lI1|]
+    classes absorb this font's habitual damage to lowercase l.
+    """
+    cfg = load_config(Path("profiles/firemaking.json"))
+    rule = next(r for r in cfg["rules"] if r["name"] == "firemaking_stopped")
+    pattern = re.compile(rule["pattern"], re.I)
+
+    for line in ("You add a log to the fire.",
+                 "You add a log to the fire. v",
+                 "] You add a log to the fire.",
+                 "You attempt to light the logs,",
+                 "The fire catches and the logs begin to burn,",
+                 "You add a Iog to the fire.",
+                 "You attempt to Iight the Iogs."):
+        assert pattern.search(line), line
+
+    # "You get some maple logs" shares the word "logs" but is woodcutting;
+    # matching it would keep this rule alive while no fire is burning.
+    for line in ("You get some maple logs.",
+                 "You swing your hatchet at the tree.",
+                 "Welcome to RuneScape.",
+                 "Your wood box is now full.",
+                 "# News: Zarosian demons have appeared near the Forgotten"):
+        assert not pattern.search(line), line
+
+
+def test_firemaking_watches_the_pack_drain_not_fill(monkeypatch):
+    """Firemaking inverts every other profile: the pack empties.
+
+    The run ends when the logs run out, so the inventory rule is an
+    item_count counting down. The `inventory` kind cannot express this -
+    both its modes project a pack filling up.
+    """
+    cfg = load_config(Path("profiles/firemaking.json"))
+    raw = next(r for r in cfg["rules"] if r["name"] == "logs_running_out")
+    assert raw["kind"] == "item_count", "a fill-projection rule is wrong here"
+
+    rule = Rule(**{k: v for k, v in raw.items() if not k.startswith("_")})
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: np.zeros((10, 10, 3), dtype=np.int16))
+
+    fired, now = [], 1000.0
+    for count in (12, 10, 8, 7, 6, 5, 5, 4, 3, 2, 1, 0, 0, 0):
+        _count_is(monkeypatch, count)
+        alert = watcher.evaluate(rule, "w", region, (100, 100), now)
+        if alert:
+            fired.append((count, alert.body))
+        now += 3.3                      # measured drain: ~3.3s per log
+
+    assert fired, "a draining pack must warn before it empties"
+    warned_at = fired[0][0]
+    assert warned_at <= raw["warn_below"], (
+        f"warned at {warned_at} logs, threshold is {raw['warn_below']}")
+
+
+def test_firemaking_alert_does_not_fake_a_remaining_time():
+    """The body used "{n}0 seconds", which is digit-appending, not maths.
+
+    At 4 logs it rendered "about 40 seconds" where the measured truth is
+    ~13s. Templates do plain substitution with no arithmetic, so a
+    derived duration cannot be expressed - and a confidently wrong
+    number is worse than none at all.
+    """
+    cfg = load_config(Path("profiles/firemaking.json"))
+    rule = next(r for r in cfg["rules"] if r["name"] == "logs_running_out")
+
+    assert "{n}0" not in rule["alert_body"]
+    body = rule["alert_body"].format(n=4, noun="logs")
+    assert "40 second" not in body
+
+
 def test_impling_pattern_matches_named_impling_types():
     """The impling rule had never fired, in any profile, ever.
 
@@ -4518,7 +4594,8 @@ def test_woodcutting_pattern_survives_the_dropped_g():
 
 def test_shipped_profiles_declare_their_calibration():
     """Each profile records the window it was measured on."""
-    for name in ("boss-arch-glacor", "thieving", "fishing", "woodcutting"):
+    for name in ("boss-arch-glacor", "thieving", "fishing", "woodcutting",
+                 "firemaking"):
         cfg = load_config(Path(f"profiles/{name}.json"))
         assert cfg["schema_version"] == watcher.SCHEMA_VERSION
         fp = cfg["fingerprint"]

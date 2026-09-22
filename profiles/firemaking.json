@@ -1,0 +1,106 @@
+{
+  "skill": "firemaking",
+  "profile_type": "skill",
+  "schema_version": 1,
+  "fingerprint": {
+    "window_size": [
+      3840,
+      2058
+    ],
+    "capture_backend": "x11-xcb",
+    "ui_scale": 1.75,
+    "session": "CachyOS/KDE Plasma 6 Wayland, RS3 NXT via XWayland",
+    "_note": "Regions are pixel offsets measured on this exact window size. At any other size they resolve elsewhere and fail silently - OCR returns nothing, or reads a neighbouring panel. ui_scale 1.75 is the logical-to-physical factor KWin reports (2194 logical vs 3840 pixels); `doctor` detects it independently and reports it.",
+    "last_validated": "2026-09-22, bonfire with maple logs"
+  },
+  "window": {
+    "wm_class": "steam_app_1343400",
+    "_comment": "RS3 NXT. WM_CLASS survives title changes and skips the Steam launcher window."
+  },
+  "interval": 1.5,
+  "_profile_note": "Firemaking via BONFIRE, which per the RuneScape Wiki is the standard modern method: logs are added to an existing fire one after another without re-clicking, at roughly 800-990 logs/hour. The important structural difference from every other profile here is that the backpack DRAINS instead of filling - the run ends when the logs run out, not when the pack is full. So the inventory alert is an item_count watching the count fall, NOT an 'inventory' rule: both of that rule's modes ('lead' and 'overflow') project a pack filling up and are the wrong shape entirely. MEASURED live while burning maples on a bonfire: the pack refills to 28 at the bank then drains one log roughly every 3.3s, so a full pack lasts about 90 seconds.",
+  "_regions_help": "anchor + dx,dy offset from that corner + fixed w,h. RS3 pins panels to edges at fixed size rather than scaling them, so this survives a window resize. Negative dx/dy measure inward from a right/bottom edge.",
+  "regions": {
+    "chat_tail": {
+      "anchor": "bottom-left",
+      "dx": 5,
+      "dy": -36,
+      "w": 600,
+      "h": 650,
+      "_note": "Most recent ~32 lines of All Chat. Same geometry as the woodcutting and thieving profiles - RS3 pins the chat panel to the bottom-left at a fixed size. dy=-36 is the largest offset that still excludes the chat input bar below it; at -57 the boundary falls mid-line and the NEWEST message - the one rules care about most - OCRs as garbage."
+    },
+    "backpack": {
+      "anchor": "bottom-right",
+      "dx": -13,
+      "dy": -38,
+      "w": 330,
+      "h": 560,
+      "grid": {
+        "x0": 17,
+        "y0": 86,
+        "cell_w": 61,
+        "cell_h": 55,
+        "cols": 5,
+        "rows": 6
+      },
+      "_note": "Full backpack panel; grid is relative to the region's top-left. VERIFIED live during a bonfire run: count_occupied returned exactly 8 against a hand count of 8 logs. No colour matching is needed here - unlike the urns and food rules elsewhere, logs are the only thing in the pack, so plain occupancy is the count. Note the pack fills from the BOTTOM upward as it drains, which does not affect a whole-grid count."
+    },
+    "session_timer": {
+      "anchor": "top-left",
+      "dx": 150,
+      "dy": 620,
+      "w": 210,
+      "h": 50,
+      "_note": "Elapsed-time readout at the bottom of the Metrics panel. Same geometry as every other profile - RS3 pins the panel top-left at a fixed size. Re-check with `shot session_timer` if the Metrics panel is moved or resized."
+    }
+  },
+  "rules": [
+    {
+      "name": "logs_running_out",
+      "kind": "item_count",
+      "region": "backpack",
+      "item": "logs",
+      "min_blue": 0,
+      "min_cover": 0,
+      "warn_below": 5,
+      "out_below": 0,
+      "confirm_seconds": 4,
+      "repeat_seconds": 0,
+      "prime_on_start": true,
+      "cooldown": 45,
+      "message": "Logs running out",
+      "alert_body": "{n} {noun} left - restock soon.",
+      "_body_note": "Deliberately does NOT try to state the remaining seconds. The first attempt wrote '{n}0 seconds', abusing the digit substitution to fake arithmetic: at 4 logs it rendered 'about 40 seconds' when the true figure is ~13s at the measured 3.3s per log. Alert templates do plain field substitution with no arithmetic, so a derived duration cannot be expressed here - and a confidently wrong number is worse than none.",
+      "out_message": "Out of logs",
+      "out_alert_body": "No logs left - firemaking has stopped. Restock to continue.",
+      "sound": "message-new-instant",
+      "_note": "The firemaking equivalent of 'bank soon': the run ends when the logs run out. warn_below=5 against a MEASURED drain of one log per ~3.3s gives roughly 16 seconds of warning, which is enough to reach a bank preset without standing idle. confirm_seconds=4 rejects a bank or loot interface drawn over the backpack, which hides slots and would otherwise read as a sudden drop - a real drain persists, an overlay clears in a frame or two. repeat_seconds=0 deliberately: unlike urns, where every catch while empty wastes XP and the loss is ongoing, an empty pack here simply stops the activity, and logs_gone already reports that from chat. prime_on_start is on for the same reason as the urns and food rules - without it, starting the watcher next to a bank with an empty pack announces 'no logs' within confirm_seconds when nothing is happening at all."
+    },
+    {
+      "name": "firemaking_stopped",
+      "kind": "activity",
+      "region": "chat_tail",
+      "pattern": "you add a [lI1|]?og to the fire|the fire catches and the [lI1|]?ogs begin to burn|you attempt to [lI1|]ight the [lI1|]?ogs",
+      "suppress_pattern": "backpack .?s too full|can'?t carry any more",
+      "stop_seconds": 30,
+      "cooldown": 120,
+      "message": "Firemaking stopped",
+      "alert_body": "No logs burned for {quiet:.0f}s - firemaking has stopped.",
+      "sound": "dialog-warning",
+      "_note": "Fires when all evidence of burning stops. This covers the event the wiki calls out as unavoidable: 'Bonfires will die away after a set amount of time, even if players keep adding logs to it.' When the bonfire dies the adding simply stops, with no announcement, so chat silence is the only signal. VERIFIED live on a bonfire - all three lines were read from real chat: 'You add a log to the fire.' (the dominant one, 59 reads in a 75s sample), 'You attempt to light the logs.' and 'The fire catches and the logs begin to burn.' The [lI1|] classes absorb the usual OCR damage on lowercase l, which this font drops or substitutes constantly - the woodcutting profile measured that at 2.4% of activity lines. stop_seconds=30 against a MEASURED log every ~3.3s leaves about nine missed logs of margin, so a garbled OCR run cannot false-fire. Keep this comfortably above the drain interval if a slower log type is used."
+    },
+    {
+      "name": "session_hour",
+      "kind": "timer",
+      "region": "session_timer",
+      "step": 3600,
+      "cooldown": 60,
+      "milestone_message": "You've been firemaking for {label} ({elapsed}).",
+      "message": "Session milestone",
+      "alert_body": "Firemaking for {label} ({elapsed}).",
+      "sound": "completion-rotation",
+      "_note": "Reads the Metrics panel's own elapsed timer rather than tracking wall-clock time in the watcher. That is the better source: it is the number already on screen, it pauses when the player pauses it, and it survives a watcher restart because the game owns it. step=3600 fires once per hour. The parser anchors on [0-5] for the minute and second fields so a garbled frame like '00:82:09' is rejected rather than becoming a bogus elapsed time, and a timer reset rewinds the milestone counter so a fresh session starts clean."
+    }
+  ],
+  "_notification_note": "Rules use urgency 'normal' with an explicit timeout_ms so KDE auto-dismisses them. Setting urgency to 'critical' makes KDE keep the popup until it is closed by hand and ignore timeout_ms - only do that for an alert you must not miss."
+}
