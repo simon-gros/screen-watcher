@@ -2054,6 +2054,90 @@ def test_stitch_discards_clipped_garbage():
         "[11:03:17] You find a nest."]
 
 
+def test_one_drop_with_two_ocr_spellings_alerts_once():
+    """Caught live in an Arch-Glacor encounter: one drop, two alerts.
+
+    Tesseract rendered the same chat line two ways four seconds apart -
+    "shines over one of your items" and "shines aver one of your items".
+    `norm_line` absorbs punctuation wobble but not a substituted letter,
+    so the two keys were 98.1% alike, not equal, and each looked like a
+    separate drop.
+    """
+    same = ["[11:39:09] A golden beam shines over one of your items.",
+            "[11:39;09]A golden beam shines aver one of your items."]
+    seen = {watcher.norm_line(same[0])}
+    assert watcher.seen_before(watcher.norm_line(same[1]), seen), (
+        "a one-letter misread must not count as a second drop")
+
+
+def test_near_match_dedup_never_swallows_a_different_number():
+    """The dangerous half: numbers must still separate events.
+
+    Stripping digits before comparing was tried first and was far worse
+    than the duplicate it fixed - consecutive kills became identical, so
+    every kill after the first would have gone unreported. Digits are
+    now compared exactly and only letters loosely.
+    """
+    pairs = [
+        ("[11:37:45] You have killed 638 Arch-Glacor in normal mode.",
+         "[11:39:09] You have killed 639 Arch-Glacor in normal mode."),
+        ("455 coins have been added to your money pouch.",
+         "350 coins have been added to your money pouch."),
+        ("[11:37:45] You eat the desert sole. It restores life",
+         "[11:39:09] You eat the desert sole. It restores life"),
+    ]
+    for first, second in pairs:
+        seen = {watcher.norm_line(first)}
+        assert not watcher.seen_before(watcher.norm_line(second), seen), (
+            f"a changed number is a new event, not a misread: {second!r}")
+
+    # Unrelated lines must not collide either.
+    seen = {watcher.norm_line("You eat the desert sole.")}
+    assert not watcher.seen_before(
+        watcher.norm_line("The foe is beaten - but it will return."), seen)
+
+
+def test_sauvola_is_used_for_chat_but_never_for_the_gauges():
+    """Adaptive thresholding helps prose and BREAKS the numeric bars.
+
+    Sauvola cut chat errors from 0.14 to 0.06 per line, but on the
+    vitals row it read `2.909/10,200` where Otsu reads `9,909/10,200` -
+    wrong digit, wrong separator. `parse_gauge` would then see 909 of
+    10,200 and fire a critical health alert at 97% health.
+
+    So it is opt-in per call: chat turns it on, the gauges do not. This
+    pins that split, because the failure is silent and dangerous - a
+    global switch looks like a pure win when only chat is checked.
+    """
+    import shutil
+    if not shutil.which("tesseract"):
+        pytest.skip("tesseract not installed")
+
+    from PIL import Image
+    from screen_watcher import ocr as ocr_mod
+    fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/glacor"
+    frames = sorted(fixture.glob("*.png"))
+    if not frames:
+        pytest.skip("replay fixture not present")
+
+    # The default must stay Otsu, which is what the gauge rules call.
+    assert "sauvola: bool = False" in Path(ocr_mod.__file__).read_text(), (
+        "ocr_array must default to Otsu, or the gauges inherit Sauvola")
+
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    full = np.asarray(Image.open(frames[0]).convert("RGB"))
+    x, y, w, h = cfg["_regions"]["vitals"].resolve(
+        (full.shape[1], full.shape[0]))
+    vitals = full[y:y + h, x:x + w]
+
+    default = re.search(r"([\d,]+)/([\d,]+)",
+                        watcher.ocr_array(vitals).replace("\n", " "))
+    assert default, "the life readout must still be found"
+    assert default.group(1) == "9,909", (
+        f"vitals read {default.group(1)!r}; a dropped leading digit here "
+        "fires a critical health alert at full health")
+
+
 def test_preprocessing_cuts_real_character_errors():
     """Upscale-and-invert, measured against known chat, not eyeballed.
 
@@ -2204,7 +2288,7 @@ def test_ocr_scrolling_reads_only_the_new_strip(monkeypatch):
 
     seen = []
 
-    def fake_ocr(frame, psm=6):
+    def fake_ocr(frame, psm=6, sauvola=False):
         seen.append(frame.shape[0])
         return "alpha\nbravo" if len(seen) == 1 else "bravo\ncharlie"
 
@@ -2231,7 +2315,7 @@ def test_ocr_scrolling_reuses_text_when_nothing_scrolled(monkeypatch):
                         lambda *a, **k: frame.copy())
     calls = []
 
-    def fake_ocr(f, psm=6):
+    def fake_ocr(f, psm=6, sauvola=False):
         calls.append(f.shape[0])
         return "only line"
 
@@ -2257,7 +2341,7 @@ def test_ocr_scrolling_falls_back_on_unrelated_frame(monkeypatch):
     # screen_watcher.ocr, not watcher - see the retargeting note above.
     from screen_watcher import ocr as ocr_mod
     monkeypatch.setattr(ocr_mod, "ocr_array",
-                        lambda f, psm=6: (seen.append(f.shape[0]), "text")[1])
+                        lambda f, psm=6, sauvola=False: (seen.append(f.shape[0]), "text")[1])
     watcher._SCROLL_CACHE.clear()
 
     box = (0, 0, 200, 120)

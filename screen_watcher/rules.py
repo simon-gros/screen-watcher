@@ -333,7 +333,7 @@ def _eval_activity(rule: Rule, wid: str, box, now: float,
     for line in text.splitlines():
         line = line.strip()
         key = _w().norm_line(line)
-        if len(key) < 8 or key in rule._seen:
+        if len(key) < 8 or _w().seen_before(key, rule._seen):
             continue
         rule._seen.add(key)
         if rule.suppress_pattern and re.search(rule.suppress_pattern, line, re.I):
@@ -604,7 +604,7 @@ def _eval_supply(rule: Rule, wid: str, box, now: float,
     for line in text.splitlines():
         line = line.strip()
         key = _w().norm_line(line)
-        if len(key) < 8 or key in rule._seen:
+        if len(key) < 8 or _w().seen_before(key, rule._seen):
             continue
         rule._seen.add(key)
         if rule.trip_pattern and re.search(rule.trip_pattern, line, re.I):
@@ -1171,7 +1171,7 @@ def _eval_loot(rule: Rule, wid: str, box, now: float,
     for line in text.splitlines():
         line = line.strip()
         key = _w().norm_line(line)
-        if len(key) < 8 or key in rule._seen:
+        if len(key) < 8 or _w().seen_before(key, rule._seen):
             continue
         if rule.ignore_pattern and re.search(rule.ignore_pattern, line, re.I):
             rule._seen.add(key)
@@ -1257,7 +1257,7 @@ def _eval_item_drop(rule: Rule, wid: str, box, now: float,
         return None
     for line in join_wrapped_lines(_w().ocr_cached(wid, box, cycle)):
         key = _w().norm_line(line)
-        if len(key) < 8 or key in rule._seen:
+        if len(key) < 8 or _w().seen_before(key, rule._seen):
             continue
         if not re.search(rule.item_pattern, line, re.I):
             continue
@@ -1450,7 +1450,7 @@ def evaluate(rule: Rule, wid: str, region: "_w().Region", size, now: float,
         for line in text.splitlines():
             line = line.strip()
             key = _w().norm_line(line)
-            if len(key) < 8 or key in rule._seen:
+            if len(key) < 8 or _w().seen_before(key, rule._seen):
                 continue
             # A line can contain the pattern and mean its opposite: with a
             # Fingerfeather necklace the game says "You nimbly avoid getting

@@ -349,6 +349,53 @@ def norm_line(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
+def seen_before(key: str, seen) -> bool:
+    """True when `key` is a line already in `seen`, allowing OCR wobble.
+
+    Exact set membership misses a *substituted* character, as opposed to
+    the punctuation noise `norm_line` already absorbs. Caught live during
+    an Arch-Glacor encounter, where one drop alerted twice four seconds
+    apart because Tesseract rendered the same line two ways:
+
+        "A golden beam shines over one of your items."
+        "A golden beam shines aver one of your items."
+
+    Those normalise to keys 98.1% alike but not equal, so each looked
+    like a separate drop. Rather than chase perfect recognition, treat a
+    near-identical key as the same line.
+
+    Digits must match EXACTLY; only letters are compared loosely. A
+    changed number is a different event - "You have killed 638
+    Arch-Glacor" against 639, or 455 coins against 350 - while a changed
+    letter is a misread. Stripping digits before comparing was tried
+    first and was much worse than the bug it fixed: it made consecutive
+    kills identical, so every kill after the first went unreported.
+
+    The 0.93 threshold applies to the letters alone, and only to keys of
+    similar length, because a short line is cheap to confuse.
+    """
+    if key in seen:
+        return True
+    import difflib
+    digits = re.sub(r"[^0-9]", "", key)
+    letters = re.sub(r"[0-9]", "", key)
+    if len(letters) < 12:
+        # Too short to judge safely; exact matching only.
+        return False
+    for other in seen:
+        if abs(len(other) - len(key)) > 2:
+            continue
+        if re.sub(r"[^0-9]", "", other) != digits:
+            continue                      # a different number is a new event
+        other_letters = re.sub(r"[0-9]", "", other)
+        if len(other_letters) < 12:
+            continue
+        if difflib.SequenceMatcher(None, letters,
+                                   other_letters).ratio() >= 0.93:
+            return True
+    return False
+
+
 # --------------------------------------------------------------------------
 # OCR
 #

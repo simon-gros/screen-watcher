@@ -180,11 +180,11 @@ def ocr_scrolling(wid: str, box, cycle: int, psm: int = 6) -> str:
             return prev[1]
         if shift is not None:
             strip = frame[max(0, frame.shape[0] - shift - _SCROLL_OVERLAP):]
-            text = _stitch(prev[1], ocr_array(strip, psm))
+            text = _stitch(prev[1], ocr_array(strip, psm, sauvola=True))
             _SCROLL_CACHE[key] = (frame, text)
             return text
 
-    text = ocr_array(frame, psm)
+    text = ocr_array(frame, psm, sauvola=True)
     _SCROLL_CACHE[key] = (frame, text)
     return text
 
@@ -199,10 +199,23 @@ class OcrError(RuntimeError):
     """
 
 
-def _run_tesseract(path: str, psm: int, env: dict | None = None) -> str:
+#: Sauvola adaptive thresholding (`thresholding_method=2`). RS3 draws chat
+#: over a semi-transparent panel, so the background brightness varies with
+#: whatever 3D scene is behind it - exactly the case global Otsu handles
+#: worst and Sauvola is designed for. MEASURED over three fixture frames
+#: and 63 known lines: 0.06 character errors per line against Otsu's 0.14,
+#: a further 57% reduction, for 22 ms (5%). LeptonicaOtsu (method 1) was
+#: catastrophic here - 10.20 errors per line and 3.6x slower - so the
+#: choice is specifically Sauvola, not "any non-default method".
+_THRESHOLD_ARGS = ("-c", "thresholding_method=2")
+
+
+def _run_tesseract(path: str, psm: int, env: dict | None = None,
+                   sauvola: bool = False) -> str:
     """One tesseract pass over a PNG on disk."""
     try:
-        r = subprocess.run(["tesseract", path, "stdout", "--psm", str(psm)],
+        r = subprocess.run(["tesseract", path, "stdout", "--psm", str(psm),
+                            *(_THRESHOLD_ARGS if sauvola else ())],
                            capture_output=True, text=True, timeout=30,
                            env=env)
     except subprocess.TimeoutExpired:
@@ -245,13 +258,19 @@ def _prepare(img: np.ndarray) -> np.ndarray:
     return 255 - np.asarray(big, dtype=np.uint8)
 
 
-def ocr_array(frame: np.ndarray, psm: int = 6) -> str:
+def ocr_array(frame: np.ndarray, psm: int = 6,
+              sauvola: bool = False) -> str:
     """Tesseract over an in-memory frame.
 
     `OMP_THREAD_LIMIT=1` is deliberate. Tesseract's OpenMP parallelism is a
     net loss on this workload: measured on a 24-core host, the default took
     1181 ms against 790 ms pinned to a single thread, because the region is
     small enough that thread coordination costs more than it saves.
+
+    `sauvola` selects adaptive thresholding, which is a large win on prose
+    and a REGRESSION on the numeric bars - see `_THRESHOLD_ARGS`. It is off
+    by default so the gauge rules keep Otsu; `ocr_scrolling` turns it on
+    for chat.
     """
     if frame.ndim == 3:
         frame = frame[..., :3].mean(axis=2)
@@ -259,7 +278,7 @@ def ocr_array(frame: np.ndarray, psm: int = 6) -> str:
     env = dict(os.environ, OMP_THREAD_LIMIT="1")
     with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
         Image.fromarray(img).save(tmp.name)
-        return _run_tesseract(tmp.name, psm, env)
+        return _run_tesseract(tmp.name, psm, env, sauvola=sauvola)
 
 
 def ocr_cached(wid: str, box, cycle: int, psm: int = 6) -> str:

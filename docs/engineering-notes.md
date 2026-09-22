@@ -158,6 +158,44 @@ Guarded by `test_preprocessing_cuts_real_character_errors`, which
 scores the real binary against the real fixture and fails if the
 preprocessing is removed.
 
+### Sauvola thresholding: chat only, never the gauges
+
+`thresholding_method=2` (Sauvola) is adaptive, which suits a chat panel
+whose background brightness varies with the 3D scene behind it. It cut
+chat errors from 0.14 to 0.06 per line - a further 57% - for 22 ms.
+
+It is applied **only to chat**, because on the vitals row it is a
+regression: Sauvola read `2.909/10,200` where Otsu reads
+`9,909/10,200`. `parse_gauge` would then see 909 of 10,200 and fire a
+critical health alert at 97% health. `ocr_array(sauvola=...)` therefore
+defaults to Otsu and `ocr_scrolling` opts in, with
+`test_sauvola_is_used_for_chat_but_never_for_the_gauges` pinning the
+split. LeptonicaOtsu (method 1) was catastrophic on this font: 10.20
+errors per line and 3.6x slower.
+
+The lesson worth keeping: a thresholding change that looks like a pure
+accuracy win on prose can silently corrupt a number, and the numbers
+are what the safety-critical rules read.
+
+### Near-match deduplication
+
+Found live during an Arch-Glacor encounter: one drop alerted twice, four
+seconds apart, because Tesseract rendered the same line two ways -
+`shines over one of your items` and `shines aver one of your items`.
+`norm_line` absorbs punctuation wobble but not a substituted letter, so
+the keys were 98.1% alike and not equal.
+
+`seen_before()` treats a near-identical key as the same line. **Digits
+are compared exactly and only letters loosely**, which matters more than
+the bug it fixes: stripping digits before comparing was tried first and
+made consecutive kills identical - "killed 638" against "killed 639" -
+so every kill after the first would have gone unreported. Trading a
+duplicate alert for a missing one is the wrong direction.
+
+Verified live afterwards: two drops of different items each alerted
+once, while kills 641 and 642 were reported separately, with the OCR
+still producing `shines aver. one of your. items`.
+
 ## Capture benchmark
 
 An earlier 4K-window measurement produced approximately:
