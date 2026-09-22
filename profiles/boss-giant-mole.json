@@ -1,0 +1,252 @@
+{
+  "skill": "giant-mole",
+  "profile_type": "boss",
+  "schema_version": 1,
+  "fingerprint": {
+    "window_size": [
+      3840,
+      2058
+    ],
+    "capture_backend": "x11-xcb",
+    "ui_scale": 1.75,
+    "session": "CachyOS/KDE Plasma 6 Wayland, RS3 NXT via XWayland",
+    "_note": "Regions are pixel offsets measured on this exact window size. At any other size they resolve elsewhere and fail silently - OCR returns nothing, or reads a neighbouring panel. ui_scale 1.75 is the logical-to-physical factor KWin reports (2194 logical vs 3840 pixels); `doctor` detects it independently and reports it.",
+    "last_validated": "2026-09-22, Falador Mole Lair"
+  },
+  "window": {
+    "wm_class": "steam_app_1343400",
+    "_comment": "RS3 NXT. WM_CLASS survives title changes and skips the Steam launcher window."
+  },
+  "interval": 1.0,
+  "_profile_note": "Giant mole, Falador Mole Lair. Wiki data: 78,000 lifepoints, melee-only, max hit 720 on a normal attack and 4,000 on a special. Interval is 1.0s as for the other boss profile, because health can fall faster than a skilling pack fills.\n\nThe fight's shape drives the rules. The mole starts in the central chamber, digs away after losing ~8,000 health, and fights in one of four surrounding chambers - each with its OWN mechanic. Below ~15,000/78,000 she returns to the centre and can use ALL four, sometimes two at once. So unlike Arch-Glacor at 0 mechanics, every mechanic here is always live and each has a distinct chat message with a distinct correct response. That is what this profile watches.\n\nRegions are taken from the Arch-Glacor boss profile unchanged, which is safe because RS3 pins these panels to the window edges at fixed size. VERIFIED here rather than assumed: the boss bar reads 'GIANT MOLE', and the vitals row parsed 5 of 6 live samples with plausible values.",
+  "_regions_help": "anchor + dx,dy offset from that corner + fixed w,h. Negative dx/dy measure inward from a right/bottom edge.",
+  "regions": {
+    "boss_health": {
+      "anchor": "top-center",
+      "dx": -180,
+      "dy": 100,
+      "w": 660,
+      "h": 70,
+      "_note": "The target bar and its remaining health. VERIFIED live at this boss: OCR returns 'GIANT MOLE' through the bar's decorative frame, so the same geometry as the Arch-Glacor profile works unchanged."
+    },
+    "vitals": {
+      "anchor": "bottom-center",
+      "dx": -80,
+      "dy": -168,
+      "w": 800,
+      "h": 70,
+      "_note": "The life/adrenaline/prayer/summoning row. VERIFIED live here: read '10,260/10,597' and '780/780' with 5 of 6 samples parsing. Icons decode as noise between the numbers, which is why each rule extracts its own field with an anchored pattern rather than parsing the row as a whole."
+    },
+    "chat_tail": {
+      "anchor": "bottom-left",
+      "dx": 10,
+      "dy": -258,
+      "w": 580,
+      "h": 660,
+      "_note": "All Chat in the bossing layout, which sits higher and wider than in the skilling profiles because the ability bar occupies the bottom-centre. Same geometry as the Arch-Glacor profile; VERIFIED here reading 'Welcome to your session against: Giant mole.'"
+    },
+    "backpack": {
+      "anchor": "bottom-right",
+      "dx": -13,
+      "dy": -38,
+      "w": 330,
+      "h": 560,
+      "grid": {
+        "x0": 17,
+        "y0": 86,
+        "cell_w": 61,
+        "cell_h": 55,
+        "cols": 5,
+        "rows": 6
+      },
+      "_note": "Backpack panel in the bossing layout. Same geometry as every other profile - the panel is pinned bottom-right at a fixed size."
+    },
+    "session_timer": {
+      "anchor": "top-left",
+      "dx": 150,
+      "dy": 620,
+      "w": 210,
+      "h": 50,
+      "_note": "Elapsed-time readout at the bottom of the Metrics panel. RS3 pins the panel top-left at a fixed size, so the bossing layout does not move it."
+    }
+  },
+  "rules": [
+    {
+      "name": "low_health",
+      "kind": "gauge",
+      "region": "vitals",
+      "maximum": 10597,
+      "warn_below": 30,
+      "confirm_readings": 2,
+      "cooldown": 30,
+      "message": "Health low",
+      "item": "health",
+      "alert_body": "Life {current}/{maximum} ({percent}%). Eat now.",
+      "sound": "dialog-error-serious",
+      "urgency": "critical",
+      "timeout_ms": 20000,
+      "enabled": true,
+      "_note": "30% of this character's ~10,600 pool, so it fires around 3,180 points. The mole is melee-only with a 720 max hit on a normal attack, so a slow drain is the usual danger rather than a spike - but the special hits for up to 4,000, which is nearly 40% of the pool in one blow, and that is what this guards against. confirm_readings=2 rejects a single misread frame: hitsplats draw over the digits and produce one wrong number. maximum=10597 is THIS character's pool, verified live here."
+    },
+    {
+      "name": "low_prayer",
+      "kind": "gauge",
+      "region": "vitals",
+      "maximum": 780,
+      "warn_below": 20,
+      "confirm_readings": 2,
+      "cooldown": 45,
+      "message": "Prayer low",
+      "item": "prayer",
+      "alert_body": "Prayer {current}/{maximum} ({percent}%). Protect from Melee is about to drop.",
+      "sound": "dialog-warning",
+      "urgency": "critical",
+      "timeout_ms": 20000,
+      "enabled": true,
+      "_note": "The wiki's recommended setup for this boss is Protect from MELEE - the mole has no ranged or magic attack at all (max_ranged and max_magic are both 0). Losing that prayer means taking the full 720 per hit rather than a reduced amount, so this is a survival alert rather than an efficiency one. VERIFIED live: the prayer field parsed 780/780 on 5 of 6 samples."
+    },
+    {
+      "name": "mini_moles",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "giant mole calls for aid|calls for aid",
+      "cooldown": 15,
+      "message": "Mini-moles",
+      "alert_body": "The mole called for aid - kill the mini-moles, they raise her defence.",
+      "sound": "message-attention",
+      "_note": "North-west chamber mechanic. WIKI-QUOTED wording: 'The Giant mole calls for aid'. Per the wiki the mini-moles have only 100 health and hit up to 200, but WHILE THEY ARE ALIVE the giant mole has increased Defence and damage reduction - so ignoring them stretches the whole kill. That is why the body says to kill them rather than just reporting the spawn. If this is the last chamber before the centre, she can summon two sets there. VERIFIED live: 'The Giant Mole calls for aid.' read 18 times in one sample. Note the live capitalisation is 'Giant Mole', not the wiki's 'Giant mole' - the pattern is case-insensitive so either works.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 15000
+    },
+    {
+      "name": "mole_stunnable",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "mole can now be stunned|can now be stunned",
+      "cooldown": 10,
+      "message": "Stun window",
+      "alert_body": "The mole can be stunned NOW - stun her before berserk starts.",
+      "sound": "message-new-instant",
+      "_note": "North-east chamber mechanic, and the most time-critical alert in this profile. WIKI-QUOTED: 'The mole can now be stunned'. Per the wiki she enters a berserk state where attacks become 'stronger, more accurate and faster', and 'She can be stunned as she enters this mode' - so this message marks a WINDOW, not a state. Acting on it prevents the damage spike entirely; missing it means riding out berserk. cooldown=10 is short because the window is short and each one matters. Note the mole is otherwise immune to stun (immune_to_stun=Yes in the wiki infobox), which is why this window exists at all. VERIFIED live: 'The mole can now be stunned.' read 12 times in one sample.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 10000
+    },
+    {
+      "name": "berserk_ended",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "seems to regain her balance|regain her balance",
+      "cooldown": 15,
+      "message": "Berserk over",
+      "alert_body": "Berserk ended - damage is back to normal.",
+      "sound": "completion-partial",
+      "_note": "The other half of the berserk mechanic. WIKI-QUOTED: 'The mole seems to regain her balance' shows as berserk mode ends. Paired with mole_stunnable so the pair reads as a state change rather than two unrelated events - knowing berserk is OVER is what tells you it is safe to stop defensive play. Deliberately a quieter sound than the stun window, which is the actionable one. UNVERIFIED against live chat.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 10000
+    },
+    {
+      "name": "rockfall_incoming",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "crumbling noise above|hear a crumbling",
+      "cooldown": 8,
+      "message": "Rockfall",
+      "alert_body": "Crumbling above - Freedom or Anticipation now, or you are stunned for 3.6s.",
+      "sound": "dialog-warning-auth",
+      "_note": "South-east chamber mechanic, and the one with an explicit counter. WIKI-QUOTED: 'You hear a crumbling noise above.' precedes the rockfall. Per the wiki it stuns and binds for 3.6 seconds on normal mode, and 'Use Freedom or use Anticipation beforehand to free yourself' - so the message is a cue with a specific correct response, which the body names. On hard mode it traps in mud instead, which is worse. cooldown=8 because the warning is per-cast and each one is individually worth acting on. VERIFIED live: 'You hear a crumbling noise above.' read 6 times, including the OCR-damaged 'You heara crumbling noise above.' which the pattern still matches because it anchors on 'crumbling noise above' rather than the spacing.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 8000
+    },
+    {
+      "name": "stunned_by_rockfall",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "(you'?ve |you have )?been prevented from moving|can'?t do that while stunned",
+      "cooldown": 12,
+      "message": "Stunned",
+      "alert_body": "Stunned by the rockfall - Freedom to break out, or wait 3.6s.",
+      "sound": "battery-caution",
+      "_note": "The rockfall LANDING, as opposed to rockfall_incoming which is the warning before it. Neither line is quoted anywhere on the wiki - both were captured live: 'You've been prevented from moving.' (7 reads) and 'You can't do that while stunned.' (3 reads). They matter because the warning can be missed or OCR'd badly, and this is the confirmation that the stun actually landed, which is the moment Freedom still helps. Per the wiki the normal-mode stun and bind lasts 3.6 seconds. Both phrasings are one rule because they are the same event seen from two angles - the state beginning, and an action refused because of it. cooldown=12 comfortably exceeds the 3.6s stun so one rockfall reports once. VERIFIED live.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 8000
+    },
+    {
+      "name": "boss_defeated",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "you have (killed|defeated) .{0,20}giant mole|defeated the giant mole",
+      "cooldown": 0,
+      "message": "Mole defeated",
+      "alert_body": "{line}",
+      "sound": "outcome-success",
+      "_note": "VERIFIED live: 'You have killed 140 Giant Mole in normal mode.' - the same shape as the Arch-Glacor kill line, so the 'defeated' alternative is kept only as a fallback for the wording in the wiki's kill sound file. cooldown=0 because every kill is worth reporting and per-line dedup already prevents repeats; a cooldown here once dropped one of three kills spaced 15s apart at the other boss.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 15000
+    },
+    {
+      "name": "encounter_started",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "welcome to your session against.{0,12}giant mole",
+      "cooldown": 30,
+      "message": "Encounter started",
+      "alert_body": "{line}",
+      "sound": "service-login",
+      "_note": "VERIFIED live at this boss: 'Welcome to your session against: Giant mole.' (OCR dropped the leading W, hence no anchor on it). Confirms the watcher and the instance agree about which fight is running - useful because every other rule here is scoped to this boss.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 10000
+    },
+    {
+      "name": "player_died",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "oh dear, you are dead|you have died|you died",
+      "cooldown": 30,
+      "message": "You died",
+      "alert_body": "{line}",
+      "sound": "dialog-error-critical",
+      "_note": "Per the wiki, a player killed by the giant mole leaves a gravestone OUTSIDE her lair in Falador Park - so unlike normal-mode Arch-Glacor this is a real death with a real item risk, not a safe teleport. Generic death wording, UNVERIFIED here. At Arch-Glacor the equivalent rule never matched because that boss uses its own phrasing, so treat this as probably wrong until a death confirms it.",
+      "enabled": true,
+      "urgency": "critical",
+      "timeout_ms": 25000
+    },
+    {
+      "name": "rare_drop",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "\\bsimon\\s?gros\\b.{0,80}?\\b(received|completed)\\b|\\b(received|completed)\\b.{0,40}?\\bsimon\\s?gros\\b",
+      "cooldown": 0,
+      "message": "RARE DROP",
+      "alert_body": "{line}",
+      "sound": "complete-media-burn",
+      "_note": "ONLY this account's drops. Per the wiki, 'Whenever someone receives a special drop from the mole, it will be announced in the message box' - so this boss BROADCASTS other players' drops by design, exactly the noise that had to be filtered out at Arch-Glacor. The rule therefore requires this account's name; a broadcast carries no 'you' marker, so the name is the only way to attribute it. The mole's special drops are clingy moles, numbing roots, dragon 2h swords and ultra-growth potions, all tertiary, with a 1/10 chance of any rare at all. CHANGING ACCOUNT: this name is the filter.",
+      "_account_note": "Character name is 'SimonGros', as in the Arch-Glacor profile.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000
+    },
+    {
+      "name": "session_hour",
+      "kind": "timer",
+      "region": "session_timer",
+      "step": 3600,
+      "cooldown": 60,
+      "milestone_message": "You've been fighting the Giant mole for {label} ({elapsed}).",
+      "message": "Session milestone",
+      "alert_body": "Giant mole for {label} ({elapsed}). Worth checking supplies.",
+      "sound": "completion-rotation",
+      "_note": "Reads the Metrics panel's own elapsed timer rather than tracking wall-clock time in the watcher: it is the number already on screen, it pauses when the player pauses it, and it survives a watcher restart because the game owns it.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000
+    }
+  ],
+  "_notification_note": "Rules use urgency 'normal' with an explicit timeout_ms so KDE auto-dismisses them. Setting urgency to 'critical' makes KDE keep the popup until it is closed by hand and ignore timeout_ms - only do that for an alert you must not miss."
+}

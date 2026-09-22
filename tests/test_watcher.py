@@ -3576,6 +3576,65 @@ def test_drop_quantity_survives_the_guillemet_separator():
         assert not pattern.search(line), line
 
 
+def test_giant_mole_mechanics_match_the_live_wording():
+    """Every mechanic here has a distinct message and a distinct answer.
+
+    Unlike Arch-Glacor at 0 mechanics, where all four togglable
+    mechanics are off and Creeping Ice announces nothing, the mole's
+    four chamber mechanics are always live. Three are wiki-quoted and
+    were then confirmed verbatim against live chat; the stun-landed
+    pair appears nowhere on the wiki and was captured live.
+    """
+    cfg = load_config(Path("profiles/boss-giant-mole.json"))
+    rules = {r["name"]: r for r in cfg["rules"]}
+
+    live = {
+        "mini_moles": ["The Giant Mole calls for aid."],
+        "mole_stunnable": ["The mole can now be stunned."],
+        "berserk_ended": ["The mole seems to regain her balance."],
+        "rockfall_incoming": ["You hear a crumbling noise above.",
+                              # OCR ate the space; the pattern anchors
+                              # on "crumbling noise above" for this reason
+                              "You heara crumbling noise above. 4"],
+        "stunned_by_rockfall": ["You've been prevented from moving.",
+                                "You can't do that while stunned."],
+        "boss_defeated": ["You have killed 140 Giant Mole in normal mode."],
+    }
+    for name, lines in live.items():
+        pattern = re.compile(rules[name]["pattern"], re.I)
+        for line in lines:
+            assert pattern.search(line), f"{name}: {line!r}"
+
+    # Each mechanic must be distinguishable: a rule may not claim a line
+    # that belongs to another, or two alerts fire for one event.
+    for name, lines in live.items():
+        for other, other_lines in live.items():
+            if other == name:
+                continue
+            pattern = re.compile(rules[other]["pattern"], re.I)
+            for line in lines:
+                assert not pattern.search(line), (
+                    f"{other} also matches {name}'s line: {line!r}")
+
+
+def test_giant_mole_rare_drop_ignores_other_players():
+    """This boss broadcasts special drops by design.
+
+    The wiki is explicit: "Whenever someone receives a special drop from
+    the mole, it will be announced in the message box." So the same
+    filter Arch-Glacor needed applies here from the start, rather than
+    being discovered as noise later.
+    """
+    cfg = load_config(Path("profiles/boss-giant-mole.json"))
+    rule = next(r for r in cfg["rules"] if r["name"] == "rare_drop")
+    pattern = re.compile(rule["pattern"], re.I)
+
+    assert pattern.search("# News: SimonGros has received a Dragon 2h sword drop!")
+    for line in ("# News: Walton39 has received a Dragon 2h sword drop!",
+                 "# News: Saroset has received a Clingy mole drop!"):
+        assert not pattern.search(line), line
+
+
 def test_no_rule_alerts_on_another_players_broadcast():
     """Global broadcasts are about strangers, not the player.
 
@@ -5230,8 +5289,8 @@ def test_woodcutting_pattern_survives_the_dropped_g():
 
 def test_shipped_profiles_declare_their_calibration():
     """Each profile records the window it was measured on."""
-    for name in ("boss-arch-glacor", "thieving", "fishing", "woodcutting",
-                 "firemaking"):
+    for name in ("boss-arch-glacor", "boss-giant-mole", "thieving", "fishing",
+                 "woodcutting", "firemaking"):
         cfg = load_config(Path(f"profiles/{name}.json"))
         assert cfg["schema_version"] == watcher.SCHEMA_VERSION
         fp = cfg["fingerprint"]
