@@ -4336,6 +4336,56 @@ def test_total_fires_exactly_once_per_step_over_a_long_climb(monkeypatch):
         ["2", "3", "4", "5"]
 
 
+def test_firemaking_has_no_gold_milestone_rule():
+    """Firemaking CONSUMES logs, so the Metrics Gain runs negative.
+
+    Measured live: the gold row read "-340,200 0 -1,166,400" and the
+    loss grew across samples. parse_total drops the minus sign and
+    returns 340200, so a milestone rule here would announce "gold
+    gained" for money being spent. The woodcutting and boss profiles
+    keep theirs because their Gain is genuinely positive.
+    """
+    cfg = load_config(Path("profiles/firemaking.json"))
+    names = {r["name"] for r in cfg["rules"]}
+    assert "gold_milestone" not in names
+
+    # The sign-dropping behaviour that makes it unsafe, pinned so a
+    # future parse_total fix can flip this decision knowingly.
+    from screen_watcher import rules as rules_mod
+    assert rules_mod.parse_total("& -340,200 0 -1,166,400") == 340200
+
+
+def test_level_up_survives_the_damaged_l():
+    """A level-up is a once-per-hours event on a single chat line.
+
+    This font drops or substitutes lowercase l constantly - measured at
+    2.4% of lines in the woodcutting profile - so "advanced a Firemaking
+    [evel" and "Ievel" both failed the previous spelling. Missing the
+    one frame it appears on loses the alert entirely.
+    """
+    for profile in ("firemaking", "fishing", "thieving", "woodcutting",
+                    "boss-arch-glacor"):
+        cfg = load_config(Path(f"profiles/{profile}.json"))
+        rule = next((r for r in cfg["rules"] if r["name"] == "level_up"), None)
+        assert rule is not None, f"{profile} has no level_up rule"
+        pattern = re.compile(rule["pattern"], re.I)
+
+        for line in ("Congratulations, you've just advanced a Firemaking level!",
+                     "Congratulations, you've just advanced a Firemaking [evel!",
+                     "Congratulations, you've just advanced a Woodcutting Ievel!",
+                     "Your Firemaking level is now 92.",
+                     "You have reached level 99."):
+            assert pattern.search(line), f"{profile}: {line}"
+
+        # Near misses that must stay silent.
+        for line in ("You need level 75 Firemaking to light this.",
+                     "Total level: 1544",
+                     "Your combat level is high enough.",
+                     "You add a log to the fire.",
+                     "You get some maple logs."):
+            assert not pattern.search(line), f"{profile}: {line}"
+
+
 def test_fire_spirit_covers_every_documented_variant():
     """Which spirit spawns depends on gear the profile cannot see.
 

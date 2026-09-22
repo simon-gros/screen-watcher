@@ -104,6 +104,34 @@
       "timeout_ms": 30000
     },
     {
+      "name": "level_up",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "advanced\\s+(an?|\\d+)\\s+\\w+\\s+[lI1|\\[]eve[lI1|]s?|you'?(ve|r)?\\s*(have\\s+)?reached [lI1|\\[]eve[lI1|] \\d+|(\\w+ )?[lI1|\\[]eve[lI1|] is now \\d+|now a?\\s*combat [lI1|\\[]eve[lI1|] \\d+",
+      "cooldown": 60,
+      "message": "Level up",
+      "alert_body": "{line}",
+      "sound": "outcome-success",
+      "_note": "Fires on any skill level-up. Deliberately does NOT require the leading 'Congratulations', because RS3 splits some notices across lines and the level line alone must still match - the same two-line shape that made the stun rule match the wrong line. The [lI1|\\[] classes absorb this font's habitual damage to lowercase l: 'advanced a Firemaking [evel' and 'Ievel' were both rejected by the previous spelling, which is the 2.4%-of-lines failure measured in the woodcutting profile. Checked against near misses that must stay silent: 'You need level 75 Firemaking to light this', 'Total level: 1544' and 'Your combat level is high enough'. UNVERIFIED against this account's live chat - confirm on the next level-up.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 15000
+    },
+    {
+      "name": "impling",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "a creature is discovered while skilling|(an?|the)\\s+\\w*\\s*impling\\s+(has\\s+)?(appear|spawn|flutter|arriv)|impling (has )?(appeared|spawned)|you (spot|notice|see) an? \\w*\\s*impling",
+      "cooldown": 30,
+      "message": "Impling spawned",
+      "alert_body": "An impling appeared - catch it before it despawns.",
+      "sound": "dialog-question",
+      "_note": "Implings can spawn from skilling generally, so this is kept here for the chance of finally capturing the real wording - the rule has NEVER fired in any profile. Note firemaking is stationary at a bonfire, usually in a bank area, so a spawn is less likely here than during a roaming skill. Sound is dialog-question rather than message-highlight, which fire_spirit already owns in this profile: the distinct-sound check rejects reuse, and two rare events sharing a tone cannot be told apart without looking.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 20000
+    },
+    {
       "name": "session_hour",
       "kind": "timer",
       "region": "session_timer",

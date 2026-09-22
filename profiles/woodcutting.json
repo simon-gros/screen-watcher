@@ -148,11 +148,12 @@
       "cooldown": 30,
       "message": "Impling spawned",
       "alert_body": "An impling appeared - catch it before it despawns.",
-      "sound": "message-highlight",
+      "sound": "dialog-question",
       "_note": "REWRITTEN after the rule was reported not firing - and the alert log confirmed it had NEVER fired, in any profile, across fishing, thieving and woodcutting. Two separate faults. First, per the RuneScape Wiki the message 'A creature is discovered while skilling.' is specific to skilling IN MENAPHOS; outside Menaphos it never appears, so that alternative alone could not fire here. Second, the fallback 'an impling (has )?appear' required the literal words 'an impling' - but implings are always NAMED by type (baby, young, gourmet, earth, essence, eclectic, spirit, nature, magpie, ghost, ninja, pirate, dragon, kingly, crystal, divine, zombie, snow), so a real spawn line naming the type could never match either. The pattern now allows an optional type word before 'impling' and accepts appear/spawn/flutter/arrive plus a 'you spot/notice/see' form. Checked against ten plausible phrasings and seven real non-impling lines from live chat. STILL UNVERIFIED against a real spawn: the wiki documents the Menaphos message but does not quote the wording used elsewhere, so tighten this the first time an impling actually fires.",
       "enabled": true,
       "urgency": "normal",
-      "timeout_ms": 20000
+      "timeout_ms": 20000,
+      "_sound_note": "dialog-question rather than message-highlight, which birds_nest already owns here. Two rare drops sharing a tone cannot be told apart without looking, which defeats the point of per-rule sounds. Matches the choice made in the firemaking profile."
     },
     {
       "name": "gold_milestone",
@@ -169,6 +170,20 @@
       "enabled": true,
       "urgency": "normal",
       "timeout_ms": 20000
+    },
+    {
+      "name": "level_up",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "advanced\\s+(an?|\\d+)\\s+\\w+\\s+[lI1|\\[]eve[lI1|]s?|you'?(ve|r)?\\s*(have\\s+)?reached [lI1|\\[]eve[lI1|] \\d+|(\\w+ )?[lI1|\\[]eve[lI1|] is now \\d+|now a?\\s*combat [lI1|\\[]eve[lI1|] \\d+",
+      "cooldown": 60,
+      "message": "Level up",
+      "alert_body": "{line}",
+      "sound": "outcome-success",
+      "_note": "Woodcutting was the only skilling profile without this, which was an oversight rather than a decision - fishing, thieving and the boss profile all carry it. Same pattern and OCR tolerance as those. UNVERIFIED against this account's live chat.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 15000
     },
     {
       "name": "session_hour",
