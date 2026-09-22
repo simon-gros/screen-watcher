@@ -655,6 +655,41 @@ def test_stack_signature_detects_growth_not_shrink():
     assert watcher.stack_signature(frame, grid, 1) == 0
 
 
+def test_inventory_discards_an_impossible_occupancy(monkeypatch):
+    """A region pointed at the wrong panel reads a plausible number.
+
+    Found by rearranging the live interface: with the Skills panel
+    docked beside the Backpack, the `backpack` region read SKILLS and
+    `count_occupied` returned 29/30 from skill-level digits while the
+    pack held four items.
+
+    The over-capacity guard - written for bank overlays - happens to
+    catch that, because 29 exceeds the 28-slot capacity. This pins the
+    behaviour, because it was protecting against a case nobody had
+    tested: the guard is the only thing standing between a misplaced
+    region and a confident false "pack full".
+
+    Note how narrow the margin is. 29 is discarded; 28 alerts. A
+    different panel landing on exactly 28 would fire, which is why
+    `doctor` now also checks the panel header.
+    """
+    rule = Rule(name="pack_nearly_full", kind="inventory", region="backpack",
+                capacity=28, mode="lead", lead_seconds=15, warn_free=2,
+                cooldown=0, log_occupancy=False, message="Bank soon",
+                alert_body="{free} slots left.")
+    region = Region("top-left", 0, 0, 10, 10, (0, 0, 5, 5, 2, 2))
+    monkeypatch.setattr(watcher, "capture_array",
+                        lambda *a, **k: np.zeros((10, 10, 3), dtype=np.int16))
+
+    monkeypatch.setattr(watcher, "count_occupied", lambda *a, **k: (29, 30))
+    assert watcher.evaluate(rule, "w", region, (100, 100), 1000.0) is None, (
+        "an occupancy above capacity is a misread, not a full pack")
+
+    # The history must stay clean too: feeding a lie to the fill-rate
+    # projection corrupts the ETA long after the frame is gone.
+    assert not rule._history
+
+
 def test_stack_rule_ignores_transient_overlay():
     """Hovering the backpack draws a tooltip that must not read as a drop."""
     rule = _rule(kind="stack", stack_tolerance=3, confirm_seconds=4)
