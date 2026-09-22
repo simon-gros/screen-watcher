@@ -632,6 +632,23 @@ section.
 - Add stable CSV/JSON session/event exports and resource-ledger analytics.
 - Add compact status-strip and optional click-through overlay output.
 
+- Expand the reusable reader registry to cover target debuffs, channel bar,
+  boss health/activity state, boss instance time, XP popups, loot/area status,
+  and the Dungeoneering map where practical.
+- Give readers explicit sampling-cost/cadence budgets so cheap numeric/icon
+  sensors can run quickly while OCR/network work is change-driven or
+  low-frequency.
+- Add a live XP/session service with XP/hour, goal ETA, actions remaining where
+  modelled, and automatic pause/resume semantics.
+- Extend the resource ledger into source/encounter-grouped loot history and a
+  recent-drop state model with explicit uncertainty.
+- Extract a generic encounter timeline/phase/split engine with provenance,
+  prediction-vs-observation labeling, variable windows, and manual/automatic
+  resynchronisation.
+- Add multi-scale/colour-tolerance calibration fixtures and accessibility
+  overlays for low-contrast events, small timers/stacks, and selected
+  maintainable statuses.
+
 ### Mature application stage
 
 - Provide a stable CLI, normalized event schema, extension API, and
