@@ -4206,6 +4206,54 @@ def test_min_occupancy_does_not_gag_the_free_slot_floor(monkeypatch):
     assert alert is not None and "2 slots left" in alert.body
 
 
+def test_woodcutting_pack_full_and_wood_box_are_distinct_events():
+    """Two "full" messages that must not be confused.
+
+    A full backpack halts chopping; a full wood box only means it has
+    stopped absorbing logs, so the pack starts filling for real. Both
+    were captured live while cutting acadia. The pack-full pattern
+    allows "backpack s too full" because tesseract drops the i often -
+    13 damaged reads against 11 clean ones in one 75s sample.
+    """
+    cfg = load_config(Path("profiles/woodcutting.json"))
+    rules = {r["name"]: r for r in cfg["rules"]}
+    pack = re.compile(rules["pack_full"]["pattern"], re.I)
+    box = re.compile(rules["wood_box_full"]["pattern"], re.I)
+
+    for line in ("Your backpack is too full to hold anything more.",
+                 "Your backpack s too full to hold anything more.",
+                 "Your backpack is too full to hold anything more. v"):
+        assert pack.search(line), line
+        assert not box.search(line), f"box rule claimed a pack line: {line}"
+
+    box_line = "Your wood box is now full. It stores all items from the backpack."
+    assert box.search(box_line)
+    assert not pack.search(box_line), "pack rule claimed the wood box line"
+
+    # The activity rule must treat a full pack as a suppressed stop, not
+    # a genuine one: chopping halts on every trip, so without this the
+    # stop alert fires once per cycle.
+    suppress = re.compile(rules["woodcutting_stopped"]["suppress_pattern"], re.I)
+    assert suppress.search("Your backpack is too full to hold anything more.")
+    assert suppress.search("Your backpack s too full to hold anything more.")
+
+
+def test_woodcutting_gold_row_is_measured_not_inherited():
+    """The gold row sits lower here than in the boss profile.
+
+    Woodcutting shows fewer XP rows, so the boss profile's dy=240 lands
+    on the "Gain Drops GP/h" header and reads no numbers at all. This
+    pins the measured offset, because a silently-wrong region is the
+    failure mode that hid the boss profile's own gold row for a session.
+    """
+    wood = load_config(Path("profiles/woodcutting.json"))["_regions"]["gold_row"]
+    boss = load_config(
+        Path("profiles/boss-arch-glacor.json"))["_regions"]["gold_row"]
+
+    assert wood.dy == 270
+    assert wood.dy != boss.dy, "offsets must not be silently shared"
+
+
 def test_woodcutting_pattern_survives_the_dropped_g():
     """Tesseract reads "You get" as "You et" on this font often enough
     to matter: measured over 852 live lines while chopping maples, the
@@ -4234,8 +4282,16 @@ def test_woodcutting_pattern_survives_the_dropped_g():
                  "You get-some maple logs. )"):
         assert pattern.search(line), line
 
-    # Another tree must keep the rule working - hence \w+, not "maple".
-    assert pattern.search("[10:00:00] You get some yew logs.")
+    # Another tree must keep the rule working. Multi-word names are the
+    # case that actually broke it: moving maples -> acadia produced
+    # "You get some acadia TREE logs", two words before "logs", and a
+    # single-token match failed on every one - 1-4 of 31 live chat lines
+    # matched until the pattern was widened.
+    for line in ("[10:00:00] You get some yew logs.",
+                 "[10:00:37] You et some acadia tree logs. ;",
+                 "[10:00:39] You get some acadia tree logs. |",
+                 "You get some eternal magic tree logs."):
+        assert pattern.search(line), line
 
     # Real chat that shared the screen during the same session.
     for line in ("[22:14:51] You pick the target's pocket.",
@@ -4249,14 +4305,25 @@ def test_woodcutting_pattern_survives_the_dropped_g():
                  "You get some flowers.",
                  "You get some water.",
                  "Your wood box is full.",
-                 "You fill your wood box with maple logs."):
+                 "You fill your wood box with maple logs.",
+                 # A lazy [\w ] run could swallow a whole sentence that
+                 # happens to end near "logs"; these are the real lines
+                 # that shared the screen during an acadia session.
+                 "You have earned 92 sentinel fragments. They have been "
+                 "added to your currency pouch.",
+                 "Your backpack is too full to hold anything more."):
         assert not pattern.search(line), line
 
     # A full pack halts chopping, so log lines stop on every bank trip.
     # Without suppression this rule fires once per trip.
+    # Uses the wording since VERIFIED live. "Your backpack is full." was
+    # my own invention and is not what RS3 says; it was in the pattern
+    # until the real line - "Your backpack is too full to hold anything
+    # more." - turned up in a live acadia session.
     suppress = re.compile(rule["suppress_pattern"], re.I)
     for line in ("You can't carry any more logs.",
-                 "Your backpack is full."):
+                 "Your backpack is too full to hold anything more.",
+                 "Your backpack s too full to hold anything more."):
         assert suppress.search(line), line
 
 
