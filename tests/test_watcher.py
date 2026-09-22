@@ -4336,6 +4336,47 @@ def test_total_fires_exactly_once_per_step_over_a_long_climb(monkeypatch):
         ["2", "3", "4", "5"]
 
 
+def test_fire_burnout_never_matches_the_routine_burning_lines():
+    """The burnout rule shares its vocabulary with the activity lines.
+
+    "You add a log to the fire" and "The fire catches and the logs begin
+    to burn" both contain "fire" and a burn word, and they run several
+    times a second - a loose burnout pattern would alert continuously
+    while the fire is perfectly healthy. That makes the negative cases
+    the important half of this test.
+    """
+    cfg = load_config(Path("profiles/firemaking.json"))
+    rules = {r["name"]: r for r in cfg["rules"]}
+    burnout = re.compile(rules["fire_burnt_out"]["pattern"], re.I)
+
+    for line in ("The fire burns out.",
+                 "Your fire burns out.",
+                 "The bonfire burns out.",
+                 "The fire has burnt out.",
+                 "The fire goes out.",
+                 "The fire burns out, leaving a heap of ashes.",
+                 "A heap of ashes remains."):
+        assert burnout.search(line), line
+
+    for line in ("You add a log to the fire.",
+                 "The fire catches and the logs begin to burn.",
+                 "You attempt to light the logs.",
+                 "A fire spirit emerges from the bonfire.",
+                 "1,200 coins have been added to your money pouch.",
+                 "Congratulations, you've just advanced a Firemaking level!"):
+        assert not burnout.search(line), line
+
+    # The alert must say what to do: collect the ashes, relight.
+    body = rules["fire_burnt_out"]["alert_body"].lower()
+    assert "ash" in body and ("pick" in body or "collect" in body)
+    assert "light" in body or "new fire" in body
+
+    # If the burnout turns out to be silent in chat, this rule never
+    # fires - so the chat-silence fallback must still exist.
+    assert "firemaking_stopped" in rules
+    assert rules["firemaking_stopped"]["kind"] == "activity"
+
+
 def test_firemaking_has_no_gold_milestone_rule():
     """Firemaking CONSUMES logs, so the Metrics Gain runs negative.
 

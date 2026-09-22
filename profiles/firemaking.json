@@ -90,6 +90,20 @@
       "_note": "Fires when all evidence of burning stops. This covers the event the wiki calls out as unavoidable: 'Bonfires will die away after a set amount of time, even if players keep adding logs to it.' When the bonfire dies the adding simply stops, with no announcement, so chat silence is the only signal. VERIFIED live on a bonfire - all three lines were read from real chat: 'You add a log to the fire.' (the dominant one, 59 reads in a 75s sample), 'You attempt to light the logs.' and 'The fire catches and the logs begin to burn.' The [lI1|] classes absorb the usual OCR damage on lowercase l, which this font drops or substitutes constantly - the woodcutting profile measured that at 2.4% of activity lines. stop_seconds=30 against a MEASURED log every ~3.3s leaves about nine missed logs of margin, so a garbled OCR run cannot false-fire. Keep this comfortably above the drain interval if a slower log type is used."
     },
     {
+      "name": "fire_burnt_out",
+      "kind": "ocr",
+      "region": "chat_tail",
+      "pattern": "(the )?(bon)?fire (has )?(burn(s|t|ed)? out|goes out|went out|died|dies down|burn(s|t|ed)? away)|your fire (has )?(burn(s|t|ed)? out|goes out|went out)|(ashes|a heap of ashes) (are|is|appear|remain|left)|nothing (but|left but) ashes",
+      "cooldown": 60,
+      "message": "Fire burnt out",
+      "alert_body": "The fire burnt out and left ashes behind - pick them up and light a new fire.",
+      "sound": "dialog-information",
+      "_note": "The end of a bonfire run. The wiki is explicit on the mechanic - 'Bonfires will die away after a set amount of time, even if players keep adding logs to it' and 'When a fire burns out, ashes will appear in its place', with Ashes listed as an Always drop - so the ashes are guaranteed and worth collecting before relighting. WORDING UNVERIFIED. The wiki documents the event but never quotes a chat line, and 75 seconds of live sampling caught no burnout (the fire did not die during the window). The pattern therefore covers several plausible phrasings plus an ashes-centred form, checked against eight real firemaking lines so it cannot false-fire - importantly it does NOT match 'You add a log to the fire' or 'The fire catches and the logs begin to burn', which run several times a second. IT MAY NEVER FIRE: the burnout could be silent in chat, exactly as the Archaeology professor's drops turned out to be. That is survivable here because firemaking_stopped already reports the same event from chat SILENCE after 30s - this rule is the fast, specific path, not the only one. If the fire is seen dying with no alert, check whether any line appeared at all before assuming the pattern is wrong.",
+      "enabled": true,
+      "urgency": "normal",
+      "timeout_ms": 25000
+    },
+    {
       "name": "fire_spirit",
       "kind": "ocr",
       "region": "chat_tail",
