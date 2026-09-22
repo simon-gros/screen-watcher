@@ -1273,8 +1273,13 @@ def _eval_item_drop(rule: Rule, wid: str, box, now: float,
         rule._seen.add(key)
         if not rule._primed:
             continue
-        m = re.search(r"receive[:;]?\s*([\dIl|&SBOoZ]{1,5})\s*[xX]",
-                      line, re.I)
+        # The separator is not always "x". OCR renders it as a
+        # guillemet on this font - "You receive; 18 » slacor remnants"
+        # was the live line that reported "an unreadable number of
+        # Glacor remnants" - and the colon after "receive" sometimes
+        # doubles. Measured against seven real drop lines.
+        m = re.search(r"receive[:;.]{0,2}\s*([\dIl|&SBOoZ]{1,5})\s*"
+                      r"[xX\u00bb\u00d7*]", line, re.I)
         count = parse_quantity(m.group(1)) if m else None
         if count is not None:
             rule._total += count
@@ -1456,7 +1461,13 @@ def evaluate(rule: Rule, wid: str, region: "_w().Region", size, now: float,
         text = _w().ocr_cached(wid, box, cycle)
         if not rule.pattern:
             return
-        for line in text.splitlines():
+        # Rejoin wrapped lines first. A long chat message continues on the
+        # next rendered row, and the interesting half is often the tail:
+        # "...You receive: 1 x Large" / "lunt adamant salvage." - so the
+        # item name never reached the alert, which reported a truncated
+        # "1 x Large". item_drop already did this; the plain ocr rules,
+        # loot_received among them, read the raw split and lost it.
+        for line in join_wrapped_lines(text):
             line = line.strip()
             key = _w().norm_line(line)
             if len(key) < 8 or _w().seen_before(key, rule._seen):

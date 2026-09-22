@@ -3516,6 +3516,66 @@ def test_level_up_ignores_requirement_and_total_lines():
         assert not re.search(pat, line, re.I), line
 
 
+def test_ocr_rules_see_wrapped_chat_lines_whole(monkeypatch):
+    """A long drop message wraps, and the item name is on the tail.
+
+    Live at Arch-Glacor every loot alert was truncated - "1 x Large",
+    "4 x Hug", "1 x Tooth" - because the chat panel wraps the line and
+    the plain `ocr` rules read the raw split. `item_drop` already
+    rejoined; this makes the `ocr` kind do the same, which is how
+    "Large blunt adamant salvage" reaches the alert at all.
+    """
+    wrapped = ("[12:14:02] A golden beam shines over one of your items. "
+               "You receive: 1 x Large\nlunt adamant salvage.")
+    rule = Rule(name="loot_received", kind="ocr", region="chat_tail",
+                pattern=r"golden beam shines", cooldown=0,
+                message="Drop", alert_body="{line}")
+    region = Region("top-left", 0, 0, 10, 10)
+
+    # The first pass primes: lines already on screen when the watcher
+    # starts must not alert. Feed something else, then the real drop.
+    monkeypatch.setattr(watcher, "ocr_cached",
+                        lambda *a, **k: "[12:00:00] nothing of interest here")
+    watcher.evaluate(rule, "0x1", region, (100, 100), 1.0)
+
+    monkeypatch.setattr(watcher, "ocr_cached", lambda *a, **k: wrapped)
+    alert = watcher.evaluate(rule, "0x1", region, (100, 100), 2.0)
+    assert alert is not None
+    assert "salvage" in alert.body, (
+        f"the item name was lost to wrapping: {alert.body!r}")
+
+
+def test_drop_quantity_survives_the_guillemet_separator():
+    """"18 x remnants" is OCR'd as "18 » remnants" on this font.
+
+    That reported "an unreadable number of Glacor remnants" live. The
+    separator class now covers the guillemet and the multiplication
+    sign, and the colon after "receive" may double.
+    """
+    from screen_watcher import rules as rules_mod
+    source = Path(rules_mod.__file__).read_text()
+    match = re.search(r'r"receive\[:;\.\]\{0,2\}.*?"\s*\n\s*r"(\[xX[^"]*\])"',
+                      source, re.S)
+    assert match, "the drop-quantity pattern moved; update this test"
+
+    pattern = re.compile(r"receive[:;.]{0,2}\s*([\dIl|&SBOoZ]{1,5})\s*"
+                         r"[xX»×*]", re.I)
+    for line, want in (
+            ("You receive: 11 x sldCOr remnants.", "11"),
+            ("You receive; 18 » slacor remnants.", "18"),
+            ("You receive;: 18 » slacor remnants.", "18"),
+            ("You receive: 50 » onantanima of Wen,", "50"),
+            ("You receive: 1 x Large blunt adamant salvage.", "1")):
+        found = pattern.search(line)
+        assert found and found.group(1) == want, line
+
+    # Unrelated numbers must not be read as a quantity.
+    for line in ("You have killed 667 Arch-Glacor in normal mode.",
+                 "You are awarded 25 Marks of War and now have a total "
+                 "of 3,040."):
+        assert not pattern.search(line), line
+
+
 def test_no_rule_alerts_on_another_players_broadcast():
     """Global broadcasts are about strangers, not the player.
 
