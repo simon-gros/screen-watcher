@@ -1653,6 +1653,307 @@ Reference:
 - https://secure.runescape.com/m=news/api--plugins-september-preview
 
 
+
+## Third ecosystem research pass: HUD sensors, live analytics, and encounter timelines
+
+This pass focuses on ideas that are not just more profile-specific alerts. The
+common lesson from the current RuneScape UI, Alt1/RuneApps tools, newer RS3
+buff/encounter trackers, RuneLite's mature analytics model, and Jagex's
+September 2026 official plugin preview is that Screen Watcher should grow a
+small set of reusable **HUD sensors** and then build live products on top of
+their normalized events.
+
+The items below should remain read-only. They may observe, classify, time,
+summarize, highlight, or notify, but must never generate RuneScape input.
+
+### Expand the reader registry from RuneScape's actual editable HUD surface
+
+The RuneScape desktop interface already exposes a useful taxonomy of movable
+components. Treat those components as the roadmap for reusable readers instead
+of adding ad-hoc rectangles inside individual profiles.
+
+Extend the current registry with candidates such as:
+
+- `TargetDebuffReader` — enemy/target debuff icons, timers, and stacks;
+- `ChannelBarReader` — channelled-ability identity/progress;
+- `BossHealthReader` — boss/phase identity and health/activity progress;
+- `BossInstanceTimerReader` — remaining instance time where visible;
+- `XPPopupReader` — XP gains when RuneMetrics is not the chosen source;
+- `LootReader` — loot interface/recent visible drop evidence;
+- `AreaStatusReader` — activity/minigame area state;
+- `DungeoneeringMapReader` — map structure, keys/gatestones, floor state;
+- `InfoBoxReader` — task/collection/achievement information pop-ups.
+
+The existing `ActionBarReader`, `BossTimerReader`, `SlayerCounterReader`,
+`DialogReader`, `BuffBarReader`, and `TargetReader` should converge on the
+same contract: locate, validate, parse, report confidence/health, relocate, and
+emit normalized observations.
+
+This also gives `doctor` a deterministic list of interface capabilities it
+can test rather than treating "the RuneScape UI" as one undifferentiated
+surface.
+
+References:
+- https://runescape.wiki/w/Interface
+- https://github.com/skillbert/alt1
+
+### Per-reader sampling budgets and adaptive cadence
+
+Not every sensor deserves the same polling rate. OCR is expensive; numeric bars
+and icon templates are comparatively cheap; absolute timers should often run
+from the local monotonic clock after one authoritative observation.
+
+Add scheduler metadata such as:
+
+```text
+cost_class: cheap | medium | expensive
+target_hz: 10
+max_event_age_ms: 250
+idle_hz: 1
+wake_on_region_change: true
+```
+
+Possible policy:
+
+- lightweight HP/prayer/adrenaline/bar/icon readers: high cadence where the
+  backend can sustain it;
+- chat OCR: re-read only on detected scroll/content change;
+- buff timer digits: medium cadence, locally count down between confirmed reads;
+- boss/instance timers: synchronize from screen, then advance locally until a
+  contradictory observation appears;
+- Wiki/price/network enrichment: low-frequency and cached;
+- inactive/minimized profiles: back off aggressively.
+
+Record per-reader CPU time, capture time, OCR time, skipped reads, stale-event
+age, and false-wakeup rate. This turns performance tuning into a measurable
+scheduler problem instead of a collection of arbitrary sleeps.
+
+### Combat/status sensors: target debuffs, channel bar, and cooldowns
+
+Recent RS3 buff trackers demonstrate that player buffs alone are not enough.
+Enemy debuffs, stack counts, cooldowns, and channel state are all useful
+read-only signals.
+
+Build the combat reader set around three distinct sources:
+
+1. **Action bar** — HP, prayer, adrenaline, summoning, slot cooldown digits, and
+   selected resource thresholds. RuneScape can display precise adrenaline and
+   numeric cooldown timers directly on the bar.
+2. **Buff/debuff bars** — icon identity plus separately read timer/stack text.
+3. **Target/channel surfaces** — enemy debuffs and current channeled-ability
+   progress.
+
+For icon readers, add scale-aware matching and a small calibration phase that
+estimates icon size and colour/border tolerance. Store the measured scale and
+colour characteristics with the layout fingerprint instead of assuming one
+fixed RGB tolerance or 100% interface scale.
+
+Do not turn this into a combat rotation chooser. The output is state,
+availability, expiry, and user-configured thresholds.
+
+References:
+- https://runescape.wiki/w/Buffs_and_debuffs
+- https://runescape.wiki/w/Settings
+- https://runescape.wiki/w/Abilities
+- https://github.com/xFear-The-Beard/RS3-BuffTracker-Alt1
+- https://github.com/NadyaNayme/better-better-buffs-bars
+
+### Live XP/session engine, not just end-of-session statistics
+
+Promote XP tracking from a historical metric into a reusable live service.
+Alt1's XpMeter and RuneLite's XP Tracker both show that the useful product is a
+continuously updated session model.
+
+A future `XpSession` service could maintain, per skill:
+
+- XP gained this session;
+- rolling and session XP/hour;
+- actions completed / actions per hour when an action model is known;
+- XP and estimated actions remaining to a configured goal;
+- estimated time to level/goal;
+- active time versus paused/idle time;
+- automatic pause after logout or a configurable no-XP interval;
+- current-session rate versus historical median/p90.
+
+Input may come from RuneMetrics, XP pop-ups, chat, or a future sanctioned API.
+Consumers should not care which reader supplied the XP delta.
+
+References:
+- https://pc.runeapps.org/alt1
+- https://github.com/runelite/runelite/wiki/XP-Tracker
+
+### Source-grouped loot ledger and recent-drop state
+
+The generic resource ledger should gain an explicit notion of **source** and
+**encounter**. A useful loot record is not only "item + quantity"; it is also
+"where did this come from and which trip/kill/reward did it belong to?"
+
+Suggested normalized fields:
+
+```text
+source_type: boss | monster | clue | skilling | chest | ritual | unknown
+source_id
+encounter_id
+trip_id
+item_id/name
+quantity
+value_at_observation?
+kept | consumed | missed | unknown
+first_seen_at
+resolved_at?
+evidence_refs[]
+```
+
+This enables:
+
+- loot grouped by boss/monster and individual kill;
+- clue/reward-chest histories;
+- skilling materials by activity;
+- supplies consumed versus drops gained in the same trip;
+- value tiers, highlighted/hidden items, and notable-drop alerts;
+- a "recent drops" view that keeps newly observed ground/loot-interface items
+  visible until they are resolved or age out;
+- price revaluation later without rewriting historical quantities.
+
+When screen reading cannot prove ownership, despawn state, or exact source, keep
+the field explicitly uncertain rather than fabricating certainty.
+
+References:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+- https://github.com/runelite/runelite/wiki/Loot-Tracker
+- https://runescape.wiki/w/Gameplay_settings/Item_Drops/Loot_Beams
+
+### Generic encounter timeline, phase, and split engine
+
+Boss-specific tools repeatedly implement the same structure: detect authoritative
+landmark events, infer the current phase/rotation, show what has already
+happened, time splits, and resynchronise when inference drifts.
+
+Extract that into a reusable engine:
+
+```text
+observed landmark
+    -> encounter state/phase
+    -> optional expected-next window
+    -> alert/status presentation
+    -> split/history record
+```
+
+Requirements:
+
+- every state transition records the observation that caused it;
+- predicted/expected future mechanics are labelled as inference, never as an
+  observed fact;
+- manual resync remains available;
+- authoritative landmarks automatically repair drift;
+- phase/kill/floor/wave splits are persisted;
+- repeated runs expose best, median, p90, and recent trend;
+- profiles can define variable windows instead of pretending every mechanic
+  occurs at an exact timestamp.
+
+Use the existing Arch-Glacor profile plus Croesus and wave-based encounters such
+as Zuk as validation cases. SusAlert's explicit resynchronisation after a
+variable phase and the Arch-Glacor ability tracker's chat-driven rotation state
+are useful patterns.
+
+References:
+- https://github.com/Raphire/SusAlert
+- https://github.com/clates/ag-ability-tracker
+- https://github.com/IgorsCC/afkwarden-presets
+
+### Accessibility-oriented visibility overlays
+
+Treat visibility assistance as a first-class output class, not merely larger
+notifications.
+
+Possible read-only aids:
+
+- high-contrast outline around a detected ritual disturbance or depleted glyph;
+- enlarged timer/stack text beside a small buff icon;
+- redundant icon + text + sound/TTS for colour-dependent events;
+- configurable colour-blind-safe labels;
+- persistent "maintainable buffs" checklist that shows missing/expiring effects;
+- enlarged or simplified phase/wave information cards;
+- optional loot/rare-drop emphasis independent of the game's beam colour.
+
+This is particularly useful where RuneScape presents blue-on-blue or otherwise
+low-contrast mechanics. It also generalizes beyond Necromancy to buffs, loot,
+boss phases, skilling opportunities, and warnings.
+
+Reference:
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
+### Portable calibration across interface scale and display characteristics
+
+Newer Alt1 tools repeatedly run into 100%-scale assumptions, fixed icon sizes,
+and colour tolerances. Screen Watcher should make those variables explicit.
+
+Extend the layout fingerprint with:
+
+- RuneScape interface scale estimate;
+- detected component/icon/slot dimensions;
+- desktop scale/DPI;
+- chat font size where measurable;
+- interface transparency estimate where relevant;
+- colour/gamma calibration sample for border/icon matching;
+- renderer/backend;
+- monitor/output identity where useful.
+
+Normalize detected components into canonical crops before template comparison so
+one logical template can support several UI scales. Maintain fixture coverage at
+multiple scales/resolutions rather than treating 100% as the reference truth.
+
+References:
+- https://github.com/xFear-The-Beard/RS3-BuffTracker-Alt1
+- https://github.com/Raphire/SusAlert
+- https://github.com/Ilwyd/bolt-dungeoneeringhelper
+
+### Shareable profile/method packs with executable validation
+
+The ecosystem around AFKWarden presets, clue method packs, and boss presets
+shows that shareable configuration becomes valuable quickly. Screen Watcher
+should eventually make a profile package more rigorous than a copied JSON blob.
+
+A package should be able to contain:
+
+- schema/version declaration;
+- profile(s) and reusable bases;
+- templates/reference images that are safe to redistribute;
+- required/recommended RuneScape settings;
+- supported UI scale/layout constraints;
+- source/provenance notes for mechanic thresholds;
+- fixture/replay cases and expected normalized events;
+- declared optional capabilities/network dependencies;
+- migration notes.
+
+Before activation, run schema validation plus its fixture tests where practical.
+This makes community profiles auditable and reduces the risk of stale or
+unreliable presets silently producing bad alerts.
+
+References:
+- https://github.com/IgorsCC/afkwarden-presets
+- https://secure.runescape.com/m=news/api--plugins-september-preview
+
+### High-value implementation experiments from this pass
+
+After the current practical-validation gate remains healthy, the best
+experiments are:
+
+1. implement `TargetDebuffReader` and `ChannelBarReader` against recorded
+   fixtures;
+2. add per-reader cadence/cost metrics to `FrameScheduler`;
+3. build `XpSession` from whichever XP source is currently easiest to observe
+   reliably;
+4. extend the Arch-Glacor profile to exercise the generic encounter/split model;
+5. create one source-grouped loot session using chat/loot evidence;
+6. add multi-scale fixtures for one buff/status family;
+7. use Necromancy rituals as the first accessibility-overlay experiment;
+8. prototype `DungeoneeringMapReader` as a structural-reader stress test.
+
+These experiments intentionally test reusable primitives before broadening the
+number of finished profiles.
+
+
 ## Fishing
 
 ### Seren spirit event
