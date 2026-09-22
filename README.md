@@ -52,6 +52,30 @@ The main remaining foundation work is broader reader/event normalization,
 expanded replay/soak coverage, and continued practical validation rather than
 missing capture or overlay infrastructure.
 
+### Recent 24-hour development snapshot
+
+The 21–22 September 2026 development window added or live-validated several
+parts of the current 0.0.2 implementation:
+
+- the first major split of the original monolith into focused modules under
+  `screen_watcher/`, while preserving `watcher.py` as the CLI/compatibility
+  surface;
+- production Wayland portal/PipeWire capture, KWin read-only window-state
+  discovery, frozen/blank-region health checks, click-through overlay delivery,
+  profile fingerprints, and sanitized replay fixtures;
+- live-trained Woodcutting and Firemaking profiles plus a new live-trained
+  Giant Mole boss profile;
+- substantial Arch-Glacor corrections covering gauge hardening, Creeping Ice
+  semantics, Marks of War cap awareness, own-player rare-drop attribution,
+  wrapped loot reconstruction, and OCR-damaged quantity parsing;
+- chat OCR improvements using 2x upscale/inversion and chat-only Sauvola
+  thresholding, while deliberately retaining a separate numeric-gauge path;
+- regression coverage reaching 368 passing tests at the end of the Giant Mole
+  work session.
+
+A detailed record of the live evidence and remaining duplicate-drop limitation
+is in [docs/validation-session-2026-09-22.md](docs/validation-session-2026-09-22.md).
+
 ## Features
 
 Screen Watcher currently provides:
