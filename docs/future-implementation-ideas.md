@@ -345,6 +345,9 @@ Implement in this order unless live testing proves a dependency must move:
                               |
                     Shared Frame Scheduler
                               |
+                 Adaptive Layout / Scale
+                         Resolver
+                              |
           +-------------------+-------------------+
           |                   |                   |
       ChatReader       InventoryReader       BuffBarReader
