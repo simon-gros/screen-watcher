@@ -97,6 +97,22 @@ Soak validation looks for failures that short sessions hide:
 - recurring capture disconnects;
 - repeated notifications after long uptime.
 
+## Latest completed validation checkpoint
+
+The latest recorded live session is
+[22 September 2026](validation-session-2026-09-22.md). It confirmed the need
+to validate text OCR and numeric HUD OCR as separate pipelines, exercised
+wrapped-line reconstruction and own-player broadcast attribution, corrected
+Arch-Glacor profile semantics, and live-trained the Giant Mole profile. The
+session also preserved one known limitation instead of hiding it: heavily
+damaged wrapped loot can still duplicate an alert, and timestamp-only
+deduplication was rejected because it can suppress genuinely different drops
+from the same second.
+
+This checkpoint raises the standard for future profile work: a rule inferred
+from wiki documentation is a hypothesis until the rendered in-game wording and
+gameplay meaning have been checked live or against a trustworthy replay fixture.
+
 ## Current Linux validation matrix
 
 ### 1. Startup and environment
