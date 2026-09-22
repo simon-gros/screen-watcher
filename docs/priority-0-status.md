@@ -29,10 +29,18 @@ The **already implemented Linux version must continue to be exercised in real
 use**. The last 24 hours moved several former Priority 0 gaps into production:
 Wayland portal capture, overlay delivery, runtime frame-health checks, profile
 fingerprints, sanitized replay fixtures, and the first large module split.
+They also produced substantial live detector/profile validation: chat OCR
+preprocessing was measured and improved; numeric gauges were audited separately;
+wrapped loot reconstruction and own-player rare-drop attribution were corrected;
+Arch-Glacor semantics were tightened; Woodcutting and Firemaking were trained
+against live sessions; and Giant Mole was added as a live-trained boss profile.
+
 Automated tests prove code paths under controlled inputs; they do not prove that
 RuneScape capture, OCR, window lifecycle, notifications, timing, persistence,
 and profile-specific semantics behave correctly together on the actual CachyOS
-desktop.
+desktop. The 22 September session ended at a point-in-time total of 368 passing
+tests, but that number is evidence of regression coverage, not a substitute for
+continued live testing.
 
 Current development priority is therefore:
 
@@ -56,6 +64,9 @@ See the "Immediate practical validation stage" in
 
 Session records:
 
+- [22 September 2026](validation-session-2026-09-22.md) — live OCR, numeric HUD,
+  Arch-Glacor, Woodcutting, Firemaking, and Giant Mole validation; 368-test
+  checkpoint; remaining duplicate-drop edge case documented.
 - [21 September 2026](validation-session-2026-09-21.md) — Level C, live
   Menaphos Fishing and Arch-Glacor. Eight defects found in live use and
   fixed, including false critical alerts on correct game state, a kill rule
