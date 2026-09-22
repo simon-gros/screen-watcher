@@ -2054,6 +2054,85 @@ def test_stitch_discards_clipped_garbage():
         "[11:03:17] You find a nest."]
 
 
+def test_preprocessing_cuts_real_character_errors():
+    """Upscale-and-invert, measured against known chat, not eyeballed.
+
+    RS3 chat is bright text on a dark panel at ~17px glyph height -
+    roughly 70 DPI against the 300 Tesseract expects. Feeding it 2x
+    bicubic and inverted to dark-on-light cut character errors from
+    0.54 to 0.14 per line across all three fixture frames.
+
+    Scored against two sentences verified verbatim from live play, so
+    this measures real recognition rather than a plausible-looking
+    string.
+    """
+    import difflib
+    import shutil
+    import subprocess
+    import tempfile
+    if not shutil.which("tesseract"):
+        pytest.skip("tesseract not installed")
+
+    from PIL import Image
+    fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/glacor"
+    frames = sorted(fixture.glob("*.png"))
+    if not frames:
+        pytest.skip("replay fixture not present")
+
+    known = ["You pick the target's pocket.",
+             "455 coins have been added to your money pouch."]
+
+    def errors(text):
+        total = lines = 0
+        for raw_line in text.splitlines():
+            body = re.sub(r"^\s*[\[(]?\d\d[:;.]\d\d[:;.]\d\d[\])]?\s*", "",
+                          raw_line.strip())
+            if len(body) < 12:
+                continue
+            best = max(known, key=lambda k:
+                       difflib.SequenceMatcher(None, body, k).ratio())
+            match = difflib.SequenceMatcher(None, body, best)
+            if match.ratio() < 0.7:
+                continue
+            total += sum(max(op[2] - op[1], op[4] - op[3])
+                         for op in match.get_opcodes() if op[0] != "equal")
+            lines += 1
+        return total, lines
+
+    def plain_ocr(grey):
+        """The old path: greyscale straight to tesseract."""
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            path = tmp.name
+        Image.fromarray(grey.astype(np.uint8)).save(path)
+        try:
+            done = subprocess.run(["tesseract", path, "stdout", "--psm", "6"],
+                                  capture_output=True, text=True,
+                                  env=dict(os.environ, OMP_THREAD_LIMIT="1"))
+            return done.stdout
+        finally:
+            os.unlink(path)
+
+    cfg = load_config(Path("profiles/boss-arch-glacor.json"))
+    before = after = before_n = after_n = 0
+    for frame_path in frames:
+        full = np.asarray(Image.open(frame_path).convert("RGB"))
+        x, y, w, h = cfg["_regions"]["chat_tail"].resolve(
+            (full.shape[1], full.shape[0]))
+        crop = full[y:y + h, x:x + w]
+
+        errs, n = errors(plain_ocr(crop[..., :3].mean(axis=2)))
+        before, before_n = before + errs, before_n + n
+        errs, n = errors(watcher.ocr_array(crop))
+        after, after_n = after + errs, after_n + n
+
+    assert before_n and after_n, "no recognisable chat lines to score"
+    before_rate = before / before_n
+    after_rate = after / after_n
+    assert after_rate < before_rate * 0.6, (
+        f"preprocessing gave no accuracy gain: {after_rate:.2f} errors/line "
+        f"against {before_rate:.2f} without it")
+
+
 def test_scroll_optimiser_saves_real_time_on_real_pixels(monkeypatch):
     """The 3.7x saving, measured through the real path - not a mock.
 

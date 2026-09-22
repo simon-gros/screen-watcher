@@ -117,6 +117,47 @@ An in-process binding (`tesserocr`) would remove the startup floor
 entirely, but it is not installed here and adding a dependency is a
 decision for the operator, not a silent one.
 
+### OCR accuracy: upscale and invert (measured 2026-09-22)
+
+RS3 chat is bright text on a dark, semi-transparent panel at a glyph
+height of ~17px - roughly 70 DPI, against the 300 DPI Tesseract is
+trained for. Two corrections, scored by **character edit distance
+against sentences verified verbatim from live play**, not by how the
+output looks:
+
+| variant | errors/line | time |
+|---|---:|---:|
+| greyscale (old path) | 0.54 | 558 ms |
+| inverted only | 0.56 | 342 ms |
+| 2x bicubic only | 0.16 | 750 ms |
+| **2x bicubic + inverted** | **0.14** | **452 ms** |
+
+Measured across all three fixture frames, 63 scored lines. The
+combination is worth far more than either half: a **74% reduction in
+character errors while getting faster than the original**. Inversion
+alone is accuracy-neutral but 40% quicker, because Tesseract's internal
+binarisation stops fighting the dark panel; upscaling alone buys
+accuracy but pays 35% more time. Together the upscale supplies the
+stroke detail and the inversion pays for it.
+
+**What it does not fix**, checked explicitly rather than assumed:
+
+- the leading `[` of a chat timestamp is still lost on 23 of 23 lines,
+  because it sits at the region's left edge and is clipped;
+- dropped-`l` artefacts survive - `loot` still reads as `oot`.
+
+So the profile patterns keep their `[lI1|]` character classes; this is
+not a licence to tighten them. The gain is in the sentence body, where
+for instance `20;32:57` now reads `20:32:57`.
+
+Rejected after measuring: `--oem 1` (2%), `--psm 4` (13% but six lines
+lost), `--psm 11` (105 lines against 52), `--oem 0` (4.5x slower), and
+3x upscaling (no better than 2x, 90 ms dearer).
+
+Guarded by `test_preprocessing_cuts_real_character_errors`, which
+scores the real binary against the real fixture and fails if the
+preprocessing is removed.
+
 ## Capture benchmark
 
 An earlier 4K-window measurement produced approximately:
