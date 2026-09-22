@@ -14,9 +14,10 @@ the mouse, or otherwise sending input to the game.
 > notifications. It does not automate gameplay or generate game input.
 
 The project is currently an early, functional foundation for a broader
-RuneScape observability application. Fishing, thieving/pickpocketing, and an Arch-Glacor boss profile are included
-today; most other skills, quests, bosses, and minigames still need researched
-profiles, calibration, and fixtures.
+RuneScape observability application. Six live-oriented profiles are included:
+Fishing, Thieving/Pickpocketing, Woodcutting, Firemaking, Arch-Glacor, and
+Giant Mole. Most other skills, quests, bosses, and minigames still need
+researched profiles, calibration, and fixtures.
 
 For the longer-term architecture and roadmap, see
 [docs/application-outline.md](docs/application-outline.md).
@@ -24,26 +25,32 @@ For the longer-term architecture and roadmap, see
 ## Current status
 
 - **Platform:** Linux desktop
-- **Display path:** X11/XWayland for pixels; KWin scripting for window state
-  on KDE Wayland (read-only, optional)
+- **Display path:** native XCB on X11/XWayland by default; an integrated
+  XDG ScreenCast portal + PipeWire backend is also available on Wayland.
+  KWin scripting supplies read-only window state on KDE Wayland when available.
 - **Game window detection:** configurable through `window.wm_class`
-- **Included profiles:** fishing, thieving/pickpocketing, and Arch-Glacor
+- **Included profiles:** Fishing, Thieving/Pickpocketing, Woodcutting,
+  Firemaking, Arch-Glacor, and Giant Mole
 - **Profile families supported by validation:** `skill`, `quest`, and `boss`
 - **Outputs:** desktop notifications, sounds, terminal output, and local JSONL history
 - **Automation boundary:** observation only; no synthetic input
 - **CI:** pytest and Flake8 on pushes and pull requests
 
-The current implementation is still centered on a single `watcher.py` module.
-The planned modular architecture is documented separately and should not be
-confused with functionality that has already landed.
+The implementation has now been split into a thin compatibility/CLI layer in
+`watcher.py` plus focused modules under `screen_watcher/` for capture,
+window/KWin handling, diagnostics, configuration, scheduling/readers, runtime,
+rules, persistence, OCR, and overlay support. Some compatibility re-exports
+remain intentionally in `watcher.py` so existing tests and integrations keep
+stable patch points.
 
-The **core Priority 0 Linux observation stack** is implemented: capture backend
-abstraction, shared frame scheduler, native XCB capture, diagnostics, reader
-registry, layered OCR, KWin window discovery, a Wayland portal/PipeWire proof
-of concept, a click-through overlay prototype, and a replay backend. Priority 0
-is not fully closed: production Wayland capture/overlay integration, broader
-reader normalization, schema compatibility, modularization, and practical
-validation remain.
+The **core Priority 0 Linux observation stack is operational**: capture backend
+abstraction, shared frame reuse, native XCB capture, diagnostics, ChatReader,
+layered OCR, KWin window discovery, production Wayland portal/PipeWire capture,
+click-through overlay delivery, replay support with sanitized fixtures, profile
+schema/fingerprint validation, and runtime frozen/blank-region health checks.
+The main remaining foundation work is broader reader/event normalization,
+expanded replay/soak coverage, and continued practical validation rather than
+missing capture or overlay infrastructure.
 
 ## Features
 
@@ -117,7 +124,10 @@ The repository currently includes:
 ```text
 profiles/fishing.json
 profiles/thieving.json
+profiles/woodcutting.json
+profiles/firemaking.json
 profiles/boss-arch-glacor.json
+profiles/boss-giant-mole.json
 ```
 
 Use `--config` before the subcommand:
@@ -204,16 +214,18 @@ reclaimed after the recorded process is verified.
 Each activity should have an explicit profile rather than combining unrelated
 rules into one file.
 
-Examples:
+Included examples:
 
 ```text
 profiles/fishing.json
 profiles/thieving.json
-profiles/quest-dragon-slayer.json
-profiles/boss-vindicta.json
+profiles/woodcutting.json
+profiles/firemaking.json
+profiles/boss-arch-glacor.json
+profiles/boss-giant-mole.json
 ```
 
-Only the first two are currently included.
+Quest profiles are supported by validation but no quest profile is shipped yet.
 
 Top-level profile settings:
 
@@ -326,6 +338,10 @@ Grid coordinates are relative to the region's top-left corner.
 | `stack` | a backpack slot's stack signature changes and remains changed | detecting newly gained inventory items |
 | `timer` | an OCR'd in-game timer crosses a configured milestone | session-duration reminders |
 | `presence` | a visual indicator remains absent, with optional corroboration | stopped-activity detection |
+| `gauge` | a `current/maximum` numeric readout crosses a low threshold | life/prayer survival warnings |
+| `percent` | a percentage reaches or exceeds a threshold | adrenaline/readiness cues |
+| `total` | an in-game running total crosses a milestone | Metrics-panel gain milestones |
+| `item_drop` | a named drop line is observed, including its parsed quantity | tracked boss/resource drops |
 
 `cooldown` throttles repeat alerts per rule.
 
@@ -423,7 +439,7 @@ Run tests:
 Run the lint policy used by CI:
 
 ```bash
-.venv/bin/python -m flake8 watcher.py tests \
+.venv/bin/python -m flake8 watcher.py screen_watcher tests \
   --ignore=E226,E501,E702,W503,W504
 ```
 
@@ -441,10 +457,12 @@ architectural limitations are documented in
 
 ## Known limitations
 
-- Linux/X11/XWayland is the currently implemented capture path. Native XCB
-  capture is the default and measured 42x faster than the ImageMagick path
-  (648.6 ms -> 15.3 ms per four-region cycle); ImageMagick remains as an
-  automatic fallback when `python-xcffib` is unavailable.
+- Native XCB capture is the default on X11/XWayland and remains much faster
+  than the legacy ImageMagick subprocess path for the small regions used by
+  most profiles. ImageMagick remains an automatic fallback when
+  `python-xcffib` is unavailable. On native Wayland, `WaylandPortalBackend`
+  uses XDG ScreenCast + PipeWire with a persisted restore token and crops
+  regions from the newest streamed frame.
 - On KDE Wayland, window *state* is additionally read through KWin's scripting
   API, which reports facts X11 cannot express: an explicitly minimised window
   rather than an absent one, and true keyboard focus. This is read-only and
@@ -453,13 +471,12 @@ architectural limitations are documented in
   *logical*, not pixels (1.75x apart on a scaled display), so it is never fed
   to capture directly. `doctor` reports discovery, window state, and the
   detected scale factor.
-- Native Wayland capture (XDG ScreenCast portal + PipeWire) exists as a
-  working proof of concept in `tools/portal_poc.py`, not as a capture backend.
-  It captures the live game at 3840x2107 with a median frame time of 16.8 ms -
-  roughly twice as fast as the XCB path for ~12x the pixels, because PipeWire
-  streams continuously instead of paying a round trip per region. Adopting it
-  needs a persistent session, restore-token storage, and a `CaptureBackend`
-  shaped around subscribing to a stream rather than requesting a rectangle.
+- Native Wayland capture is integrated as `WaylandPortalBackend`. It keeps a
+  persistent portal/PipeWire session, stores the restore token with mode 0600,
+  reuses the newest streamed frame, and reconciles the portal's decorated
+  3840x2107 frame with the 3840x2058 X11 client-area calibration by stripping
+  the window decoration. It remains opt-in because XCB is simpler and faster
+  for small-region XWayland capture when that path is available.
 - A click-through KDE/Wayland overlay shows alerts on screen. Run
   `watch --overlay` to enable it: alerts are delivered to it alongside the
   desktop banner, the sound, the alert log and the console line. It uses
@@ -477,22 +494,23 @@ architectural limitations are documented in
   is unavailable, notification delivery continues without that extra sound.
 - OCR-based rules require the relevant text region to remain visible.
 - Region calibration depends on the user's RuneScape interface layout.
-- Fishing, thieving, and Arch-Glacor profiles are currently included.
-- Quest and boss profile types are accepted by validation, but broader quest
-  and boss coverage still requires researched profiles, calibration, and
-  replay/live fixtures.
-- `watcher.py` is still monolithic and is planned to be split into capture,
-  profiles, signals, rules, events, notifications, and CLI modules. The
-  rule evaluators now route through a bound `GameInstance`, so they inherit
-  the selected capture backend, but they still call `capture_array`/`ocr`
-  rather than taking a scheduler or reader as a parameter.
-- **Chat OCR still dominates the poll cycle**, though less than it did.
-  Tesseract over the 0.39 MPx `chat_tail` region cost ~1121 ms; pinning it
-  to one thread (its OpenMP parallelism is a net loss at this size) and
-  re-reading only the rows that actually scrolled brings a typical cycle to
-  ~297 ms, against ~18 ms for the capture itself. A frame that cannot be
-  matched against the previous one still pays the full read, so the cost is
-  uneven rather than uniformly low.
+- Fishing, Thieving/Pickpocketing, Woodcutting, Firemaking, Arch-Glacor, and
+  Giant Mole profiles are currently included. Quest profile types are accepted
+  by validation, but broader quest/boss/skill coverage still requires
+  researched profiles, calibration, and replay/live fixtures.
+- The first large module split is complete. `watcher.py` remains as the CLI
+  and compatibility surface while focused implementation modules live under
+  `screen_watcher/`. Reader/event normalization is still incomplete:
+  inventory, buff, target, and several resource observations remain implemented
+  directly inside rule evaluators instead of reusable readers/events.
+- **Chat OCR still dominates the poll cycle**, but the current path is both
+  faster and substantially more accurate. On replay pixels the full
+  `chat_tail` read is about 570 ms; the scrolling fast path measures about
+  123 ms versus 582 ms for a full read. Two-times bicubic upscaling plus
+  inversion cut measured character errors by 74%, and chat-only Sauvola
+  thresholding reduced the remaining error rate again. Numeric gauges
+  deliberately stay on their separate preprocessing path because the chat
+  preprocessing was measured to corrupt gauge values.
 - Identical region/mask requests are reused within a polling cycle, and
   `FrameScheduler` keeps one pass coherent, but different regions are still
   captured independently. Detectors can therefore observe slightly different
